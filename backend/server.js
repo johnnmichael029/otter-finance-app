@@ -63,6 +63,9 @@ app.use(cors({
 //  RATE LIMITERS
 // ─────────────────────────────────────────────────────────────────────────────
 
+// Normalize IP — Azure proxy sometimes includes port (e.g. '1.2.3.4:11998')
+const keyGenerator = (req) => (req.ip || '').replace(/:[0-9]+$/, '') || req.ip;
+
 // Login: 10 attempts per 15 minutes per IP
 const loginLimiter = rateLimit({
     windowMs: 15 * 60 * 1000,
@@ -70,6 +73,7 @@ const loginLimiter = rateLimit({
     message: { error: 'Too many login attempts. Please try again in 15 minutes.' },
     standardHeaders: true,
     legacyHeaders: false,
+    keyGenerator,
 });
 
 // General API: 200 req/15min in production, 1000 in dev
@@ -79,6 +83,7 @@ const generalLimiter = rateLimit({
     message: { error: 'Too many requests from this IP. Please slow down.' },
     standardHeaders: true,
     legacyHeaders: false,
+    keyGenerator,
 });
 
 app.use('/api/', generalLimiter);
