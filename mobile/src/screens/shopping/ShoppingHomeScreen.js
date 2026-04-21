@@ -1,0 +1,196 @@
+import React, { useState, useEffect, useCallback } from 'react';
+import {
+    View, Text, StyleSheet, TouchableOpacity, FlatList,
+    ActivityIndicator, RefreshControl
+} from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
+import { Feather, MaterialCommunityIcons } from '@expo/vector-icons';
+import { useTheme } from '../../context/ThemeContext';
+import { useAuth } from '../../context/AuthContext';
+import { getShoppingSessions } from '../../api/api';
+import { spacing, radius } from '../../theme/colors';
+import CustomAlertModal from '../../components/CustomAlertModal';
+
+const formatCurrency = (amount, currency = 'PHP') =>
+    new Intl.NumberFormat('en-PH', { style: 'currency', currency }).format(amount || 0);
+
+const formatDate = (d) =>
+    new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' }).format(new Date(d));
+
+const PM_ICONS = { cash: 'cash', gcash: 'cellphone', card: 'credit-card', other: 'dots-horizontal' };
+const STATUS_COLORS = { completed: '#22c55e', cancelled: '#ef4444', active: '#f59e0b' };
+
+export default function ShoppingHomeScreen({ navigation }) {
+    const { COLORS } = useTheme();
+    const { userInfo } = useAuth();
+    const styles = getStyles(COLORS);
+
+    const [sessions, setSessions] = useState([]);
+    const [loading, setLoading] = useState(true);
+    const [refreshing, setRefreshing] = useState(false);
+    const [startModal, setStartModal] = useState(false);
+
+    const loadSessions = useCallback(async () => {
+        try {
+            setRefreshing(true);
+            const res = await getShoppingSessions({ limit: 50 });
+            setSessions(res.sessions || []);
+        } catch (e) {
+            console.warn('[Shopping] load error:', e);
+        } finally {
+            setLoading(false);
+            setRefreshing(false);
+        }
+    }, []);
+
+    useEffect(() => {
+        const unsub = navigation.addListener('focus', loadSessions);
+        return unsub;
+    }, [navigation, loadSessions]);
+
+    const completedSessions = sessions.filter(s => s.status === 'completed');
+    const totalSpent = completedSessions.reduce((sum, s) => sum + s.total, 0);
+
+    const renderItem = ({ item }) => {
+        const statusColor = STATUS_COLORS[item.status] || COLORS.textMuted;
+        const pmIconName = PM_ICONS[item.paymentMethod] || 'dots-horizontal';
+        return (
+            <TouchableOpacity
+                style={[styles.sessionCard, { backgroundColor: COLORS.surface }]}
+                onPress={() => {
+                    if (item.status === 'active') {
+                        navigation.navigate('ShoppingSession', { resumeSession: item });
+                    } else {
+                        navigation.navigate('ShoppingHistoryDetail', { session: item });
+                    }
+                }}
+                activeOpacity={0.8}
+            >
+                <View style={[styles.sessionIconBox, { backgroundColor: statusColor + '20' }]}>
+                    <Feather name="shopping-cart" size={20} color={statusColor} />
+                </View>
+                <View style={{ flex: 1 }}>
+                    <Text style={[styles.sessionLabel, { color: COLORS.text }]}>{item.label}</Text>
+                    <Text style={[styles.sessionMeta, { color: COLORS.textMuted }]}>
+                        {item.items?.length || 0} items · {formatDate(item.createdAt)}
+                    </Text>
+                    <View style={styles.sessionFooter}>
+                        <View style={[styles.statusBadge, { backgroundColor: statusColor + '20' }]}>
+                            <Text style={[styles.statusText, { color: statusColor }]}>
+                                {item.status === 'active' ? 'Resume Shopping' : item.status}
+                            </Text>
+                        </View>
+                        <View style={styles.pmRow}>
+                            <MaterialCommunityIcons name={pmIconName} size={12} color={COLORS.textMuted} />
+                            <Text style={[styles.pmText, { color: COLORS.textMuted }]}>{item.paymentMethod}</Text>
+                        </View>
+                    </View>
+                </View>
+                <View style={{ alignItems: 'flex-end' }}>
+                    <Text style={[styles.sessionTotal, { color: COLORS.text }]}>
+                        {formatCurrency(item.total, userInfo?.currency)}
+                    </Text>
+                    <Text style={[styles.sessionBudget, { color: COLORS.textMuted }]}>
+                        of {formatCurrency(item.budget, userInfo?.currency)}
+                    </Text>
+                </View>
+            </TouchableOpacity>
+        );
+    };
+
+    return (
+        <SafeAreaView style={[styles.safe, { backgroundColor: COLORS.background }]}>
+            {/* Header */}
+            <View style={styles.header}>
+                <View>
+                    <Text style={[styles.headerTitle, { color: COLORS.text }]}>Smart Shopping</Text>
+                    <Text style={[styles.headerSub, { color: COLORS.textMuted }]}>
+                        {completedSessions.length} trips · {formatCurrency(totalSpent, userInfo?.currency)} total
+                    </Text>
+                </View>
+                <TouchableOpacity
+                    style={[styles.startBtn, { backgroundColor: COLORS.primary }]}
+                    onPress={() => navigation.navigate('ShoppingSession', { newSession: true })}
+                    activeOpacity={0.85}
+                >
+                    <Feather name="shopping-cart" size={16} color="#fff" />
+                    <Text style={styles.startBtnText}>Start</Text>
+                </TouchableOpacity>
+            </View>
+
+            {/* Stats Card */}
+            <View style={[styles.statsCard, { backgroundColor: COLORS.primary }]}>
+                <View style={styles.statItem}>
+                    <Text style={styles.statValue}>{completedSessions.length}</Text>
+                    <Text style={styles.statLabel}>Trips</Text>
+                </View>
+                <View style={styles.statDivider} />
+                <View style={styles.statItem}>
+                    <Text style={styles.statValue}>{formatCurrency(totalSpent, userInfo?.currency)}</Text>
+                    <Text style={styles.statLabel}>Total Spent</Text>
+                </View>
+                <View style={styles.statDivider} />
+                <View style={styles.statItem}>
+                    <Text style={styles.statValue}>
+                        {completedSessions.length > 0
+                            ? formatCurrency(totalSpent / completedSessions.length, userInfo?.currency)
+                            : '—'}
+                    </Text>
+                    <Text style={styles.statLabel}>Avg Trip</Text>
+                </View>
+            </View>
+
+            {/* History List */}
+            <Text style={[styles.sectionTitle, { color: COLORS.text }]}>Shopping History</Text>
+
+            {loading ? (
+                <ActivityIndicator color={COLORS.primary} style={{ marginTop: 40 }} />
+            ) : (
+                <FlatList
+                    data={sessions}
+                    keyExtractor={item => item._id}
+                    renderItem={renderItem}
+                    contentContainerStyle={{ paddingHorizontal: spacing.lg, paddingBottom: 120 }}
+                    refreshControl={<RefreshControl refreshing={refreshing} onRefresh={loadSessions} tintColor={COLORS.primary} />}
+                    ListEmptyComponent={() => (
+                        <View style={styles.emptyContainer}>
+                            <Text style={styles.emptyEmoji}>🛒</Text>
+                            <Text style={[styles.emptyText, { color: COLORS.textMuted }]}>No shopping trips yet!</Text>
+                            <Text style={[styles.emptySubText, { color: COLORS.textMuted }]}>Tap "Start" to begin your smart shopping experience.</Text>
+                        </View>
+                    )}
+                />
+            )}
+        </SafeAreaView>
+    );
+}
+
+const getStyles = (COLORS) => StyleSheet.create({
+    safe: { flex: 1 },
+    header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: spacing.lg, paddingBottom: 8 },
+    headerTitle: { fontSize: 26, fontWeight: '900' },
+    headerSub: { fontSize: 13, fontWeight: '600', marginTop: 2 },
+    startBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 16, paddingVertical: 10, borderRadius: 20 },
+    startBtnText: { color: '#fff', fontWeight: '800', fontSize: 14 },
+    statsCard: { marginHorizontal: spacing.lg, marginBottom: spacing.lg, borderRadius: radius.xl, padding: 20, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-around' },
+    statItem: { alignItems: 'center' },
+    statValue: { color: '#fff', fontSize: 16, fontWeight: '900' },
+    statLabel: { color: 'rgba(255,255,255,0.75)', fontSize: 11, fontWeight: '600', marginTop: 2 },
+    statDivider: { width: 1, height: 32, backgroundColor: 'rgba(255,255,255,0.3)' },
+    sectionTitle: { fontSize: 18, fontWeight: '900', paddingHorizontal: spacing.lg, marginBottom: 12 },
+    sessionCard: { flexDirection: 'row', alignItems: 'center', gap: 12, padding: spacing.md, borderRadius: radius.xl, marginBottom: spacing.sm },
+    sessionIconBox: { width: 44, height: 44, borderRadius: 22, justifyContent: 'center', alignItems: 'center' },
+    sessionLabel: { fontSize: 15, fontWeight: '800' },
+    sessionMeta: { fontSize: 12, fontWeight: '500', marginTop: 2 },
+    sessionFooter: { flexDirection: 'row', gap: 8, marginTop: 6, alignItems: 'center' },
+    statusBadge: { paddingHorizontal: 8, paddingVertical: 2, borderRadius: 8 },
+    statusText: { fontSize: 10, fontWeight: '800', textTransform: 'capitalize' },
+    pmRow: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+    pmText: { fontSize: 11, fontWeight: '600', textTransform: 'capitalize' },
+    sessionTotal: { fontSize: 15, fontWeight: '900' },
+    sessionBudget: { fontSize: 11, fontWeight: '600', marginTop: 2 },
+    emptyContainer: { alignItems: 'center', paddingTop: 60 },
+    emptyEmoji: { fontSize: 56, marginBottom: 16 },
+    emptyText: { fontSize: 16, fontWeight: '800', marginBottom: 8 },
+    emptySubText: { fontSize: 13, fontWeight: '500', textAlign: 'center', paddingHorizontal: 32 },
+});

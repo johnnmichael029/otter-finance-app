@@ -1,0 +1,482 @@
+import React, { useState, useRef, useEffect } from 'react';
+import {
+    View, Text, StyleSheet, TouchableOpacity,
+    TextInput, ActivityIndicator, Animated, KeyboardAvoidingView, Platform, ScrollView,
+} from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
+import { Feather, Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
+import { useTheme } from '../../context/ThemeContext';
+import { useAuth } from '../../context/AuthContext';
+import { savingsTransfer, getTransactionSummary, getSavingsGoals } from '../../api/api';
+import CustomAlertModal from '../../components/CustomAlertModal';
+import { spacing, radius } from '../../theme/colors';
+import BottomSheetModal from '../../components/BottomSheetModal';
+import { getSocket, connectSocket } from '../../utils/socket';
+
+const isIonicon = (name) => name?.includes('-outline') || name?.includes('-sharp');
+
+const IconRenderer = ({ name, family, size, color }) => {
+    const fam = family?.toLowerCase();
+    const isSavingsIcon = name === 'database' || name === 'archive' || name === 'piggy-bank-outline' || fam === 'materialcommunityicons';
+
+    if (isSavingsIcon) {
+        return <MaterialCommunityIcons name="piggy-bank-outline" size={size} color={color} />;
+    }
+
+    const hasFamily = family && family !== 'feather';
+    const useIonicons = (hasFamily && fam === 'ionicons') || (!hasFamily && isIonicon(name));
+
+    if (useIonicons) {
+        return <Ionicons name={name} size={size} color={color} />;
+    }
+    return <Feather name={name} size={size} color={color} />;
+};
+
+const formatCurrency = (amount, currency = 'PHP') =>
+    new Intl.NumberFormat('en-PH', { style: 'currency', currency }).format(amount);
+
+export default function SavingsTransferScreen({ route, navigation }) {
+    const { goal: initialGoal, direction: initialDirection, isIncome, sourceGoal: initialSource, isDirect, fromSavings } = route.params;
+    const { COLORS } = useTheme();
+    const { userInfo } = useAuth();
+    const styles = getStyles(COLORS);
+
+    const [goal, setGoal] = useState(initialGoal);
+    const [direction, setDirection] = useState(isIncome ? 'income' : (initialDirection || 'to_savings'));
+    const [sourceGoal, setSourceGoal] = useState(initialSource);
+    const [targetGoal, setTargetGoal] = useState(null);
+    const [savingsPot, setSavingsPot] = useState(null);
+    const [amount, setAmount] = useState('');
+    const [note, setNote] = useState('');
+    const [saving, setSaving] = useState(false);
+    const [selectorModalVisible, setSelectorModalVisible] = useState(false);
+    const [selectorMode, setSelectorMode] = useState('source'); // 'source' or 'target'
+    const [mainBalance, setMainBalance] = useState(0);
+    const [alert, setAlert] = useState({ visible: false, type: 'info', title: '', message: '' });
+
+    useEffect(() => {
+        const fetchData = async () => {
+            try {
+                // Fetch Main Balance
+                const summary = await getTransactionSummary({ range: 'all' });
+                setMainBalance(summary?.balance || 0);
+
+                // Fetch "Savings Balance" goal
+                const res = await getSavingsGoals();
+                const master = res.goals?.find(g => g.name === 'Savings Balance');
+                if (master) {
+                    setSavingsPot(master);
+                    if (isDirect && !goal) setGoal(master);
+                    
+                    // SMART DEFAULTS: 
+                    if (initialDirection === 'to_savings') {
+                        if (fromSavings && goal && goal._id !== master._id) {
+                            // Savings Detail Context: Internal move from Master Pot -> Specific Goal
+                            setDirection('transfer_goal');
+                            setSourceGoal(master);
+                            setTargetGoal(goal);
+                        } else if (fromSavings && (!goal || goal._id === master._id)) {
+                            // Savings Home Context (Add Funds): Wallet -> Master Pot
+                            setDirection('to_savings');
+                            setSourceGoal(null); // Main Balance
+                            setTargetGoal(master);
+                        } else {
+                            // Non-Savings Context: Wallet -> Goal/Master
+                            setDirection('to_savings');
+                            setSourceGoal(null); 
+                            setTargetGoal(goal || master);
+                        }
+                    } else if (initialDirection === 'from_savings') {
+                        if (fromSavings && goal && goal._id !== master._id) {
+                            // Savings Detail Context: Withdraw from Specific Goal -> Master Pot
+                            setDirection('transfer_goal');
+                            setSourceGoal(goal);
+                            setTargetGoal(master);
+                        } else {
+                            // Main Context (or withdrawing from Master): Goal -> Wallet
+                            setDirection('from_savings');
+                            setSourceGoal(goal || master);
+                            setTargetGoal(null); // Main Balance
+                        }
+                    } else if (!initialDirection && !initialSource) {
+                        // Scenario: Goal-to-Goal transfer selected via Move Money
+                        setDirection('transfer_goal');
+                        setSourceGoal(master);
+                        setTargetGoal(goal);
+                    }
+                }
+            } catch (err) {
+                console.error('[SavingsTransfer] Error:', err);
+            }
+        };
+        fetchData();
+    }, [isDirect, goal, initialDirection, initialSource, fromSavings]);
+
+    // REAL-TIME SOCKET UPDATES FOR BALANCE
+    useEffect(() => {
+        if (!userInfo?._id) return;
+        const socket = getSocket() || connectSocket(userInfo._id);
+
+        const refreshBalance = () => {
+            getTransactionSummary({ range: 'all' })
+                .then(s => setMainBalance(s?.balance || 0))
+                .catch(() => { });
+        };
+
+        socket.on('new_transaction', refreshBalance);
+        socket.on('update_transaction', refreshBalance);
+        socket.on('delete_transaction', refreshBalance);
+
+        return () => {
+            socket.off('new_transaction', refreshBalance);
+            socket.off('update_transaction', refreshBalance);
+            socket.off('delete_transaction', refreshBalance);
+        };
+    }, [userInfo?._id]);
+
+    if ((isDirect || direction === 'income') && !goal) {
+        return (
+            <View style={{ flex: 1, backgroundColor: COLORS.background, justifyContent: 'center', alignItems: 'center' }}>
+                <ActivityIndicator color={COLORS.primary} size="large" />
+            </View>
+        );
+    }
+
+    const isToSavings = direction === 'to_savings' || direction === 'income' || direction === 'transfer_goal';
+    const isGoalTransfer = direction === 'transfer_goal';
+    const isWithdrawal = direction === 'from_savings';
+
+    // Labels logic
+    const fromLabel = direction === 'income' ? 'Savings Balance' : (isGoalTransfer ? (sourceGoal?.name || 'From Goal') : (direction === 'to_savings' ? 'Main Balance' : goal.name));
+    const toLabel = isGoalTransfer ? (targetGoal?.name || 'To Goal') : (isWithdrawal ? 'Main Balance' : goal.name);
+
+    const accentColor = isGoalTransfer ? '#3b82f6' : (direction === 'income' ? '#8b5cf6' : (direction === 'to_savings' ? '#22c55e' : '#f59e0b'));
+
+    const showAlert = (type, title, message) => setAlert({ visible: true, type, title, message });
+    const closeAlert = () => setAlert(a => ({ ...a, visible: false }));
+
+    const handleTransfer = async () => {
+        const amt = parseFloat(amount);
+        if (!amount || isNaN(amt) || amt <= 0) {
+            return showAlert('warning', 'Invalid Amount', 'Please enter a valid amount greater than 0.');
+        }
+
+        // Self-Transfer Check
+        if (direction === 'transfer_goal' && sourceGoal?._id === (targetGoal?._id || goal?._id)) {
+            return showAlert('warning', 'Invalid Transfer', 'Source and destination goals cannot be the same.');
+        }
+
+        // Balance Checks
+        if (isWithdrawal && amt > goal.currentAmount) {
+            return showAlert('warning', 'Insufficient Balance', `You only have ${formatCurrency(goal.currentAmount, userInfo?.currency)} in this goal.`);
+        }
+        if (isGoalTransfer && amt > (sourceGoal?.currentAmount || 0)) {
+            return showAlert('warning', 'Insufficient Balance', `Source goal only has ${formatCurrency(sourceGoal.currentAmount, userInfo?.currency)}.`);
+        }
+        if (direction === 'to_savings' && amt > mainBalance) {
+            return showAlert('warning', 'Insufficient Balance', `You only have ${formatCurrency(mainBalance, userInfo?.currency)} in your Wallet.`);
+        }
+
+        // Target Amount Limit Safeguard
+        const activeTargetGoal = isGoalTransfer ? targetGoal : goal;
+        if (isToSavings && activeTargetGoal && activeTargetGoal.targetAmount > 0) {
+            const remaining = activeTargetGoal.targetAmount - activeTargetGoal.currentAmount;
+            if (amt > remaining && remaining >= 0) {
+                return showAlert('warning', 'Target Exceeded', `This goal only needs ${formatCurrency(remaining, userInfo?.currency)} more to reach its target. You entered ${formatCurrency(amt, userInfo?.currency)}.`);
+            }
+        }
+
+        setSaving(true);
+        try {
+            // NEW: Default Note Logic
+            let finalNote = note;
+            if (!note) {
+                if (direction === 'from_savings') finalNote = 'Withdrawal to Main Balance';
+                if (direction === 'to_savings') finalNote = 'Deposit from Main Balance';
+            }
+
+            await savingsTransfer({
+                goalId: isGoalTransfer ? targetGoal._id : goal._id,
+                amount: amt,
+                direction,
+                note: finalNote,
+                sourceGoalId: isGoalTransfer ? sourceGoal._id : (isWithdrawal ? goal._id : sourceGoal?._id)
+            });
+
+            // Re-fetch balance immediately after success to update UI
+            getTransactionSummary({ range: 'all' }).then(s => setMainBalance(s?.balance || 0)).catch(() => { });
+
+            showAlert('success', 'Success!', `${formatCurrency(amt, userInfo?.currency)} moved successfully.`);
+        } catch (err) {
+            showAlert('error', 'Failed', err?.response?.data?.error || 'Something went wrong.');
+        } finally {
+            setSaving(false);
+        }
+    };
+
+    const handleMaxPress = () => {
+        let maxAmt = 0;
+        if (direction === 'to_savings') {
+            maxAmt = mainBalance;
+        } else if (isGoalTransfer) {
+            maxAmt = sourceGoal?.currentAmount || 0;
+        } else if (isWithdrawal) {
+            maxAmt = goal.currentAmount;
+        }
+
+        // Smart Target Logic for deposits
+        if (isToSavings && !isWithdrawal && direction !== 'income') {
+            const activeTargetGoal = isGoalTransfer ? targetGoal : goal;
+            if (activeTargetGoal?.targetAmount > 0) {
+                const remaining = Math.max(0, activeTargetGoal.targetAmount - activeTargetGoal.currentAmount);
+                maxAmt = Math.min(maxAmt, remaining);
+            }
+        }
+
+        if (maxAmt > 0) {
+            setAmount(maxAmt.toFixed(2));
+        }
+    };
+
+    const handleSelectOption = (type) => {
+        if (selectorMode === 'source') {
+            if (type === 'main') {
+                setDirection('to_savings');
+                setSourceGoal(null);
+            } else {
+                setDirection('transfer_goal');
+                setSourceGoal(savingsPot);
+                setTargetGoal(goal);
+            }
+        } else {
+            // Target Selection for withdrawal
+            if (type === 'main') {
+                setDirection('from_savings');
+                setTargetGoal(null);
+            } else {
+                setDirection('transfer_goal');
+                setSourceGoal(goal);
+                setTargetGoal(savingsPot);
+            }
+        }
+        setSelectorModalVisible(false);
+    };
+
+    const canSelectSource = !isDirect && direction !== 'from_savings' && direction !== 'income' && !initialSource;
+    const canSelectTarget = direction === 'from_savings' || (isGoalTransfer && sourceGoal?._id === goal?._id);
+
+    return (
+        <SafeAreaView style={styles.safe}>
+            <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1 }}>
+                <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+
+                    {/* Header */}
+                    <View style={styles.header}>
+                        <TouchableOpacity onPress={() => navigation.goBack()} style={[styles.backBtn, { backgroundColor: COLORS.surface }]}>
+                            <Feather name="arrow-left" size={20} color={COLORS.text} />
+                        </TouchableOpacity>
+                        <Text style={[styles.headerTitle, { color: COLORS.text }]}>Transfer</Text>
+                        <TouchableOpacity
+                            style={[styles.backBtn, { backgroundColor: COLORS.surface }]}
+                            onPress={() => navigation.navigate('SavingsTransferHistory')}
+                        >
+                            <Feather name="clock" size={18} color={COLORS.primary} />
+                        </TouchableOpacity>
+                    </View>
+
+                    {/* Transfer Direction Card */}
+                    <View style={[styles.dirCard, { backgroundColor: COLORS.surface }]}>
+                        {/* FROM */}
+                        <TouchableOpacity
+                            style={styles.dirRow}
+                            disabled={!canSelectSource}
+                            onPress={() => { setSelectorMode('source'); setSelectorModalVisible(true); }}
+                        >
+                            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+                                <View style={{ flex: 1 }}>
+                                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 8 }}>
+                                        <Text style={[styles.dirLabel, { color: COLORS.textMuted }]}>From</Text>
+                                        {canSelectSource && <Feather name="chevron-down" size={12} color={COLORS.textMuted} />}
+                                    </View>
+                                    <View style={styles.dirWalletRow}>
+                                        <View style={[styles.dirIcon, { backgroundColor: (accentColor) + '20' }]}>
+                                            {direction === 'income' ? (
+                                                <MaterialCommunityIcons name="piggy-bank-outline" size={16} color={accentColor} />
+                                            ) : (direction === 'to_savings' || (isGoalTransfer && sourceGoal?._id === (savingsPot?._id))) ? (
+                                                <Feather name={direction === 'to_savings' ? "home" : "plus-circle"} size={16} color={accentColor} />
+                                            ) : (
+                                                <IconRenderer name={isGoalTransfer ? sourceGoal?.icon : goal?.icon || 'target'} family={isGoalTransfer ? sourceGoal?.family : goal?.family} size={16} color={accentColor} />
+                                            )}
+                                        </View>
+                                        <Text style={[styles.dirWallet, { color: COLORS.text }]}>{fromLabel}</Text>
+                                    </View>
+                                </View>
+                            </View>
+                        </TouchableOpacity>
+
+                        {/* TO */}
+                        <TouchableOpacity
+                            style={[styles.dirRow, { borderTopWidth: 1, borderTopColor: COLORS.border }]}
+                            disabled={!canSelectTarget}
+                            onPress={() => { setSelectorMode('target'); setSelectorModalVisible(true); }}
+                        >
+                            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 8 }}>
+                                <Text style={[styles.dirLabel, { color: COLORS.textMuted }]}>To</Text>
+                                {canSelectTarget && <Feather name="chevron-down" size={12} color={COLORS.textMuted} />}
+                            </View>
+                            <View style={styles.dirWalletRow}>
+                                <View style={[styles.dirIcon, { backgroundColor: accentColor + '20' }]}>
+                                    {isWithdrawal ? (
+                                        <Feather name="home" size={16} color={accentColor} />
+                                    ) : (
+                                        <IconRenderer name={isGoalTransfer ? targetGoal?.icon : goal?.icon || 'target'} family={isGoalTransfer ? targetGoal?.family : goal?.family} size={16} color={accentColor} />
+                                    )}
+                                </View>
+                                <Text style={[styles.dirWallet, { color: COLORS.text }]}>{toLabel}</Text>
+                            </View>
+                        </TouchableOpacity>
+                    </View>
+
+                    {/* Savings balance hint */}
+                    <View style={[styles.balanceHint, { backgroundColor: COLORS.surface }]}>
+                        <Feather name="info" size={14} color={COLORS.textMuted} />
+                        <Text style={[styles.balanceHintText, { color: COLORS.textMuted }]}>
+                            {direction === 'to_savings'
+                                ? 'Available in Wallet: '
+                                : isGoalTransfer
+                                    ? `Available in ${sourceGoal?.name || 'Goal'}: `
+                                    : `Available in ${goal?.name || 'Goal'}: `}
+                            <Text style={{ fontWeight: '800', color: COLORS.text }}>
+                                {direction === 'to_savings'
+                                    ? formatCurrency(mainBalance, userInfo?.currency)
+                                    : isGoalTransfer
+                                        ? formatCurrency(sourceGoal?.currentAmount || 0, userInfo?.currency)
+                                        : formatCurrency(goal?.currentAmount || 0, userInfo?.currency)}
+                            </Text>
+                        </Text>
+                    </View>
+
+                    <View style={styles.amountCard}>
+                        <View style={styles.amountHeader}>
+                            <Text style={[styles.amountLabel, { color: COLORS.textMuted }]}>HOW MUCH?</Text>
+                            <TouchableOpacity
+                                style={[styles.maxBtn, { backgroundColor: accentColor + '15' }]}
+                                onPress={handleMaxPress}
+                                activeOpacity={0.7}
+                            >
+                                <Text style={[styles.maxBtnText, { color: accentColor }]}>MAX</Text>
+                            </TouchableOpacity>
+                        </View>
+                        <View style={styles.amountRow}>
+                            <Text style={[styles.currency, { color: COLORS.text }]}>₱</Text>
+                            <TextInput
+                                style={[styles.input, { color: COLORS.text }]}
+                                value={amount}
+                                onChangeText={setAmount}
+                                placeholder="0.00"
+                                placeholderTextColor={COLORS.textMuted}
+                                keyboardType="numeric"
+                                autoFocus={false}
+                            />
+                        </View>
+
+                        <View style={[styles.noteRow, { backgroundColor: COLORS.background }]}>
+                            <Feather name="edit-3" size={16} color={COLORS.textMuted} />
+                            <TextInput
+                                style={[styles.noteInput, { color: COLORS.text }]}
+                                value={note}
+                                onChangeText={setNote}
+                                placeholder="What's this for?"
+                                placeholderTextColor={COLORS.textMuted}
+                                multiline
+                            />
+                        </View>
+                    </View>
+
+                    <TouchableOpacity
+                        style={[styles.payBtn, { backgroundColor: accentColor }]}
+                        activeOpacity={0.8}
+                        onPress={handleTransfer}
+                        disabled={saving}
+                    >
+                        {saving ? <ActivityIndicator color="#fff" /> : <Text style={styles.payBtnText}>Confirm Transfer</Text>}
+                    </TouchableOpacity>
+                </ScrollView>
+            </KeyboardAvoidingView>
+
+            <BottomSheetModal
+                visible={selectorModalVisible}
+                onClose={() => setSelectorModalVisible(false)}
+                title={selectorMode === 'source' ? "Select Source" : "Select Destination"}
+            >
+                <View style={styles.modalGrid}>
+                    <TouchableOpacity
+                        style={[styles.modalItem, { backgroundColor: COLORS.surface }]}
+                        onPress={() => handleSelectOption('main')}
+                    >
+                        <View style={[styles.modalItemIcon, { backgroundColor: COLORS.primary + '20' }]}>
+                            <Feather name="home" size={20} color={COLORS.primary} />
+                        </View>
+                        <Text style={[styles.modalItemLabel, { color: COLORS.text }]}>Main Balance</Text>
+                        <Text style={[styles.modalItemValue, { color: COLORS.textMuted }]}>{selectorMode === 'source' ? formatCurrency(mainBalance) : 'Send to Wallet'}</Text>
+                    </TouchableOpacity>
+
+                    {savingsPot && (
+                        <TouchableOpacity
+                            style={[styles.modalItem, { backgroundColor: COLORS.surface }]}
+                            onPress={() => handleSelectOption('savings')}
+                        >
+                            <View style={[styles.modalItemIcon, { backgroundColor: '#3b82f620' }]}>
+                                <MaterialCommunityIcons name="piggy-bank-outline" size={20} color="#3b82f6" />
+                            </View>
+                            <Text style={[styles.modalItemLabel, { color: COLORS.text }]}>Savings Balance</Text>
+                            <Text style={[styles.modalItemValue, { color: COLORS.textMuted }]}>{selectorMode === 'source' ? formatCurrency(savingsPot.currentAmount) : 'Move to Pot'}</Text>
+                        </TouchableOpacity>
+                    )}
+                </View>
+            </BottomSheetModal>
+
+            <CustomAlertModal
+                visible={alert.visible}
+                onClose={closeAlert}
+                title={alert.title}
+                message={alert.message}
+                type={alert.type}
+                onConfirm={alert.type === 'success' ? () => { closeAlert(); navigation.goBack(); } : closeAlert}
+            />
+        </SafeAreaView>
+    );
+}
+
+const getStyles = (COLORS) => StyleSheet.create({
+    safe: { flex: 1, backgroundColor: COLORS.background },
+    content: { padding: spacing.lg },
+    header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: spacing.xl },
+    backBtn: { width: 40, height: 40, borderRadius: 12, justifyContent: 'center', alignItems: 'center' },
+    headerTitle: { fontSize: 18, fontWeight: '800' },
+    dirCard: { borderRadius: radius.xl, padding: spacing.md, marginBottom: spacing.md },
+    dirRow: { paddingVertical: spacing.md },
+    dirLabel: { fontSize: 11, fontWeight: '800', textTransform: 'uppercase', marginBottom: 4 },
+    dirWalletRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+    dirIcon: { width: 36, height: 36, borderRadius: 18, justifyContent: 'center', alignItems: 'center' },
+    dirWallet: { fontSize: 16, fontWeight: '800' },
+    balanceHint: { flexDirection: 'row', alignItems: 'center', gap: 8, padding: spacing.md, borderRadius: radius.lg, marginBottom: spacing.lg },
+    balanceHintText: { fontSize: 12, fontWeight: '600' },
+    amountCard: { backgroundColor: COLORS.surface, borderRadius: radius.xl, padding: spacing.lg, marginBottom: spacing.xl },
+    amountLabel: { fontSize: 11, fontWeight: '900', letterSpacing: 1 },
+    amountHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: spacing.md },
+    maxBtn: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 8 },
+    maxBtnText: { fontSize: 10, fontWeight: '900' },
+    amountRow: { flexDirection: 'row', alignItems: 'center', marginBottom: spacing.lg },
+    currency: { fontSize: 32, fontWeight: '800', marginRight: 8 },
+    input: { flex: 1, fontSize: 48, fontWeight: '900', padding: 0 },
+    noteRow: { flexDirection: 'row', alignItems: 'center', gap: 12, padding: 12, borderRadius: radius.lg },
+    noteInput: { flex: 1, fontSize: 14, fontWeight: '500', minHeight: 40 },
+    payBtn: { height: 60, borderRadius: radius.xl, justifyContent: 'center', alignItems: 'center', elevation: 4, shadowColor: '#000', shadowOpacity: 0.2, shadowRadius: 10, shadowOffset: { width: 0, height: 5 } },
+    payBtnText: { color: '#fff', fontSize: 16, fontWeight: '800' },
+    modalGrid: { flexDirection: 'row', gap: 12, paddingBottom: 20 },
+    modalItem: { flex: 1, padding: 16, borderRadius: radius.xl, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: 'rgba(0,0,0,0.05)' },
+    modalItemIcon: { width: 44, height: 44, borderRadius: 22, justifyContent: 'center', alignItems: 'center', marginBottom: 12 },
+    modalItemLabel: { fontSize: 14, fontWeight: '800', textAlign: 'center', marginBottom: 4 },
+    modalItemValue: { fontSize: 11, fontWeight: '600', textAlign: 'center' },
+});

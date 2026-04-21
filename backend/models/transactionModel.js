@@ -39,6 +39,14 @@ const transactionSchema = new mongoose.Schema({
         required: [true, 'Category is required.'],
         trim: true,
     },
+    categoryIcon: {
+        type: String,
+        default: 'circle',
+    },
+    categoryColor: {
+        type: String,
+        default: '#6b7280',
+    },
 
     // ── Date (user-specified, not necessarily createdAt) ──────────────────────
     date: {
@@ -52,6 +60,9 @@ const transactionSchema = new mongoose.Schema({
         type: String,
         trim: true,
         default: '',
+    },
+    runningBalance: {
+        type: Number, // Total wallet balance after this transaction
     },
 
 }, { timestamps: true });

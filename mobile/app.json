@@ -1,0 +1,56 @@
+{
+  "expo": {
+    "name": "OTTER",
+    "slug": "otter-finance-app",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "dark",
+    "newArchEnabled": false,
+    "splash": {
+      "image": "./assets/icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#0d0d1a"
+    },
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "com.otter.finance"
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/icon.png",
+        "backgroundColor": "#E91E8C"
+      },
+      "edgeToEdgeEnabled": true,
+      "package": "com.otter.finance",
+      "permissions": [
+        "INTERNET",
+        "ACCESS_NETWORK_STATE",
+        "RECEIVE_BOOT_COMPLETED",
+        "VIBRATE"
+      ]
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/icon.png",
+          "color": "#E91E8C",
+          "sounds": [],
+          "androidMode": "default",
+          "androidCollapsedTitle": "OTTER Finance"
+        }
+      ],
+      "expo-barcode-scanner",
+      "@react-native-community/datetimepicker"
+    ],
+    "extra": {
+      "eas": {
+        "projectId": ""
+      }
+    }
+  }
+}

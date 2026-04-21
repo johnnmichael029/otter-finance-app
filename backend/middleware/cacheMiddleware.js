@@ -23,7 +23,9 @@ const cache = (prefix, ttlSeconds = 60) => {
         // Only cache GET requests — never cache mutations
         if (req.method !== 'GET') return next();
 
-        const key = `${prefix}:${req.originalUrl}`;
+        // Critical: Scope cache keys by user ID to prevent cross-account data leaks
+        const userId = req.userId || (req.user && req.user._id) || 'guest';
+        const key = `${prefix}:${userId}:${req.originalUrl}`;
         const cached = getCache(key);
 
         if (cached) {

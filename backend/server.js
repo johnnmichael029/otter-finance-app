@@ -34,6 +34,11 @@ const authRoutes = require('./routes/authRoutes');
 const transactionRoutes = require('./routes/transactionRoutes');
 const debtRoutes = require('./routes/debtRoutes');
 const userRoutes = require('./routes/userRoutes');
+const barcodeRoutes = require('./routes/barcodeRoutes');
+const recurringBillRoutes = require('./routes/recurringBillRoutes');
+const budgetRoutes = require('./routes/budgetRoutes');
+const savingsRoutes = require('./routes/savingsRoutes');
+const shoppingRoutes = require('./routes/shoppingRoutes');
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  HELMET — Secure HTTP headers
@@ -196,6 +201,21 @@ app.use('/api/debts', debtRoutes);
 
 // User profile + push token
 app.use('/api/users', userRoutes);
+
+// Barcode price history
+app.use('/api/barcodes', barcodeRoutes);
+
+// Recurring bills
+app.use('/api/recurring-bills', recurringBillRoutes);
+
+// Monthly budgets
+app.use('/api/budgets', budgetRoutes);
+
+// Savings goals & transfers
+app.use('/api/savings', savingsRoutes);
+
+// Shopping sessions
+app.use('/api/shopping', shoppingRoutes);
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  GLOBAL ERROR HANDLER
