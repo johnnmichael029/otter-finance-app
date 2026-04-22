@@ -34,6 +34,7 @@ import BarcodeScannerScreen from './src/screens/main/BarcodeScannerScreen';
 import DebtScreen from './src/screens/main/DebtScreen';
 import CurrencyConverterScreen from './src/screens/main/CurrencyConverterScreen';
 import AllServicesScreen from './src/screens/main/AllServicesScreen';
+import DebtPlannerScreen from './src/screens/main/DebtPlannerScreen';
 
 // Savings Screens
 import SavingsHomeScreen from './src/screens/savings/SavingsHomeScreen';
@@ -205,7 +206,6 @@ const AppNavigator = () => {
             <View style={{ flex: 1, backgroundColor: COLORS.background }}>
                 {userToken ? (
                     <Stack.Navigator
-                        key={isSavingsMode ? 'savings-stack' : 'main-stack'}
                         screenOptions={{
                             headerShown: false,
                             contentStyle: { backgroundColor: COLORS.background },
@@ -214,9 +214,17 @@ const AppNavigator = () => {
                         }}
                     >
                         {isSavingsMode ? (
-                            <Stack.Screen name="SavingsTabs" component={SavingsTabs} />
+                            <Stack.Screen 
+                                name="SavingsTabs" 
+                                component={SavingsTabs} 
+                                options={{ animation: 'slide_from_right' }} 
+                            />
                         ) : (
-                            <Stack.Screen name="MainTabs" component={MainTabs} />
+                            <Stack.Screen 
+                                name="MainTabs" 
+                                component={MainTabs}
+                                options={{ animation: 'slide_from_left' }}
+                            />
                         )}
                         
                         {/* Shared Screens available in both modes */}
@@ -238,6 +246,7 @@ const AppNavigator = () => {
                         <Stack.Screen name="Sessions" component={SessionManagementScreen} />
                         <Stack.Screen name="CurrencyConverter" component={CurrencyConverterScreen} />
                         <Stack.Screen name="AllServices" component={AllServicesScreen} />
+                        <Stack.Screen name="DebtPlanner" component={DebtPlannerScreen} />
                     </Stack.Navigator>
                 ) : <AuthStack />}
             </View>
