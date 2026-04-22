@@ -32,6 +32,7 @@ import BudgetScreen from './src/screens/main/BudgetScreen';
 import AddTransactionScreen from './src/screens/main/AddTransactionScreen';
 import BarcodeScannerScreen from './src/screens/main/BarcodeScannerScreen';
 import DebtScreen from './src/screens/main/DebtScreen';
+import CurrencyConverterScreen from './src/screens/main/CurrencyConverterScreen';
 
 // Savings Screens
 import SavingsHomeScreen from './src/screens/savings/SavingsHomeScreen';
@@ -234,6 +235,7 @@ const AppNavigator = () => {
                         <Stack.Screen name="Settings" component={SettingsScreen} />
                         <Stack.Screen name="PinSetup" component={PinSetupScreen} />
                         <Stack.Screen name="Sessions" component={SessionManagementScreen} />
+                        <Stack.Screen name="CurrencyConverter" component={CurrencyConverterScreen} />
                     </Stack.Navigator>
                 ) : <AuthStack />}
             </View>

@@ -23,8 +23,8 @@ router.get('/list', (req, res) => {
 router.get('/rates', async (req, res) => {
     try {
         const base = (req.query.base || 'PHP').toUpperCase();
-        const rates = await getRates(base);
-        res.json({ base, rates });
+        const { rates, updatedAt } = await getRates(base);
+        res.json({ base, rates, time_last_update_utc: updatedAt });
     } catch (err) {
         console.error('[Currency] /rates error:', err.message);
         res.status(503).json({ error: 'Exchange rate service temporarily unavailable. Please try again.' });

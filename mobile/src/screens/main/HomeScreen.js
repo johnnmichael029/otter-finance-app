@@ -246,6 +246,22 @@ export default function HomeScreen({ navigation }) {
             refreshSummary();
         };
 
+        const handleDebtChange = () => {
+            getDebts().then(debtsRes => {
+                let iOwe = 0;
+                let owedToMe = 0;
+                if (Array.isArray(debtsRes)) {
+                    debtsRes.forEach(d => {
+                        if (d.status === 'settled') return;
+                        const amount = d.totalOwed ?? ((d.amount || 0) - (d.amountPaid || 0));
+                        if (d.direction === 'owed_by_me') iOwe += amount;
+                        if (d.direction === 'owed_to_me') owedToMe += amount;
+                    });
+                }
+                setDebtStats({ iOwe, owedToMe });
+            }).catch(() => { });
+        };
+
         socket.on('new_transaction', handleNewTransaction);
         socket.on('update_transaction', handleUpdateTransaction);
         socket.on('delete_transaction', handleDeleteTransaction);
@@ -253,6 +269,10 @@ export default function HomeScreen({ navigation }) {
         socket.on('update_savings_goal', handleSavingsChange);
         socket.on('delete_savings_goal', handleSavingsChange);
         socket.on('new_savings_transfer', handleSavingsChange);
+        
+        socket.on('new_debt', handleDebtChange);
+        socket.on('update_debt', handleDebtChange);
+        socket.on('delete_debt', handleDebtChange);
 
         return () => {
             socket.off('new_transaction', handleNewTransaction);
@@ -262,6 +282,9 @@ export default function HomeScreen({ navigation }) {
             socket.off('update_savings_goal', handleSavingsChange);
             socket.off('delete_savings_goal', handleSavingsChange);
             socket.off('new_savings_transfer', handleSavingsChange);
+            socket.off('new_debt', handleDebtChange);
+            socket.off('update_debt', handleDebtChange);
+            socket.off('delete_debt', handleDebtChange);
         };
     }, [userInfo?._id, dateRange]);
 
@@ -482,7 +505,7 @@ export default function HomeScreen({ navigation }) {
                         {[
                             { icon: 'shopping-cart', label: 'Shopping', color: '#E91E8C', onPress: () => navigation.navigate('ShoppingHome') },
                             { icon: 'credit-card', label: 'Debts', color: '#f59e0b', onPress: () => navigation.navigate('DebtScreen') },
-                            { icon: 'maximize', label: 'Scanner', color: '#8b5cf6', onPress: () => navigation.navigate('BarcodeScanner') },
+                            { icon: 'dollar-sign', label: 'Convert', color: '#8b5cf6', onPress: () => navigation.navigate('CurrencyConverter') },
                             { icon: 'repeat', label: 'Bills', color: '#22c55e', onPress: () => navigation.navigate('Bills') },
                         ].map((action) => (
                             <TouchableOpacity

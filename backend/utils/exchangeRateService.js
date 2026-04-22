@@ -19,7 +19,7 @@ const getRates = async (base = 'USD') => {
 
     // Return cache if still fresh
     if (cached && (now - cached.fetchedAt) < CACHE_TTL_MS) {
-        return cached.rates;
+        return { rates: cached.rates, updatedAt: cached.updatedAt || null };
     }
 
     try {
@@ -32,15 +32,15 @@ const getRates = async (base = 'USD') => {
             throw new Error(`Exchange API error: ${data['error-type'] || 'unknown'}`);
         }
 
-        rateCache[base] = { rates: data.rates, fetchedAt: now };
+        rateCache[base] = { rates: data.rates, fetchedAt: now, updatedAt: data.time_last_update_utc || null };
         console.log(`[Currency] ✅ Fetched fresh rates for ${base} (${Object.keys(data.rates).length} currencies)`);
-        return data.rates;
+        return { rates: data.rates, updatedAt: data.time_last_update_utc || null };
     } catch (err) {
         console.error('[Currency] ❌ Failed to fetch rates:', err.message);
         // Return stale cache if available rather than crashing
         if (cached) {
             console.warn('[Currency] ⚠️  Returning stale cache due to fetch error');
-            return cached.rates;
+            return { rates: cached.rates, updatedAt: cached.updatedAt || null };
         }
         throw err;
     }
@@ -54,7 +54,7 @@ const convert = async (amount, fromCurrency, toCurrency) => {
     }
 
     // Always fetch via USD as the universal pivot to maximize cache reuse
-    const usdRates = await getRates('USD');
+    const { rates: usdRates } = await getRates('USD');
 
     const fromRate = usdRates[fromCurrency];
     const toRate   = usdRates[toCurrency];
