@@ -275,59 +275,61 @@ export default function SavingsHomeScreen({ navigation, route }) {
     if (loading) {
         return (
             <SafeAreaView style={styles.safe}>
-                <View style={styles.headerContainer}>
-                    <View style={styles.topRow}>
-                        <View>
-                            <Skeleton width={130} height={26} style={{ marginBottom: 4 }} />
-                            <Skeleton width={160} height={13} />
-                        </View>
-                        <Skeleton width={36} height={36} borderRadius={12} />
-                    </View>
-                </View>
-
-                {/* Hero Card Skeleton */}
-                <View style={[styles.heroCard, { backgroundColor: COLORS.surface, elevation: 0, shadowOpacity: 0, borderWidth: 1, borderColor: COLORS.border, marginBottom: spacing.lg }]}>
-                    <View style={styles.mascotRow}>
-                        <Skeleton width={64} height={64} borderRadius={32} />
-                        <View style={styles.speechContainer}>
-                            <Skeleton width="100%" height={50} borderRadius={16} />
+                <View style={styles.flatContent}>
+                    <View style={styles.headerContainer}>
+                        <View style={styles.topRow}>
+                            <View>
+                                <Skeleton width={130} height={26} style={{ marginBottom: 4 }} />
+                                <Skeleton width={160} height={13} />
+                            </View>
+                            <Skeleton width={36} height={36} borderRadius={12} />
                         </View>
                     </View>
-                    <Skeleton width={80} height={10} style={{ marginBottom: 4 }} />
-                    <Skeleton width={180} height={36} style={{ marginBottom: 16 }} />
-                    <Skeleton width={90} height={24} borderRadius={12} />
-                </View>
 
-                {/* Action Row Skeleton */}
-                <View style={styles.actionRow}>
-                    {[1, 2, 3].map(i => (
-                        <View key={i} style={[styles.actionBtn, { backgroundColor: COLORS.surface, elevation: 0, borderWidth: 1, borderColor: COLORS.border }]}>
-                            <Skeleton width={36} height={36} borderRadius={18} style={{ marginBottom: 8 }} />
-                            <Skeleton width={60} height={10} />
+                    {/* Hero Card Skeleton */}
+                    <View style={[styles.heroCard, { backgroundColor: COLORS.surface, elevation: 0, shadowOpacity: 0, borderWidth: 1, borderColor: COLORS.border, marginBottom: spacing.lg }]}>
+                        <View style={styles.mascotRow}>
+                            <Skeleton width={64} height={64} borderRadius={32} />
+                            <View style={styles.speechContainer}>
+                                <Skeleton width="100%" height={50} borderRadius={16} />
+                            </View>
+                        </View>
+                        <Skeleton width={80} height={10} style={{ marginBottom: 4 }} />
+                        <Skeleton width={180} height={36} style={{ marginBottom: 16 }} />
+                        <Skeleton width={90} height={24} borderRadius={12} />
+                    </View>
+
+                    {/* Action Row Skeleton */}
+                    <View style={styles.actionRow}>
+                        {[1, 2, 3].map(i => (
+                            <View key={i} style={[styles.actionBtn, { backgroundColor: COLORS.surface, elevation: 0, borderWidth: 1, borderColor: COLORS.border }]}>
+                                <Skeleton width={36} height={36} borderRadius={18} style={{ marginBottom: 8 }} />
+                                <Skeleton width={60} height={10} />
+                            </View>
+                        ))}
+                    </View>
+
+                    {/* Goals Preview Skeleton */}
+                    <View style={[styles.goalsPreviewCard, { backgroundColor: COLORS.surface, elevation: 0, borderWidth: 1, borderColor: COLORS.border, marginBottom: 28 }]}>
+                        <View style={{ flex: 1 }}>
+                            <Skeleton width={100} height={16} style={{ marginBottom: 4 }} />
+                            <Skeleton width={140} height={12} />
+                        </View>
+                        <Skeleton width={20} height={20} />
+                    </View>
+
+                    <Skeleton width={130} height={18} style={{ marginBottom: 16 }} />
+                    {[1, 2].map(i => (
+                        <View key={i} style={[styles.activityItem, { backgroundColor: COLORS.surface, borderWidth: 1, borderColor: COLORS.border }]}>
+                            <Skeleton width={36} height={36} borderRadius={18} style={{ marginRight: 12 }} />
+                            <View style={{ flex: 1 }}>
+                                <Skeleton width={100} height={14} style={{ marginBottom: 6 }} />
+                                <Skeleton width={140} height={10} />
+                            </View>
+                            <Skeleton width={60} height={16} />
                         </View>
                     ))}
                 </View>
-
-                {/* Goals Preview Skeleton */}
-                <View style={[styles.goalsPreviewCard, { backgroundColor: COLORS.surface, elevation: 0, borderWidth: 1, borderColor: COLORS.border, marginBottom: 28 }]}>
-                    <View style={{ flex: 1 }}>
-                        <Skeleton width={100} height={16} style={{ marginBottom: 4 }} />
-                        <Skeleton width={140} height={12} />
-                    </View>
-                    <Skeleton width={20} height={20} />
-                </View>
-
-                <Skeleton width={130} height={18} style={{ marginBottom: 16 }} />
-                {[1, 2].map(i => (
-                    <View key={i} style={[styles.activityItem, { backgroundColor: COLORS.surface, borderWidth: 1, borderColor: COLORS.border }]}>
-                        <Skeleton width={36} height={36} borderRadius={18} style={{ marginRight: 12 }} />
-                        <View style={{ flex: 1 }}>
-                            <Skeleton width={100} height={14} style={{ marginBottom: 6 }} />
-                            <Skeleton width={140} height={10} />
-                        </View>
-                        <Skeleton width={60} height={16} />
-                    </View>
-                ))}
             </SafeAreaView>
         );
     }

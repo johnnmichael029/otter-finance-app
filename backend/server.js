@@ -26,6 +26,7 @@ const cookieParser = require('cookie-parser');
 const { doubleCsrf } = require('csrf-csrf');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
+const mongoSanitize = require('express-mongo-sanitize');
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  ROUTE IMPORTS
@@ -39,6 +40,7 @@ const recurringBillRoutes = require('./routes/recurringBillRoutes');
 const budgetRoutes = require('./routes/budgetRoutes');
 const savingsRoutes = require('./routes/savingsRoutes');
 const shoppingRoutes = require('./routes/shoppingRoutes');
+const currencyRoutes = require('./routes/currencyRoutes');
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  HELMET — Secure HTTP headers
@@ -83,6 +85,16 @@ const generalLimiter = rateLimit({
     windowMs: 15 * 60 * 1000,
     max: process.env.NODE_ENV === 'production' ? 200 : 1000,
     message: { error: 'Too many requests from this IP. Please slow down.' },
+    standardHeaders: true,
+    legacyHeaders: false,
+    validate: { xForwardedForHeader: false },
+});
+
+// Financial mutations: 60 writes per 15min per IP (transactions, debts, savings)
+const mutationLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: process.env.NODE_ENV === 'production' ? 60 : 500,
+    message: { error: 'Too many requests. Please slow down.' },
     standardHeaders: true,
     legacyHeaders: false,
     validate: { xForwardedForHeader: false },
@@ -136,6 +148,20 @@ app.use(express.json({ limit: '10mb' }));
 app.use(cookieParser());
 
 // ─────────────────────────────────────────────────────────────────────────────
+//  SANITIZATION — Must run AFTER body parsers, BEFORE routes
+//  1. express-mongo-sanitize: strips $ and . from req.body/params
+//     → Prevents MongoDB operator injection attacks (e.g. {"$gt": ""})
+//     NOTE: We skip req.query — it's a read-only getter in Node 18+
+//  2. XSS is handled per-route by express-validator .escape() chains
+//     + helmet sets X-XSS-Protection and Content-Security-Policy headers
+// ─────────────────────────────────────────────────────────────────────────────
+app.use((req, res, next) => {
+    if (req.body)   mongoSanitize.sanitize(req.body,   { replaceWith: '_' });
+    if (req.params) mongoSanitize.sanitize(req.params, { replaceWith: '_' });
+    next();
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
 //  DEBUG LOGGER — Remove or gate this in production if too verbose
 // ─────────────────────────────────────────────────────────────────────────────
 app.use('/api', (req, res, next) => {
@@ -176,8 +202,14 @@ const csrfMiddleware = (req, res, next) => {
     if (req.headers.authorization && req.headers.authorization.startsWith('Bearer ')) {
         return next();
     }
-    // Mobile register/login: no token yet, source: 'mobile' signals mobile origin
-    if (['/api/auth/register', '/api/auth/login'].includes(req.path) && req.body?.source === 'mobile') {
+    // Mobile register/login/2FA: no token yet, source: 'mobile' signals mobile origin
+    const publicAuthRoutes = [
+        '/api/auth/register', 
+        '/api/auth/login', 
+        '/api/auth/verify-2fa', 
+        '/api/auth/2fa/resend'
+    ];
+    if (publicAuthRoutes.includes(req.path)) {
         return next();
     }
     doubleCsrfProtection(req, res, next);
@@ -193,8 +225,11 @@ app.use(csrfMiddleware);
 app.post('/api/auth/login', loginLimiter);
 app.use('/api/auth', authRoutes);
 
-// Transactions (expenses + income)
+// Transactions (expenses + income) — mutation limiter on writes
 app.use('/api/transactions', transactionRoutes);
+app.post('/api/transactions', mutationLimiter);
+app.patch('/api/transactions/:id', mutationLimiter);
+app.delete('/api/transactions/:id', mutationLimiter);
 
 // Debts (money owed to/from user)
 app.use('/api/debts', debtRoutes);
@@ -213,6 +248,9 @@ app.use('/api/budgets', budgetRoutes);
 
 // Savings goals & transfers
 app.use('/api/savings', savingsRoutes);
+
+// Multi-currency support
+app.use('/api/currency', currencyRoutes);
 
 // Shopping sessions
 app.use('/api/shopping', shoppingRoutes);

@@ -1,5 +1,6 @@
 const Transaction = require('../models/transactionModel');
 const { invalidatePrefixes } = require('../utils/cache');
+const { encrypt, decryptNote } = require('../utils/encryption');
 const mongoose = require('mongoose');
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -31,7 +32,7 @@ const getTransactions = async (req, res) => {
         ]);
 
         res.json({
-            transactions,
+            transactions: transactions.map(decryptNote),
             total,
             page: parseInt(page),
             pages: Math.ceil(total / parseInt(limit)),
@@ -163,7 +164,11 @@ const createTransaction = async (req, res) => {
     try {
         invalidatePrefixes('transaction');
 
-        const { type, amount, category, categoryIcon, categoryColor, description, date, note } = req.body;
+        const { 
+            type, amount, category, categoryIcon, categoryColor, 
+            description, date, note,
+            currency, originalAmount, exchangeRate 
+        } = req.body;
 
         if (!type || !amount || !category) {
             return res.status(400).json({ error: 'type, amount, and category are required.' });
@@ -191,17 +196,22 @@ const createTransaction = async (req, res) => {
             categoryColor,
             description,
             date: date || new Date(),
-            note,
-            runningBalance // Snapshot of wallet balance after this tx
+            note: encrypt(note),    // 🔒 Encrypt at rest
+            currency: currency || 'PHP',
+            originalAmount,
+            exchangeRate,
+            runningBalance
         });
+
+        const decrypted = decryptNote(transaction.toObject());
 
         // Emit real-time event so connected mobile clients update instantly
         const io = req.app.get('io');
         if (io) {
-            io.to(`user:${req.userId}`).emit('new_transaction', transaction);
+            io.to(`user:${req.userId}`).emit('new_transaction', decrypted);
         }
 
-        res.status(201).json(transaction);
+        res.status(201).json(decrypted);
     } catch (err) {
         console.error('[TRANSACTION] createTransaction error:', err.message);
         res.status(500).json({ error: 'Failed to create transaction.' });
@@ -216,8 +226,13 @@ const updateTransaction = async (req, res) => {
     try {
         invalidatePrefixes('transaction');
 
+        // Encrypt note if it's being updated
+        if (req.body.note !== undefined) {
+            req.body.note = encrypt(req.body.note);
+        }
+
         const transaction = await Transaction.findOneAndUpdate(
-            { _id: req.params.id, user: req.userId }, // Scoped to owner
+            { _id: req.params.id, user: req.userId },
             { $set: req.body },
             { new: true, runValidators: true }
         );
@@ -226,12 +241,14 @@ const updateTransaction = async (req, res) => {
             return res.status(404).json({ error: 'Transaction not found.' });
         }
 
+        const decrypted = decryptNote(transaction.toObject());
+
         const io = req.app.get('io');
         if (io) {
-            io.to(`user:${req.userId}`).emit('update_transaction', transaction);
+            io.to(`user:${req.userId}`).emit('update_transaction', decrypted);
         }
 
-        res.json(transaction);
+        res.json(decrypted);
     } catch (err) {
         console.error('[TRANSACTION] updateTransaction error:', err.message);
         res.status(500).json({ error: 'Failed to update transaction.' });

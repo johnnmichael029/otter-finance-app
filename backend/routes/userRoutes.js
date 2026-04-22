@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const requireAuth = require('../middleware/requireAuth');
+const validate = require('../middleware/validate');
 const { getProfile, updateProfile, savePushToken } = require('../controllers/userController');
 
 // All user routes require authentication
@@ -10,7 +11,7 @@ router.use(requireAuth);
 router.get('/me', getProfile);
 
 // PATCH /api/users/me          — update name, currency, avatar
-router.patch('/me', updateProfile);
+router.patch('/me', validate.updateProfile, updateProfile);
 
 // POST /api/users/push-token   — save Expo push token after login
 router.post('/push-token', savePushToken);

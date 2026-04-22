@@ -9,7 +9,7 @@ import { Feather, MaterialIcons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useTheme } from '../../context/ThemeContext';
 import { radius, spacing } from '../../theme/colors';
-import { createTransaction, getTransactions } from '../../api/api';
+import { createTransaction, getTransactions, getCurrencyList, convertCurrency } from '../../api/api';
 import CustomAlertModal from '../../components/CustomAlertModal';
 
 const CATEGORIES = {
@@ -53,6 +53,13 @@ export default function AddTransactionScreen({ navigation, route }) {
     const [isLoading, setIsLoading] = useState(false);
     const [alert, setAlert] = useState({ visible: false, type: 'info', title: '', message: '' });
 
+    // Multi-Currency States
+    const [currency, setCurrency] = useState({ code: 'PHP', symbol: '₱', flag: '🇵🇭' });
+    const [currencyList, setCurrencyList] = useState([]);
+    const [currencyModalVisible, setCurrencyModalVisible] = useState(false);
+    const [convertedPreview, setConvertedPreview] = useState(null);
+    const [exchangeRate, setExchangeRate] = useState(1);
+
     const [customCatModalVisible, setCustomCatModalVisible] = useState(false);
     const [customCatName, setCustomCatName] = useState('Tag');
     const [customCatIcon, setCustomCatIcon] = useState('tag');
@@ -75,28 +82,49 @@ export default function AddTransactionScreen({ navigation, route }) {
     const [frequentTxs, setFrequentTxs] = useState([]);
 
     React.useEffect(() => {
-        const fetchTemplates = async () => {
+        const fetchEssential = async () => {
             try {
+                // Fetch templates
                 const res = await getTransactions({ type, limit: 20 });
                 if (res?.transactions) {
-                    // Extract unique combos of category, amount, and note
                     const unique = [];
                     const seen = new Set();
                     for (const tx of res.transactions) {
                         const key = `${tx.category}-${tx.amount}-${tx.note || ''}`;
-                        if (!seen.has(key)) {
-                            seen.add(key);
-                            unique.push(tx);
-                        }
+                        if (!seen.has(key)) { seen.add(key); unique.push(tx); }
                     }
                     setFrequentTxs(unique.slice(0, 5));
                 }
+                // Fetch currencies
+                const curRes = await getCurrencyList();
+                if (curRes?.currencies) setCurrencyList(curRes.currencies);
             } catch (e) {
-                console.warn('Failed to load templates:', e.message);
+                console.warn('Failed to load essential data:', e.message);
             }
         };
-        fetchTemplates();
+        fetchEssential();
     }, [type]);
+
+    // Live Conversion logic
+    React.useEffect(() => {
+        const fetchConversion = async () => {
+            if (!amount || isNaN(parseFloat(amount)) || currency.code === 'PHP') {
+                setConvertedPreview(null);
+                setExchangeRate(1);
+                return;
+            }
+            try {
+                const res = await convertCurrency(currency.code, 'PHP', parseFloat(amount));
+                setConvertedPreview(res.convertedAmount);
+                setExchangeRate(res.rate);
+            } catch (e) {
+                console.warn('Conversion failed:', e.message);
+            }
+        };
+
+        const timeout = setTimeout(fetchConversion, 500); // Debounce API calls
+        return () => clearTimeout(timeout);
+    }, [amount, currency]);
 
     const handleQuickAdd = (template) => {
         showAlert(
@@ -139,9 +167,15 @@ export default function AddTransactionScreen({ navigation, route }) {
         }
         setIsLoading(true);
         try {
+            // If currency is not PHP, use the converted preview for the base 'amount'
+            const finalAmountPHP = convertedPreview !== null ? convertedPreview : parseFloat(amount);
+
             await createTransaction({
                 type,
-                amount: parseFloat(amount),
+                amount: finalAmountPHP,
+                currency: currency.code,
+                originalAmount: currency.code !== 'PHP' ? parseFloat(amount) : null,
+                exchangeRate: currency.code !== 'PHP' ? exchangeRate : null,
                 category: category.label,
                 categoryIcon: category.icon,
                 categoryColor: category.color,
@@ -149,7 +183,7 @@ export default function AddTransactionScreen({ navigation, route }) {
                 date: new Date().toISOString(),
             });
             showAlert('success', isIncome ? 'Income Added!' : 'Expense Logged!',
-                `₱${parseFloat(amount).toFixed(2)} has been recorded under ${category.label}.`
+                `${currency.symbol}${parseFloat(amount).toFixed(2)} recorded.${currency.code !== 'PHP' ? ` (≈ ₱${finalAmountPHP.toFixed(2)})` : ''}`
             );
         } catch (err) {
             showAlert('error', 'Failed', err?.response?.data?.message || 'Something went wrong. Please try again.');
@@ -229,7 +263,14 @@ export default function AddTransactionScreen({ navigation, route }) {
                     <View style={[styles.amountCard, { backgroundColor: COLORS.surface }]}>
                         <Text style={[styles.amountLabel, { color: COLORS.textMuted }]}>AMOUNT</Text>
                         <View style={styles.amountRow}>
-                            <Text style={[styles.currency, { color: accentColor }]}>₱</Text>
+                            <TouchableOpacity 
+                                onPress={() => setCurrencyModalVisible(true)}
+                                style={[styles.currencyPicker, { backgroundColor: COLORS.background, borderColor: COLORS.border }]}
+                            >
+                                <Text style={styles.currencyFlag}>{currency.flag}</Text>
+                                <Text style={[styles.currencyCode, { color: COLORS.text }]}>{currency.code}</Text>
+                                <Feather name="chevron-down" size={14} color={COLORS.textMuted} />
+                            </TouchableOpacity>
                             <TextInput
                                 style={[styles.amountInput, { color: COLORS.text }]}
                                 value={amount}
@@ -240,6 +281,17 @@ export default function AddTransactionScreen({ navigation, route }) {
                                 autoFocus
                             />
                         </View>
+                        
+                        {convertedPreview !== null && (
+                            <View style={styles.conversionInfo}>
+                                <Text style={[styles.conversionText, { color: COLORS.textMuted }]}>
+                                    ≈ ₱{convertedPreview.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                                </Text>
+                                <View style={[styles.rateTag, { backgroundColor: COLORS.primary + '15' }]}>
+                                    <Text style={[styles.rateText, { color: COLORS.primary }]}>1 {currency.code} = ₱{exchangeRate.toFixed(4)}</Text>
+                                </View>
+                            </View>
+                        )}
                     </View>
 
                     {/* Category Picker */}
@@ -322,6 +374,50 @@ export default function AddTransactionScreen({ navigation, route }) {
 
                 </ScrollView>
             </KeyboardAvoidingView>
+
+            {/* Currency Selection Modal */}
+            <Modal
+                visible={currencyModalVisible}
+                transparent
+                animationType="slide"
+                onRequestClose={() => setCurrencyModalVisible(false)}
+            >
+                <TouchableWithoutFeedback onPress={() => setCurrencyModalVisible(false)}>
+                    <View style={styles.modalOverlay}>
+                        <View style={[styles.modalSheet, { backgroundColor: COLORS.surface, maxHeight: '60%' }]}>
+                            <View style={styles.modalHeaderRow}>
+                                <Text style={[styles.modalTitle, { color: COLORS.text }]}>Select Currency</Text>
+                                <TouchableOpacity onPress={() => setCurrencyModalVisible(false)}>
+                                    <Feather name="x" size={24} color={COLORS.textMuted} />
+                                </TouchableOpacity>
+                            </View>
+                            
+                            <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingVertical: spacing.md }}>
+                                {currencyList.map((item) => (
+                                    <TouchableOpacity 
+                                        key={item.code}
+                                        onPress={() => {
+                                            setCurrency(item);
+                                            setCurrencyModalVisible(false);
+                                        }}
+                                        style={[
+                                            styles.currencyItem, 
+                                            { backgroundColor: currency.code === item.code ? COLORS.primary + '10' : 'transparent' }
+                                        ]}
+                                    >
+                                        <Text style={styles.itemFlag}>{item.flag}</Text>
+                                        <View style={{ flex: 1 }}>
+                                            <Text style={[styles.itemCode, { color: COLORS.text }]}>{item.code}</Text>
+                                            <Text style={[styles.itemName, { color: COLORS.textMuted }]}>{item.name}</Text>
+                                        </View>
+                                        {currency.code === item.code && <Feather name="check" size={20} color={COLORS.primary} />}
+                                    </TouchableOpacity>
+                                ))}
+                            </ScrollView>
+                        </View>
+                    </View>
+                </TouchableWithoutFeedback>
+            </Modal>
 
             {/* Custom Category Modal */}
             <Modal
@@ -413,9 +509,21 @@ const styles = StyleSheet.create({
     typeTag: { marginLeft: 'auto', width: 40, height: 40, borderRadius: 12, justifyContent: 'center', alignItems: 'center' },
     amountCard: { borderRadius: radius.xl, padding: spacing.lg, marginBottom: spacing.lg },
     amountLabel: { fontSize: 11, fontWeight: '700', letterSpacing: 1, marginBottom: spacing.sm },
-    amountRow: { flexDirection: 'row', alignItems: 'center' },
-    currency: { fontSize: 32, fontWeight: '800', marginRight: 8 },
+    amountRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+    currencyPicker: {
+        flexDirection: 'row', alignItems: 'center', gap: 6,
+        paddingHorizontal: 10, paddingVertical: 8,
+        borderRadius: radius.md, borderWidth: 1.5,
+    },
+    currencyFlag: { fontSize: 20 },
+    currencyCode: { fontSize: 16, fontWeight: '800' },
     amountInput: { fontSize: 40, fontWeight: '800', flex: 1 },
+    
+    conversionInfo: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 12, paddingTop: 12, borderTopWidth: 1, borderTopColor: 'rgba(0,0,0,0.05)' },
+    conversionText: { fontSize: 16, fontWeight: '700' },
+    rateTag: { paddingHorizontal: 8, paddingVertical: 4, borderRadius: radius.xs },
+    rateText: { fontSize: 11, fontWeight: '800' },
+
     section: { marginBottom: spacing.lg },
     sectionTitle: { fontSize: 11, fontWeight: '700', letterSpacing: 1, marginBottom: spacing.sm },
     categoryGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
@@ -466,5 +574,10 @@ const styles = StyleSheet.create({
         justifyContent: 'center', alignItems: 'center'
     },
     modalSaveBtn: { paddingVertical: 16, borderRadius: radius.xl, alignItems: 'center', marginTop: spacing.md },
-    modalSaveBtnText: { color: '#fff', fontSize: 16, fontWeight: '800' }
+    modalSaveBtnText: { color: '#fff', fontSize: 16, fontWeight: '800' },
+
+    currencyItem: { flexDirection: 'row', alignItems: 'center', gap: 16, padding: 12, borderRadius: radius.lg },
+    itemFlag: { fontSize: 28 },
+    itemCode: { fontSize: 16, fontWeight: '800' },
+    itemName: { fontSize: 12, fontWeight: '600' }
 });

@@ -10,6 +10,7 @@ import { useAuth } from '../../context/AuthContext';
 import { getShoppingSessions } from '../../api/api';
 import { spacing, radius } from '../../theme/colors';
 import CustomAlertModal from '../../components/CustomAlertModal';
+import Skeleton from '../../components/Skeleton';
 
 const formatCurrency = (amount, currency = 'PHP') =>
     new Intl.NumberFormat('en-PH', { style: 'currency', currency }).format(amount || 0);
@@ -144,7 +145,25 @@ export default function ShoppingHomeScreen({ navigation }) {
             <Text style={[styles.sectionTitle, { color: COLORS.text }]}>Shopping History</Text>
 
             {loading ? (
-                <ActivityIndicator color={COLORS.primary} style={{ marginTop: 40 }} />
+                <View style={{ padding: spacing.lg }}>
+                    {[1, 2, 3, 4].map(i => (
+                        <View key={i} style={[styles.sessionCard, { backgroundColor: COLORS.surface, elevation: 0, borderWidth: 1, borderColor: COLORS.border }]}>
+                            <Skeleton width={44} height={44} borderRadius={22} />
+                            <View style={{ flex: 1 }}>
+                                <Skeleton width={130} height={15} style={{ marginBottom: 6 }} />
+                                <Skeleton width={90} height={12} style={{ marginBottom: 8 }} />
+                                <View style={{ flexDirection: 'row', gap: 8 }}>
+                                    <Skeleton width={70} height={18} borderRadius={8} />
+                                    <Skeleton width={50} height={18} borderRadius={8} />
+                                </View>
+                            </View>
+                            <View style={{ alignItems: 'flex-end' }}>
+                                <Skeleton width={60} height={16} style={{ marginBottom: 6 }} />
+                                <Skeleton width={40} height={12} />
+                            </View>
+                        </View>
+                    ))}
+                </View>
             ) : (
                 <FlatList
                     data={sessions}

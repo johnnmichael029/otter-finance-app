@@ -9,7 +9,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useAuth } from '../../context/AuthContext';
 import { useTheme } from '../../context/ThemeContext';
 import { Feather, MaterialCommunityIcons, Ionicons } from '@expo/vector-icons';
-import { getTransactionSummary, getTransactions, getSavingsGoals } from '../../api/api';
+import { getTransactionSummary, getTransactions, getSavingsGoals, getDebts } from '../../api/api';
 import { spacing, radius, typography, shadow, colors } from '../../theme/colors';
 import CustomAlertModal from '../../components/CustomAlertModal';
 import Skeleton from '../../components/Skeleton';
@@ -68,7 +68,9 @@ export default function HomeScreen({ navigation }) {
     const { userInfo, userToken, logout } = useAuth();
     const { COLORS, toggleTheme, isDarkMode } = useTheme();
     const { setIsSavingsMode } = useWalletMode();
+    // Security context is used by Settings screen — lock state managed globally
     const [savingsTotalSaved, setSavingsTotalSaved] = React.useState(0);
+    const [debtStats, setDebtStats] = React.useState({ iOwe: 0, owedToMe: 0 });
     const [summary, setSummary] = useState({ totalIncome: 0, totalExpenses: 0, balance: 0, incomeDist: [], expenseDist: [] });
     const [recent, setRecent] = useState([]);
     const [loading, setLoading] = useState(true);
@@ -124,12 +126,27 @@ export default function HomeScreen({ navigation }) {
         // Guard: don't attempt authenticated requests without a valid token
         if (!userToken) return;
         try {
-            const [s, t, savRes] = await Promise.all([
+            const [s, t, savRes, debtsRes] = await Promise.all([
                 getTransactionSummary({ range: dateRange.toLowerCase() }),
                 getTransactions({ limit: 10, page: 1 }),
                 getSavingsGoals().catch(() => ({ totalSaved: 0 })),
+                getDebts().catch(() => ([])),
             ]);
             setSavingsTotalSaved(savRes?.totalSaved || 0);
+
+            // Calculate debt totals for real net worth
+            let iOwe = 0;
+            let owedToMe = 0;
+            if (Array.isArray(debtsRes)) {
+                debtsRes.forEach(d => {
+                    if (d.status === 'settled') return;
+                    const amount = d.totalOwed ?? ((d.amount || 0) - (d.amountPaid || 0));
+                    if (d.direction === 'owed_by_me') iOwe += amount;
+                    if (d.direction === 'owed_to_me') owedToMe += amount;
+                });
+            }
+            setDebtStats({ iOwe, owedToMe });
+
             setSummary(s);
             const txs = t.transactions || [];
             setRecent(txs);
@@ -250,11 +267,17 @@ export default function HomeScreen({ navigation }) {
 
     const onRefresh = () => { setRefreshing(true); load(); };
 
-    // Otter mood based on balance
+    // Calculations for Net Worth Tracker
+    const walletBal = summary.netBalance ?? summary.balance ?? 0;
+    const savingBal = savingsTotalSaved ?? 0;
+    const netDebt = debtStats.owedToMe - debtStats.iOwe;
+    const netWorth = walletBal + savingBal + netDebt;
+
+    // Otter mood based on net worth
     const otterMood = () => {
-        if (summary.balance > 0) return { mood: "You're looking great! Keep tracking exactly where your money goes.", color: COLORS.income };
-        if (summary.balance === 0) return { mood: "Neutral balance today. Start putting everything securely in the system!", color: COLORS.warning };
-        return { mood: "Nasa red ka. Try holding off on non-essentials until the next income!", color: COLORS.expense };
+        if (netWorth > 0) return { mood: "You're looking great! Keep tracking exactly where your money goes.", color: COLORS.income };
+        if (netWorth === 0) return { mood: "Neutral net worth today. Start building your savings and track your expenses!", color: COLORS.warning };
+        return { mood: "Nasa red ang net worth mo. Try to hold off on non-essentials and pay down debts!", color: COLORS.expense };
     };
     const mood = otterMood();
 
@@ -346,11 +369,14 @@ export default function HomeScreen({ navigation }) {
 
                             <MaterialCommunityIcons name="piggy-bank-outline" size={20} color={COLORS.primary} />
                         </TouchableOpacity>
-                        <TouchableOpacity onPress={toggleTheme} style={{ marginRight: spacing.sm, padding: 8, backgroundColor: COLORS.surface, borderRadius: 12 }}>
+                        {/* <TouchableOpacity onPress={toggleTheme} style={{ marginRight: spacing.sm, padding: 8, backgroundColor: COLORS.surface, borderRadius: 12 }}>
                             <Feather name={isDarkMode ? 'sun' : 'moon'} size={22} color={COLORS.textMuted} />
-                        </TouchableOpacity>
-                        <TouchableOpacity onPress={() => setLogoutModalVisible(true)} style={{ padding: 8, backgroundColor: COLORS.surface, borderRadius: 12 }}>
-                            <Feather name="log-out" size={22} color={COLORS.textMuted} />
+                        </TouchableOpacity> */}
+                        <TouchableOpacity
+                            onPress={() => navigation.navigate('Settings')}
+                            style={{ padding: 8, backgroundColor: COLORS.surface, borderRadius: 12 }}
+                        >
+                            <Feather name="settings" size={22} color={COLORS.textMuted} />
                         </TouchableOpacity>
                     </View>
                 </View>
@@ -369,8 +395,26 @@ export default function HomeScreen({ navigation }) {
                         </View>
                     </View>
 
-                    <Text style={styles.balanceLabel}>NET BALANCE</Text>
-                    <Text style={styles.balanceAmount}>{formatCurrency(summary.netBalance ?? summary.balance, userInfo?.currency)}</Text>
+                    <Text style={styles.balanceLabel}>TOTAL NET WORTH</Text>
+                    <Text style={styles.balanceAmount}>{formatCurrency(netWorth, userInfo?.currency)}</Text>
+
+                    {/* Net Worth Breakdown */}
+                    <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 16, paddingTop: 16, borderTopWidth: 1, borderTopColor: 'rgba(255,255,255,0.2)' }}>
+                        <View>
+                            <Text style={{ color: 'rgba(255,255,255,0.7)', fontSize: 10, fontWeight: '700' }}>WALLET</Text>
+                            <Text style={{ color: '#fff', fontSize: 13, fontWeight: '800' }}>{formatCurrency(walletBal, userInfo?.currency)}</Text>
+                        </View>
+                        <View style={{ alignItems: 'flex-start', paddingLeft: 12 }}>
+                            <Text style={{ color: 'rgba(255,255,255,0.7)', fontSize: 10, fontWeight: '700' }}>SAVINGS</Text>
+                            <Text style={{ color: '#fff', fontSize: 13, fontWeight: '800' }}>+{formatCurrency(savingBal, userInfo?.currency)}</Text>
+                        </View>
+                        <View style={{ alignItems: 'flex-end', marginLeft: 'auto' }}>
+                            <Text style={{ color: 'rgba(255,255,255,0.7)', fontSize: 10, fontWeight: '700' }}>NET DEBT</Text>
+                            <Text style={{ color: netDebt < 0 ? '#fca5a5' : (netDebt > 0 ? '#86efac' : '#fff'), fontSize: 13, fontWeight: '800' }}>
+                                {netDebt > 0 ? '+' : ''}{formatCurrency(netDebt, userInfo?.currency)}
+                            </Text>
+                        </View>
+                    </View>
                 </LinearGradient>
 
                 {/* Analytics Row */}
@@ -437,7 +481,7 @@ export default function HomeScreen({ navigation }) {
                     <View style={styles.quickActionsRow}>
                         {[
                             { icon: 'shopping-cart', label: 'Shopping', color: '#E91E8C', onPress: () => navigation.navigate('ShoppingHome') },
-                            { icon: 'credit-card', label: 'Debts', color: '#f59e0b', onPress: () => navigation.navigate('Transactions', { filter: 'debt' }) },
+                            { icon: 'credit-card', label: 'Debts', color: '#f59e0b', onPress: () => navigation.navigate('DebtScreen') },
                             { icon: 'maximize', label: 'Scanner', color: '#8b5cf6', onPress: () => navigation.navigate('BarcodeScanner') },
                             { icon: 'repeat', label: 'Bills', color: '#22c55e', onPress: () => navigation.navigate('Bills') },
                         ].map((action) => (

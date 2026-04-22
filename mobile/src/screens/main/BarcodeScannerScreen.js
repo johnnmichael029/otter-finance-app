@@ -5,7 +5,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { CameraView, useCameraPermissions } from 'expo-camera';
-import { Feather, Ionicons } from '@expo/vector-icons';
+import { Feather, Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useTheme } from '../../context/ThemeContext';
 import { spacing, radius } from '../../theme/colors';
 import CustomAlertModal from '../../components/CustomAlertModal';
@@ -125,7 +125,7 @@ export default function BarcodeScannerScreen({ navigation }) {
     if (!permission.granted) {
         return (
             <SafeAreaView style={[styles.permissionView, { backgroundColor: COLORS.background }]}>
-                <Ionicons name="camera-off-outline" size={64} color={COLORS.textMuted} style={{ marginBottom: spacing.lg }} />
+                <MaterialCommunityIcons name="camera-off-outline" size={64} color={COLORS.textMuted} style={{ marginBottom: spacing.lg }} />
                 <Text style={[styles.permTitle, { color: COLORS.text }]}>Camera Access Needed</Text>
                 <Text style={[styles.permSub, { color: COLORS.textMuted }]}>
                     OTTER needs camera access to scan product barcodes for quick expense logging.

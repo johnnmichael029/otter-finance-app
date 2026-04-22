@@ -11,10 +11,18 @@ import SavingsQuickAddSheet from './src/components/SavingsQuickAddSheet';
 // Contexts
 import { AuthProvider, useAuth } from './src/context/AuthContext';
 import { ThemeProvider, useTheme } from './src/context/ThemeContext';
+import { SecurityProvider, useSecurity } from './src/context/SecurityContext';
 
 // Auth Screens
 import LoginScreen from './src/screens/auth/LoginScreen';
 import RegisterScreen from './src/screens/auth/RegisterScreen';
+import TwoFAScreen from './src/screens/auth/TwoFAScreen';
+import AppLockScreen from './src/screens/auth/AppLockScreen';
+import PinSetupScreen from './src/screens/auth/PinSetupScreen';
+
+// Settings
+import SettingsScreen from './src/screens/main/SettingsScreen';
+import SessionManagementScreen from './src/screens/main/SessionManagementScreen';
 
 // Main Screens
 import HomeScreen from './src/screens/main/HomeScreen';
@@ -23,6 +31,7 @@ import RecurringBillsScreen from './src/screens/main/RecurringBillsScreen';
 import BudgetScreen from './src/screens/main/BudgetScreen';
 import AddTransactionScreen from './src/screens/main/AddTransactionScreen';
 import BarcodeScannerScreen from './src/screens/main/BarcodeScannerScreen';
+import DebtScreen from './src/screens/main/DebtScreen';
 
 // Savings Screens
 import SavingsHomeScreen from './src/screens/savings/SavingsHomeScreen';
@@ -52,6 +61,7 @@ const AuthStack = () => (
     <Stack.Navigator screenOptions={{ headerShown: false }}>
         <Stack.Screen name="Login" component={LoginScreen} />
         <Stack.Screen name="Register" component={RegisterScreen} />
+        <Stack.Screen name="TwoFA" component={TwoFAScreen} />
     </Stack.Navigator>
 );
 
@@ -210,6 +220,7 @@ const AppNavigator = () => {
                         {/* Shared Screens available in both modes */}
                         <Stack.Screen name="AddTransaction" component={AddTransactionScreen} />
                         <Stack.Screen name="BarcodeScanner" component={BarcodeScannerScreen} />
+                        <Stack.Screen name="DebtScreen" component={DebtScreen} />
                         <Stack.Screen name="SavingsGoalDetail" component={SavingsGoalDetailScreen} />
                         <Stack.Screen name="SavingsTransfer" component={SavingsTransferScreen} />
                         <Stack.Screen name="SavingsTransferHistory" component={SavingsTransferHistoryScreen} />
@@ -220,6 +231,9 @@ const AppNavigator = () => {
                         <Stack.Screen name="ShoppingSession" component={ShoppingSessionScreen} />
                         <Stack.Screen name="ShoppingCheckout" component={ShoppingCheckoutScreen} />
                         <Stack.Screen name="ShoppingHistoryDetail" component={ShoppingHistoryDetailScreen} />
+                        <Stack.Screen name="Settings" component={SettingsScreen} />
+                        <Stack.Screen name="PinSetup" component={PinSetupScreen} />
+                        <Stack.Screen name="Sessions" component={SessionManagementScreen} />
                     </Stack.Navigator>
                 ) : <AuthStack />}
             </View>
@@ -227,16 +241,27 @@ const AppNavigator = () => {
     );
 };
 
+// ── App Lock Overlay ──────────────────────────────────────────────────────────
+const AppLockOverlay = () => {
+    const { isLocked, biometricEnabled, pinEnabled } = useSecurity();
+    const { userToken } = useAuth();
+    if (!userToken || (!biometricEnabled && !pinEnabled) || !isLocked) return null;
+    return <AppLockScreen />;
+};
+
 export default function App() {
     const [isSavingsMode, setIsSavingsMode] = React.useState(false);
     return (
         <ThemeProvider>
             <AuthProvider>
-                <WalletModeContext.Provider value={{ isSavingsMode, setIsSavingsMode }}>
-                    <GlobalStatusBar />
-                    <AppNavigator />
-                    <Toast />
-                </WalletModeContext.Provider>
+                <SecurityProvider>
+                    <WalletModeContext.Provider value={{ isSavingsMode, setIsSavingsMode }}>
+                        <GlobalStatusBar />
+                        <AppNavigator />
+                        <AppLockOverlay />
+                        <Toast />
+                    </WalletModeContext.Provider>
+                </SecurityProvider>
             </AuthProvider>
         </ThemeProvider>
     );

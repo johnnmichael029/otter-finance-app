@@ -35,7 +35,11 @@ export const deleteDebt = (id) =>
 export const sendDebtReminder = (id) =>
     axios.post(`${API_BASE}/debts/${id}/remind`).then(r => r.data);
 
-// ─── User ─────────────────────────────────────────────────────────────────────
+export const logDebtPayment = (id, data) =>
+    axios.post(`${API_BASE}/debts/${id}/payments`, data).then(r => r.data);
+
+export const getDebtPayments = (id) =>
+    axios.get(`${API_BASE}/debts/${id}/payments`).then(r => r.data);
 
 export const getProfile = () =>
     axios.get(`${API_BASE}/users/me`).then(r => r.data);
@@ -45,6 +49,25 @@ export const updateProfile = (data) =>
 
 export const savePushToken = (pushToken) =>
     axios.post(`${API_BASE}/users/push-token`, { pushToken }).then(r => r.data);
+
+// ─── Sessions (Auth) ─────────────────────────────────────────────────────────
+
+export const getSessions = () =>
+    axios.get(`${API_BASE}/auth/sessions`).then(r => r.data);
+
+export const revokeSession = (sessionId) =>
+    axios.delete(`${API_BASE}/auth/sessions/${sessionId}`).then(r => r.data);
+
+export const revokeAllSessions = () =>
+    axios.post(`${API_BASE}/auth/logout-all`).then(r => r.data);
+
+// ── 2FA ──────────────────────────────────────────────────────────────────────
+
+export const toggle2FA = () =>
+    axios.post(`${API_BASE}/auth/2fa/toggle`).then(r => r.data);
+
+export const get2FAStatus = () =>
+    axios.get(`${API_BASE}/auth/2fa/status`).then(r => r.data);
 
 // ─── Barcode Price History ────────────────────────────────────────────────────
 
@@ -136,4 +159,15 @@ export const deleteShoppingSession = (id) =>
 
 export const lookupShoppingBarcode = (barcode) =>
     axios.get(`${API_BASE}/shopping/barcode/${encodeURIComponent(barcode)}`).then(r => r.data);
+
+// ── Currency ──────────────────────────────────────────────────────────────────
+
+export const getCurrencyList = () =>
+    axios.get(`${API_BASE}/currency/list`).then(r => r.data);
+
+export const getExchangeRates = (base = 'PHP') =>
+    axios.get(`${API_BASE}/currency/rates`, { params: { base } }).then(r => r.data);
+
+export const convertCurrency = (from, to, amount) =>
+    axios.get(`${API_BASE}/currency/convert`, { params: { from, to, amount } }).then(r => r.data);
 

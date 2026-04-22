@@ -61,6 +61,27 @@ const transactionSchema = new mongoose.Schema({
         trim: true,
         default: '',
     },
+
+    // ── Multi-Currency Support ────────────────────────────────────────────────
+    // `amount`         → always in the user's BASE currency (e.g. PHP) — used for all math
+    // `currency`       → the currency the user entered (e.g. 'USD')
+    // `originalAmount` → what the user typed (e.g. 100) in that foreign currency
+    // `exchangeRate`   → rate at transaction time (1 USD = X PHP)
+    currency: {
+        type: String,
+        default: 'PHP',
+        uppercase: true,
+        trim: true,
+    },
+    originalAmount: {
+        type: Number,   // null if transaction was already in base currency
+        default: null,
+    },
+    exchangeRate: {
+        type: Number,   // null if no conversion was needed
+        default: null,
+    },
+
     runningBalance: {
         type: Number, // Total wallet balance after this transaction
     },

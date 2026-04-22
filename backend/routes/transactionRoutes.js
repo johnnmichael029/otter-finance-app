@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const requireAuth = require('../middleware/requireAuth');
 const cache = require('../middleware/cacheMiddleware');
+const validate = require('../middleware/validate');
 const {
     getTransactions,
     getSummary,
@@ -20,10 +21,10 @@ router.get('/', cache('transaction', 90), getTransactions);
 router.get('/summary', cache('transaction', 90), getSummary);
 
 // POST /api/transactions         — create (invalidates cache)
-router.post('/', createTransaction);
+router.post('/', validate.createTransaction, createTransaction);
 
 // PATCH /api/transactions/:id    — update (invalidates cache)
-router.patch('/:id', updateTransaction);
+router.patch('/:id', validate.updateTransaction, updateTransaction);
 
 // DELETE /api/transactions/:id   — delete (invalidates cache)
 router.delete('/:id', deleteTransaction);

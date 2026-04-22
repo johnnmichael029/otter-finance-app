@@ -3,7 +3,7 @@ const mongoose = require('mongoose');
 /**
  * OTTER — Debt Model (Debt Sentinel)
  * Tracks money you OWE to someone, or money someone OWES you.
- * "Otter Pocket" UI shows all unsettled debts.
+ * Supports installment plans with penalty interest after grace period.
  */
 const debtSchema = new mongoose.Schema({
     // ── Ownership ─────────────────────────────────────────────────────────────
@@ -15,7 +15,7 @@ const debtSchema = new mongoose.Schema({
     },
 
     // ── Direction ─────────────────────────────────────────────────────────────
-    // 'owed_by_me'   → I owe money to someone (I borrowed)
+    // 'owed_by_me'   → I owe money to someone (I borrowed / installment plan)
     // 'owed_to_me'   → Someone owes me money (I lent)
     direction: {
         type: String,
@@ -23,7 +23,7 @@ const debtSchema = new mongoose.Schema({
         required: [true, 'Debt direction is required.'],
     },
 
-    // ── The Other Party ───────────────────────────────────────────────────────
+    // ── The Other Party / Label ───────────────────────────────────────────────
     personName: {
         type: String,
         required: [true, 'Person name is required.'],
@@ -36,12 +36,35 @@ const debtSchema = new mongoose.Schema({
         required: [true, 'Amount is required.'],
         min: [0.01, 'Amount must be greater than 0.'],
     },
+    amountPaid: {
+        type: Number,
+        default: 0,
+        min: 0,
+    },
 
     // ── Description ───────────────────────────────────────────────────────────
     description: {
         type: String,
         trim: true,
         default: '',
+    },
+
+    // ── Installment Plan Settings ─────────────────────────────────────────────
+    isInstallment: {
+        type: Boolean,
+        default: false,             // true = phone plan, credit installment, etc.
+    },
+    monthlyPayment: {
+        type: Number,
+        default: null,              // Fixed monthly payment amount (e.g. ₱1,000)
+    },
+    gracePeriodMonths: {
+        type: Number,
+        default: 0,                 // # of months at 0% (e.g. 12 for "12-month 0% plan")
+    },
+    penaltyRate: {
+        type: Number,
+        default: 0,                 // Monthly penalty % applied AFTER grace period (e.g. 20)
     },
 
     // ── Dates ─────────────────────────────────────────────────────────────────
@@ -51,7 +74,7 @@ const debtSchema = new mongoose.Schema({
     },
     dueDate: {
         type: Date,
-        default: null, // Optional due date for reminders
+        default: null,              // Final due date (end of grace period)
     },
 
     // ── Status ────────────────────────────────────────────────────────────────
@@ -59,11 +82,6 @@ const debtSchema = new mongoose.Schema({
         type: String,
         enum: ['pending', 'partial', 'settled'],
         default: 'pending',
-    },
-    amountPaid: {
-        type: Number,
-        default: 0, // Tracks partial payments
-        min: 0,
     },
 
     // ── Push Reminder ─────────────────────────────────────────────────────────
@@ -74,7 +92,7 @@ const debtSchema = new mongoose.Schema({
 
 }, { timestamps: true });
 
-// ── Virtual: remaining balance ────────────────────────────────────────────────
+// ── Virtual: outstanding principal (before interest) ──────────────────────────
 debtSchema.virtual('balance').get(function () {
     return Math.max(0, this.amount - this.amountPaid);
 });

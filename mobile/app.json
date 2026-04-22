@@ -1,12 +1,12 @@
 {
   "expo": {
     "name": "OTTER",
-    "slug": "otter-finance-app",
+    "slug": "otter",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "dark",
-    "newArchEnabled": false,
+    "newArchEnabled": true,
     "splash": {
       "image": "./assets/icon.png",
       "resizeMode": "contain",
@@ -27,7 +27,8 @@
         "INTERNET",
         "ACCESS_NETWORK_STATE",
         "RECEIVE_BOOT_COMPLETED",
-        "VIBRATE"
+        "VIBRATE",
+        "android.permission.CAMERA"
       ]
     },
     "web": {
@@ -44,13 +45,15 @@
           "androidCollapsedTitle": "OTTER Finance"
         }
       ],
-      "expo-barcode-scanner",
-      "@react-native-community/datetimepicker"
+      "expo-camera",
+      "@react-native-community/datetimepicker",
+      "expo-secure-store"
     ],
     "extra": {
       "eas": {
-        "projectId": ""
+        "projectId": "59a1de66-41ad-4342-b959-b672b5cddd96"
       }
-    }
+    },
+    "owner": "yamashiis-organization"
   }
 }
