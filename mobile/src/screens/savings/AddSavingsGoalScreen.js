@@ -162,7 +162,14 @@ export default function AddSavingsGoalScreen({ navigation }) {
             });
             showAlert('success', 'Goal Created! 🎯', `"${name}" has been added.`);
         } catch (err) {
-            showAlert('error', 'Failed', err?.response?.data?.error || 'Could not create goal.');
+            const errorData = err?.response?.data;
+            let errorMsg = errorData?.error || 'Could not create goal.';
+            
+            if (errorData?.details && Array.isArray(errorData.details) && errorData.details.length > 0) {
+                errorMsg = errorData.details[0].message;
+            }
+            
+            showAlert('error', 'Failed', errorMsg);
         } finally {
             setSaving(false);
         }

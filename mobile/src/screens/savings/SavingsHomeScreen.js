@@ -193,10 +193,12 @@ export default function SavingsHomeScreen({ navigation, route }) {
         const socket = getSocket() || connectSocket(userInfo._id);
         const handleUpdate = () => loadData();
         socket.on('new_savings_transfer', handleUpdate);
+        socket.on('new_savings_goal', handleUpdate);
         socket.on('update_savings_goal', handleUpdate);
         socket.on('delete_savings_goal', handleUpdate);
         return () => {
             socket.off('new_savings_transfer', handleUpdate);
+            socket.off('new_savings_goal', handleUpdate);
             socket.off('update_savings_goal', handleUpdate);
             socket.off('delete_savings_goal', handleUpdate);
         };

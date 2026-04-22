@@ -9,7 +9,7 @@ import { Camera, CameraView } from 'expo-camera';
 import { useTheme } from '../../context/ThemeContext';
 import { useAuth } from '../../context/AuthContext';
 import {
-    createShoppingSession, updateShoppingCart, lookupShoppingBarcode, cancelShopping
+    createShoppingSession, updateShoppingCart, lookupShoppingBarcode, cancelShopping, createShoppingTemplate
 } from '../../api/api';
 import { spacing, radius } from '../../theme/colors';
 import CustomAlertModal from '../../components/CustomAlertModal';
@@ -59,13 +59,51 @@ export default function ShoppingSessionScreen({ route, navigation }) {
 
     // ── Alert ────────────────────────────────────────────────────
     const [alertConfig, setAlertConfig] = useState({ visible: false, title: '', message: '', type: 'confirm', onConfirm: () => {} });
+    const [saveTemplateModal, setSaveTemplateModal] = useState(false);
+    const [newTemplateName, setNewTemplateName] = useState('');
+    const hasBudgetAlertedNear = useRef(false);
+    const hasBudgetAlertedReached = useRef(false);
 
     const total = items.reduce((sum, i) => sum + i.price * i.quantity, 0);
     const budgetNum = parseFloat(budget) || 0;
-    const pct = budgetNum > 0 ? Math.min((total / budgetNum) * 100, 100) : 0;
-    const budgetColor = pct >= 100 ? '#ef4444' : pct >= 80 ? '#f59e0b' : '#22c55e';
+    const itemsPct = budgetNum > 0 ? (total / budgetNum) * 100 : 0;
+    const pct = Math.min(itemsPct, 100);
+    const budgetColor = itemsPct >= 100 ? '#ef4444' : itemsPct >= 80 ? '#f59e0b' : '#22c55e';
 
-    // ── Resume existing session if passed ────────────────────────
+    // ── Budget Cap Monitor (Feature 16) ──────────────────────────
+    useEffect(() => {
+        if (budgetNum <= 0) return;
+
+        if (itemsPct >= 100 && !hasBudgetAlertedReached.current) {
+            hasBudgetAlertedReached.current = true;
+            setAlertConfig({
+                visible: true,
+                title: 'Budget Reached! 🛑',
+                message: `You have reached your limit of ${formatCurrency(budgetNum, userInfo?.currency)}. Be careful with further additions!`,
+                type: 'info',
+                onConfirm: () => setAlertConfig(p => ({ ...p, visible: false }))
+            });
+        } else if (itemsPct >= 80 && itemsPct < 100 && !hasBudgetAlertedNear.current) {
+            hasBudgetAlertedNear.current = true;
+            setAlertConfig({
+                visible: true,
+                title: 'Nearing Budget ⚠️',
+                message: `You have used ${Math.round(itemsPct)}% of your ${formatCurrency(budgetNum, userInfo?.currency)} budget. Small items from here!`,
+                type: 'info',
+                onConfirm: () => setAlertConfig(p => ({ ...p, visible: false }))
+            });
+        }
+
+        // Reset flags if user removes items
+        if (itemsPct < 80) {
+            hasBudgetAlertedNear.current = false;
+            hasBudgetAlertedReached.current = false;
+        } else if (itemsPct < 100) {
+            hasBudgetAlertedReached.current = false;
+        }
+    }, [itemsPct, budgetNum]);
+
+    // ── Resume existing session or load template if passed ───────
     useEffect(() => {
         const existing = route.params?.resumeSession;
         if (existing) {
@@ -74,8 +112,20 @@ export default function ShoppingSessionScreen({ route, navigation }) {
             setBudget(String(existing.budget || ''));
             setItems(existing.items || []);
             setSetupDone(true);
+            return;
         }
-    }, []);
+
+        const templateItems = route.params?.templateItems;
+        if (templateItems) {
+            setItems(templateItems);
+            if (route.params?.templateLabel) {
+                setLabel(route.params.templateLabel);
+            }
+            if (route.params?.templateBudget) {
+                setBudget(String(route.params.templateBudget));
+            }
+        }
+    }, [route.params]);
 
     // ── Camera Permission ────────────────────────────────────────
     useEffect(() => {
@@ -209,7 +259,13 @@ export default function ShoppingSessionScreen({ route, navigation }) {
         const finalName = (customName && customName.trim()) || item?.name;
 
         if (!finalName || !finalName.trim()) {
-            Alert.alert("Required", "Please enter a product name.");
+            setAlertConfig({
+                visible: true,
+                title: "Required",
+                message: "Please enter a product name.",
+                type: 'error',
+                onConfirm: () => setAlertConfig(p => ({ ...p, visible: false }))
+            });
             return;
         }
 
@@ -342,6 +398,58 @@ export default function ShoppingSessionScreen({ route, navigation }) {
         }
     };
 
+    // ── Save as Template (Feature 14) ────────────────────────────
+    const handleSaveTemplate = async () => {
+        if (items.length === 0) {
+            setAlertConfig({
+                visible: true,
+                title: 'Empty Cart',
+                message: 'Add some items to your cart before saving as a template.',
+                type: 'info',
+                onConfirm: () => setAlertConfig(p => ({ ...p, visible: false }))
+            });
+            return;
+        }
+        setNewTemplateName(label);
+        setSaveTemplateModal(true);
+    };
+
+    const confirmSaveTemplate = async () => {
+        if (!newTemplateName.trim()) return;
+        setSaveTemplateModal(false);
+        try {
+            setSyncing(true);
+            await createShoppingTemplate({
+                name: newTemplateName.trim(),
+                emoji: '🛒',
+                defaultBudget: budgetNum,
+                items: items.map(i => ({
+                    name: i.name,
+                    price: i.price,
+                    quantity: i.quantity,
+                    barcode: i.barcode
+                }))
+            });
+            setAlertConfig({
+                visible: true,
+                title: 'Success',
+                message: 'Template saved successfully!',
+                type: 'success',
+                onConfirm: () => setAlertConfig(p => ({ ...p, visible: false }))
+            });
+        } catch (e) {
+            setAlertConfig({
+                visible: true,
+                title: 'Error',
+                message: e.response?.data?.error || 'Failed to save template',
+                type: 'error',
+                onConfirm: () => setAlertConfig(p => ({ ...p, visible: false }))
+            });
+        } finally {
+            setSyncing(false);
+        }
+    };
+
     // ── Cancel Session ───────────────────────────────────────────
     const handleCancel = () => {
         setAlertConfig({
@@ -435,14 +543,22 @@ export default function ShoppingSessionScreen({ route, navigation }) {
                     <Text style={[styles.headerTitle, { color: COLORS.text }]} numberOfLines={1}>{label}</Text>
                     {syncing && <Text style={[{ fontSize: 10, color: COLORS.textMuted }]}>Saving...</Text>}
                 </View>
-                <TouchableOpacity
-                    style={[styles.scanBtn, { backgroundColor: COLORS.primary }]}
-                    onPress={() => setScannerVisible(true)}
-                    activeOpacity={0.85}
-                >
-                    <MaterialCommunityIcons name="barcode-scan" size={20} color="#fff" />
-                    <Text style={styles.scanBtnText}>Scan</Text>
-                </TouchableOpacity>
+                <View style={{ flexDirection: 'row', gap: 8 }}>
+                    <TouchableOpacity
+                        style={[styles.saveTemplateBtn, { backgroundColor: COLORS.surface, borderWidth: 1, borderColor: COLORS.border }]}
+                        onPress={handleSaveTemplate}
+                    >
+                        <Feather name="save" size={18} color={COLORS.text} />
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                        style={[styles.scanBtn, { backgroundColor: COLORS.primary }]}
+                        onPress={() => setScannerVisible(true)}
+                        activeOpacity={0.85}
+                    >
+                        <MaterialCommunityIcons name="barcode-scan" size={20} color="#fff" />
+                        <Text style={styles.scanBtnText}>Scan</Text>
+                    </TouchableOpacity>
+                </View>
             </View>
 
             {/* Budget Progress Bar */}
@@ -633,6 +749,34 @@ export default function ShoppingSessionScreen({ route, navigation }) {
                 confirmIcon="shopping-cart"
             />
 
+            {/* Save Template Modal */}
+            <Modal visible={saveTemplateModal} transparent animationType="fade">
+                <View style={styles.modalOverlay}>
+                    <View style={[styles.modalSheet, { backgroundColor: COLORS.surface }]}>
+                        <Text style={[styles.modalTitle, { color: COLORS.text }]}>Save as Template</Text>
+                        <Text style={[styles.barcodeLabel, { color: COLORS.textMuted, marginBottom: 16 }]}>
+                            Give this list a name so you can reuse it later.
+                        </Text>
+                        <TextInput
+                            style={[styles.modalInput, { color: COLORS.text, borderColor: COLORS.border, backgroundColor: COLORS.background }]}
+                            placeholder="Template Name"
+                            placeholderTextColor={COLORS.textMuted}
+                            value={newTemplateName}
+                            onChangeText={setNewTemplateName}
+                            autoFocus
+                        />
+                        <View style={styles.modalActions}>
+                            <TouchableOpacity style={[styles.modalBtn, { backgroundColor: COLORS.border }]} onPress={() => setSaveTemplateModal(false)}>
+                                <Text style={{ color: COLORS.text, fontWeight: '700' }}>Cancel</Text>
+                            </TouchableOpacity>
+                            <TouchableOpacity style={[styles.modalBtn, { backgroundColor: COLORS.primary }]} onPress={confirmSaveTemplate}>
+                                <Text style={{ color: '#fff', fontWeight: '800' }}>Save Template</Text>
+                            </TouchableOpacity>
+                        </View>
+                    </View>
+                </View>
+            </Modal>
+
             <CustomAlertModal
                 visible={alertConfig.visible}
                 onClose={() => setAlertConfig(p => ({ ...p, visible: false }))}
@@ -664,6 +808,7 @@ const getStyles = (COLORS) => StyleSheet.create({
     headerTitle: { fontSize: 18, fontWeight: '900' },
     scanBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 14, paddingVertical: 10, borderRadius: 20 },
     scanBtnText: { color: '#fff', fontWeight: '800', fontSize: 13 },
+    saveTemplateBtn: { width: 44, height: 44, borderRadius: 12, justifyContent: 'center', alignItems: 'center' },
     // Budget bar
     budgetCard: { marginHorizontal: spacing.lg, marginBottom: spacing.md, borderRadius: radius.xl, padding: 16 },
     budgetRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 8 },

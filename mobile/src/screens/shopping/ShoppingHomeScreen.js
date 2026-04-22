@@ -112,14 +112,22 @@ export default function ShoppingHomeScreen({ navigation }) {
                         {completedSessions.length} trips · {formatCurrency(totalSpent, userInfo?.currency)} total
                     </Text>
                 </View>
-                <TouchableOpacity
-                    style={[styles.startBtn, { backgroundColor: COLORS.primary }]}
-                    onPress={() => navigation.navigate('ShoppingSession', { newSession: true })}
-                    activeOpacity={0.85}
-                >
-                    <Feather name="shopping-cart" size={16} color="#fff" />
-                    <Text style={styles.startBtnText}>Start</Text>
-                </TouchableOpacity>
+                <View style={styles.headerActions}>
+                    <TouchableOpacity
+                        style={[styles.templateBtn, { backgroundColor: COLORS.surface, borderWeight: 1, borderColor: COLORS.border }]}
+                        onPress={() => navigation.navigate('ShoppingTemplates')}
+                    >
+                        <Feather name="list" size={16} color={COLORS.text} />
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                        style={[styles.startBtn, { backgroundColor: COLORS.primary }]}
+                        onPress={() => navigation.navigate('ShoppingSession', { newSession: true })}
+                        activeOpacity={0.85}
+                    >
+                        <Feather name="shopping-cart" size={16} color="#fff" />
+                        <Text style={styles.startBtnText}>Start</Text>
+                    </TouchableOpacity>
+                </View>
             </View>
 
             {/* Stats Card */}
@@ -192,7 +200,9 @@ const getStyles = (COLORS) => StyleSheet.create({
     header: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, padding: spacing.lg, paddingBottom: spacing.md },
     headerTitle: { fontSize: 26, fontWeight: '900' },
     headerSub: { fontSize: 13, fontWeight: '600', marginTop: 2 },
-    startBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 16, paddingVertical: 10, borderRadius: 20, marginLeft: 'auto' },
+    headerActions: { flexDirection: 'row', alignItems: 'center', gap: 10, marginLeft: 'auto' },
+    templateBtn: { width: 44, height: 44, borderRadius: 12, justifyContent: 'center', alignItems: 'center', borderWidth: 1 },
+    startBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 16, paddingVertical: 10, borderRadius: 20 },
     startBtnText: { color: '#fff', fontWeight: '800', fontSize: 14 },
     statsCard: { marginHorizontal: spacing.lg, marginBottom: spacing.lg, borderRadius: radius.xl, padding: 20, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-around' },
     statItem: { alignItems: 'center' },

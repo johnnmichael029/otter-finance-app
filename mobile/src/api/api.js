@@ -18,6 +18,9 @@ export const updateTransaction = (id, data) =>
 export const deleteTransaction = (id) =>
     axios.delete(`${API_BASE}/transactions/${id}`).then(r => r.data);
 
+export const getAnalytics = () =>
+    axios.get(`${API_BASE}/transactions/analytics`).then(r => r.data);
+
 // ─── Debts ────────────────────────────────────────────────────────────────────
 
 export const getDebts = (params = {}) =>
@@ -163,6 +166,26 @@ export const deleteShoppingSession = (id) =>
 
 export const lookupShoppingBarcode = (barcode) =>
     axios.get(`${API_BASE}/shopping/barcode/${encodeURIComponent(barcode)}`).then(r => r.data);
+
+// ─── Shopping Templates & Price History (Features 14 & 15) ─────────────────────
+
+export const getShoppingTemplates = () =>
+    axios.get(`${API_BASE}/shopping/templates`).then(r => r.data);
+
+export const createShoppingTemplate = (data) =>
+    axios.post(`${API_BASE}/shopping/templates`, data).then(r => r.data);
+
+export const updateShoppingTemplate = (id, data) =>
+    axios.patch(`${API_BASE}/shopping/templates/${id}`, data).then(r => r.data);
+
+export const deleteShoppingTemplate = (id) =>
+    axios.delete(`${API_BASE}/shopping/templates/${id}`).then(r => r.data);
+
+export const useShoppingTemplate = (id) =>
+    axios.post(`${API_BASE}/shopping/templates/${id}/use`).then(r => r.data);
+
+export const getPriceHistory = (barcode) =>
+    axios.get(`${API_BASE}/shopping/price-history/${encodeURIComponent(barcode)}`).then(r => r.data);
 
 // ── Currency ──────────────────────────────────────────────────────────────────
 

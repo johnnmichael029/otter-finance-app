@@ -186,7 +186,15 @@ export default function AddTransactionScreen({ navigation, route }) {
                 `${currency.symbol}${parseFloat(amount).toFixed(2)} recorded.${currency.code !== 'PHP' ? ` (≈ ₱${finalAmountPHP.toFixed(2)})` : ''}`
             );
         } catch (err) {
-            showAlert('error', 'Failed', err?.response?.data?.message || 'Something went wrong. Please try again.');
+            const errorData = err?.response?.data;
+            let errorMsg = errorData?.error || errorData?.message || 'Something went wrong. Please try again.';
+            
+            // If it's a validation error with details, use the first detail message
+            if (errorData?.details && Array.isArray(errorData.details) && errorData.details.length > 0) {
+                errorMsg = errorData.details[0].message;
+            }
+            
+            showAlert('error', 'Failed', errorMsg);
         } finally {
             setIsLoading(false);
         }

@@ -142,7 +142,11 @@ const checkoutSession = async (req, res) => {
             if (item.barcode && item.barcode.trim() !== '') {
                 await BarcodePrice.findOneAndUpdate(
                     { user: req.userId, barcode: item.barcode },
-                    { $set: { name: item.name, price: item.price }, $inc: { count: 1 } },
+                    {
+                        $set: { name: item.name, price: item.price },
+                        $inc: { count: 1 },
+                        $push: { priceHistory: { price: item.price, recordedAt: new Date() } }
+                    },
                     { upsert: true, new: true }
                 );
             }

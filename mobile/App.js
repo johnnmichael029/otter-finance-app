@@ -35,6 +35,7 @@ import DebtScreen from './src/screens/main/DebtScreen';
 import CurrencyConverterScreen from './src/screens/main/CurrencyConverterScreen';
 import AllServicesScreen from './src/screens/main/AllServicesScreen';
 import DebtPlannerScreen from './src/screens/main/DebtPlannerScreen';
+import AnalyticsScreen from './src/screens/main/AnalyticsScreen';
 
 // Savings Screens
 import SavingsHomeScreen from './src/screens/savings/SavingsHomeScreen';
@@ -50,6 +51,7 @@ import ShoppingHomeScreen from './src/screens/shopping/ShoppingHomeScreen';
 import ShoppingSessionScreen from './src/screens/shopping/ShoppingSessionScreen';
 import ShoppingCheckoutScreen from './src/screens/shopping/ShoppingCheckoutScreen';
 import ShoppingHistoryDetailScreen from './src/screens/shopping/ShoppingHistoryDetailScreen';
+import ShoppingTemplatesScreen from './src/screens/shopping/ShoppingTemplatesScreen';
 
 import { StatusBar } from 'expo-status-bar';
 
@@ -241,12 +243,14 @@ const AppNavigator = () => {
                         <Stack.Screen name="ShoppingSession" component={ShoppingSessionScreen} />
                         <Stack.Screen name="ShoppingCheckout" component={ShoppingCheckoutScreen} />
                         <Stack.Screen name="ShoppingHistoryDetail" component={ShoppingHistoryDetailScreen} />
+                    <Stack.Screen name="ShoppingTemplates" component={ShoppingTemplatesScreen} />
                         <Stack.Screen name="Settings" component={SettingsScreen} />
                         <Stack.Screen name="PinSetup" component={PinSetupScreen} />
                         <Stack.Screen name="Sessions" component={SessionManagementScreen} />
                         <Stack.Screen name="CurrencyConverter" component={CurrencyConverterScreen} />
                         <Stack.Screen name="AllServices" component={AllServicesScreen} />
                         <Stack.Screen name="DebtPlanner" component={DebtPlannerScreen} />
+                        <Stack.Screen name="Analytics" component={AnalyticsScreen} />
                     </Stack.Navigator>
                 ) : <AuthStack />}
             </View>

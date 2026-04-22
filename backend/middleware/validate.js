@@ -37,11 +37,11 @@ const createTransaction = [
         .isLength({ max: 200 }).withMessage('description must be 200 chars or less.')
         .trim().escape(),
     body('note')
-        .optional()
+        .optional({ checkFalsy: true })
         .isLength({ max: 500 }).withMessage('note must be 500 chars or less.')
         .trim(),   // Do NOT escape — we encrypt notes, XSS handled by xss-clean
     body('date')
-        .optional()
+        .optional({ checkFalsy: true, nullable: true })
         .isISO8601().withMessage('date must be a valid ISO 8601 date.')
         .toDate(),
     body('currency')
@@ -49,10 +49,10 @@ const createTransaction = [
         .isLength({ min: 3, max: 3 }).withMessage('currency must be a 3-letter code.')
         .toUpperCase(),
     body('originalAmount')
-        .optional()
+        .optional({ nullable: true })
         .isFloat({ min: 0 }).withMessage('originalAmount must be a positive number.'),
     body('exchangeRate')
-        .optional()
+        .optional({ nullable: true })
         .isFloat({ gt: 0 }).withMessage('exchangeRate must be positive.'),
     handleValidationErrors,
 ];
@@ -85,10 +85,10 @@ const updateTransaction = [
         .isLength({ min: 3, max: 3 }).withMessage('currency must be a 3-letter code.')
         .toUpperCase(),
     body('originalAmount')
-        .optional()
+        .optional({ nullable: true })
         .isFloat({ min: 0 }).withMessage('originalAmount must be a positive number.'),
     body('exchangeRate')
-        .optional()
+        .optional({ nullable: true })
         .isFloat({ gt: 0 }).withMessage('exchangeRate must be positive.'),
     handleValidationErrors,
 ];
@@ -190,7 +190,7 @@ const createSavingsGoal = [
         .isFloat({ min: 0 }).withMessage('currentAmount must be 0 or more.')
         .toFloat(),
     body('deadline')
-        .optional()
+        .optional({ nullable: true })
         .isISO8601().withMessage('deadline must be a valid ISO 8601 date.')
         .toDate(),
     handleValidationErrors,

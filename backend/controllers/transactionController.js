@@ -176,16 +176,18 @@ const createTransaction = async (req, res) => {
 
         // Calculate current total balance to store snapshot
         const balanceAgg = await Transaction.aggregate([
-            { $match: { user: new Transaction.base.constructor.Types.ObjectId(req.userId) } },
+            { $match: { user: new mongoose.Types.ObjectId(req.userId) } },
             { $group: { _id: '$type', total: { $sum: '$amount' } } },
         ]);
         let currentBalance = 0;
         balanceAgg.forEach(r => {
-            if (r._id === 'income') currentBalance += r.total;
-            if (r._id === 'expense') currentBalance -= r.total;
+            const val = parseFloat(r.total) || 0;
+            if (r._id === 'income') currentBalance += val;
+            if (r._id === 'expense') currentBalance -= val;
         });
 
-        const runningBalance = type === 'income' ? currentBalance + parseFloat(amount) : currentBalance - parseFloat(amount);
+        const safeAmount = parseFloat(amount) || 0;
+        const runningBalance = type === 'income' ? currentBalance + safeAmount : currentBalance - safeAmount;
 
         const transaction = await Transaction.create({
             user: req.userId,
@@ -214,7 +216,7 @@ const createTransaction = async (req, res) => {
         res.status(201).json(decrypted);
     } catch (err) {
         console.error('[TRANSACTION] createTransaction error:', err.message);
-        res.status(500).json({ error: 'Failed to create transaction.' });
+        res.status(500).json({ error: err.message });
     }
 };
 
@@ -283,4 +285,172 @@ const deleteTransaction = async (req, res) => {
     }
 };
 
-module.exports = { getTransactions, getSummary, createTransaction, updateTransaction, deleteTransaction };
+// ─────────────────────────────────────────────────────────────────────────────
+//  GET /api/transactions/analytics
+//  Generates AI Insight, Pie Chart Data, and 6-month Trends
+// ─────────────────────────────────────────────────────────────────────────────
+const getAnalytics = async (req, res) => {
+    try {
+        const now = new Date();
+        const firstDayThisMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+        const firstDayLastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+        const firstDay6MonthsAgo = new Date(now.getFullYear(), now.getMonth() - 5, 1);
+
+        // 1. Category Breakdown (Current Month)
+        const currentMonthAgg = await Transaction.aggregate([
+            {
+                $match: {
+                    user: new mongoose.Types.ObjectId(req.userId),
+                    type: 'expense',
+                    date: { $gte: firstDayThisMonth }
+                }
+            },
+            {
+                $group: {
+                    _id: '$category',
+                    total: { $sum: '$amount' },
+                    color: { $first: '$categoryColor' }
+                }
+            },
+            { $sort: { total: -1 } }
+        ]);
+
+        const pieChartData = currentMonthAgg.map(item => ({
+            name: item._id,
+            population: item.total,
+            color: item.color || '#E91E8C',
+            legendFontColor: '#7F7F7F',
+            legendFontSize: 12
+        }));
+
+        // 2. Trend Graph (Last 6 Months)
+        const trendsAgg = await Transaction.aggregate([
+            {
+                $match: {
+                    user: new mongoose.Types.ObjectId(req.userId),
+                    date: { $gte: firstDay6MonthsAgo }
+                }
+            },
+            {
+                $group: {
+                    _id: {
+                        month: { $month: '$date' },
+                        year: { $year: '$date' },
+                        type: '$type'
+                    },
+                    total: { $sum: '$amount' }
+                }
+            }
+        ]);
+
+        // Format Trends Data
+        const monthsLabel = [];
+        const expenseData = [];
+        const incomeData = [];
+        
+        for (let i = 5; i >= 0; i--) {
+            const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+            monthsLabel.push(d.toLocaleString('en-US', { month: 'short' }));
+            const m = d.getMonth() + 1;
+            const y = d.getFullYear();
+            
+            const exp = trendsAgg.find(t => t._id.month === m && t._id.year === y && t._id.type === 'expense');
+            const inc = trendsAgg.find(t => t._id.month === m && t._id.year === y && t._id.type === 'income');
+            
+            expenseData.push(exp ? exp.total : 0);
+            incomeData.push(inc ? inc.total : 0);
+        }
+
+        const trendData = {
+            labels: monthsLabel,
+            datasets: [
+                { data: expenseData }, 
+                { data: incomeData }
+            ]
+        };
+
+        // 3. AI Smart Insights (Last vs This month)
+        const lastMonthAgg = await Transaction.aggregate([
+            {
+                $match: {
+                    user: new mongoose.Types.ObjectId(req.userId),
+                    type: 'expense',
+                    date: { $gte: firstDayLastMonth, $lt: firstDayThisMonth }
+                }
+            },
+            {
+                $group: {
+                    _id: '$category',
+                    total: { $sum: '$amount' }
+                }
+            }
+        ]);
+
+        // 4. Advanced AI Smart Insights 🤖
+        const insights = [];
+
+        // Insight A: Category Change
+        if (currentMonthAgg.length > 0 && lastMonthAgg.length > 0) {
+            const topCategory = currentMonthAgg[0];
+            const lastMonthSameCat = lastMonthAgg.find(c => c._id === topCategory._id);
+            if (lastMonthSameCat && lastMonthSameCat.total > 0) {
+                const diff = topCategory.total - lastMonthSameCat.total;
+                const pct = Math.round(Math.abs(diff) / lastMonthSameCat.total * 100);
+                if (diff > 0 && pct > 10) {
+                    insights.push(`Your spending on ${topCategory._id} has increased by ${pct}% this month. Keep an eye on it! ⚠️`);
+                } else if (diff < 0 && pct > 5) {
+                    insights.push(`Awesome! You've reduced your ${topCategory._id} spending by ${pct}% compared to last month. 🌟`);
+                }
+            }
+        }
+
+        // Insight B: Velocity Check
+        const dayOfMonth = now.getDate();
+        const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+        const totalExpensesThisMonth = currentMonthAgg.reduce((sum, item) => sum + item.total, 0);
+        const totalExpensesLastMonth = lastMonthAgg.reduce((sum, item) => sum + item.total, 0);
+
+        if (totalExpensesLastMonth > 0) {
+            const velocityPct = Math.round((totalExpensesThisMonth / totalExpensesLastMonth) * 100);
+            const timePct = Math.round((dayOfMonth / daysInMonth) * 100);
+
+            if (velocityPct > timePct + 15) {
+                insights.push(`Careful! You've already spent ${velocityPct}% of last month's total budget, but we're only ${timePct}% through the month. 💨`);
+            } else if (velocityPct < timePct - 15 && totalExpensesThisMonth > 0) {
+                insights.push(`Great pacing! Your spending is significantly lower than this time last month. 🐢`);
+            }
+        }
+
+        // Insight C: Savings Rate
+        const totalIncomeThisMonth = incomeData[5];
+        if (totalIncomeThisMonth > 0) {
+            const savingsRate = Math.round(((totalIncomeThisMonth - totalExpensesThisMonth) / totalIncomeThisMonth) * 100);
+            if (savingsRate > 20) {
+                insights.push(`Your savings rate is ${savingsRate}% this month. You're building wealth fast! 💰`);
+            } else if (savingsRate < 0) {
+                insights.push(`Heads up: You've spent more than you earned this month. Let's look for some cuts! 📉`);
+            }
+        }
+
+        // Final primary insight for legacy compatibility if needed
+        const primaryInsight = insights[0] || "Keep tracking your expenses to get personalized insights!";
+
+        res.json({
+            pieChartData,
+            trendData,
+            insight: primaryInsight,
+            insights: insights.length > 0 ? insights : ["No major patterns detected yet. Keep logging!"],
+            stats: {
+                totalExpenses: totalExpensesThisMonth,
+                totalIncome: totalIncomeThisMonth,
+                avgDaily: Math.round(totalExpensesThisMonth / dayOfMonth)
+            }
+        });
+
+    } catch (err) {
+        console.error('[TRANSACTION] getAnalytics error:', err.message);
+        res.status(500).json({ error: 'Failed to fetch analytics.' });
+    }
+};
+
+module.exports = { getTransactions, getSummary, createTransaction, updateTransaction, deleteTransaction, getAnalytics };

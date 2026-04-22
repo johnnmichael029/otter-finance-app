@@ -1,7 +1,7 @@
 import React from 'react';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { Feather, MaterialCommunityIcons } from '@expo/vector-icons';
+import { Feather, MaterialCommunityIcons, Ionicons } from '@expo/vector-icons';
 import { useTheme } from '../../context/ThemeContext';
 import { useWalletMode } from '../../../App';
 import { spacing, radius } from '../../theme/colors';
@@ -24,6 +24,12 @@ const SERVICES = [
         ]
     },
     {
+        category: 'Analytics & Insights',
+        items: [
+            { id: 'analytics', icon: 'analytics', family: 'ionicons', label: 'Analytics', color: '#10b981', screen: 'Analytics' },
+        ]
+    },
+    {
         category: 'Savings & Wealth',
         items: [
             { id: 'budget', icon: 'pie-chart', label: 'Budget', color: '#f97316', screen: 'Budget' },
@@ -42,7 +48,7 @@ export default function AllServicesScreen({ navigation }) {
             navigation.popToTop(); // Jump to root cleanly without chained delays
             return;
         }
-        
+
         if (item.screen) {
             if (item.screen === 'Bills' || item.screen === 'Budget') {
                 navigation.navigate('MainTabs', { screen: item.screen });
@@ -78,7 +84,9 @@ export default function AllServicesScreen({ navigation }) {
                                     activeOpacity={0.7}
                                 >
                                     <View style={[styles.iconWrapper, { backgroundColor: item.color + '15' }]}>
-                                        {item.icon.includes('piggy') ? (
+                                        {item.family === 'ionicons' ? (
+                                            <Ionicons name={item.icon} size={24} color={item.color} />
+                                        ) : item.icon.includes('piggy') ? (
                                             <MaterialCommunityIcons name={item.icon} size={24} color={item.color} />
                                         ) : (
                                             <Feather name={item.icon} size={24} color={item.color} />

@@ -146,7 +146,7 @@ export default function CurrencyConverterScreen({ navigation }) {
         <SafeAreaView style={[styles.safe, { backgroundColor: COLORS.background }]}>
             {/* Header */}
             <View style={styles.header}>
-                <TouchableOpacity onPress={() => navigation.goBack()} style={[styles.backBtn, { backgroundColor: COLORS.surface }]}>
+                <TouchableOpacity onPress={() => { if (navigation.canGoBack()) navigation.goBack(); }} style={[styles.backBtn, { backgroundColor: COLORS.surface }]}>
                     <Feather name="arrow-left" size={20} color={COLORS.text} />
                 </TouchableOpacity>
                 <View>

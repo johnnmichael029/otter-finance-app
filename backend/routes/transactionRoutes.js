@@ -9,6 +9,7 @@ const {
     createTransaction,
     updateTransaction,
     deleteTransaction,
+    getAnalytics,
 } = require('../controllers/transactionController');
 
 // All transaction routes require authentication
@@ -19,6 +20,9 @@ router.get('/', cache('transaction', 90), getTransactions);
 
 // GET /api/transactions/summary  — monthly summary (cached 90s)
 router.get('/summary', cache('transaction', 90), getSummary);
+
+// GET /api/transactions/analytics — deep AI analytics (cached 90s)
+router.get('/analytics', cache('transaction', 90), getAnalytics);
 
 // POST /api/transactions         — create (invalidates cache)
 router.post('/', validate.createTransaction, createTransaction);

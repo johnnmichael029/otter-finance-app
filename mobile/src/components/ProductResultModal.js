@@ -3,7 +3,8 @@ import {
     View, Text, StyleSheet, TouchableOpacity, TextInput,
     KeyboardAvoidingView, Platform, TouchableWithoutFeedback, Keyboard, Animated, Modal
 } from 'react-native';
-import { Feather } from '@expo/vector-icons';
+import { Feather, MaterialCommunityIcons } from '@expo/vector-icons';
+import { getPriceHistory } from '../api/api';
 import { formatRelativeTime } from '../utils/barcodePriceCache';
 
 export default function ProductResultModal({
@@ -18,6 +19,8 @@ export default function ProductResultModal({
 }) {
     const [price, setPrice] = useState('');
     const [editingName, setEditingName] = useState('');
+    const [history, setHistory] = useState([]);
+    const [loadingHistory, setLoadingHistory] = useState(false);
     const slideAnim = useRef(new Animated.Value(400)).current;
     const fadeAnim = useRef(new Animated.Value(0)).current;
 
@@ -27,6 +30,19 @@ export default function ProductResultModal({
         
         if (product?.name) setEditingName(product.name);
         else setEditingName('');
+
+        if (product?.barcode) {
+            setLoadingHistory(true);
+            getPriceHistory(product.barcode)
+                .then(res => {
+                    if (res.found) setHistory(res.history || []);
+                    else setHistory([]);
+                })
+                .catch(() => setHistory([]))
+                .finally(() => setLoadingHistory(false));
+        } else {
+            setHistory([]);
+        }
     }, [product]);
 
     useEffect(() => {
@@ -138,8 +154,25 @@ export default function ProductResultModal({
                                 </View>
                             </View>
 
-                            {/* Price History Badge */}
-                            {cached && cached.price ? (
+                            {/* Price History Badge (Feature 15) */}
+                            {history && history.length > 0 ? (
+                                <View style={[pStyles.historySection, { backgroundColor: COLORS.background, borderColor: COLORS.border }]}>
+                                    <View style={pStyles.historyHeader}>
+                                        <Feather name="trending-up" size={14} color={COLORS.primary} />
+                                        <Text style={[pStyles.historyTitle, { color: COLORS.text }]}>Price History</Text>
+                                    </View>
+                                    <View style={pStyles.historyList}>
+                                        {history.slice(-3).reverse().map((h, i) => (
+                                            <View key={i} style={pStyles.historyItem}>
+                                                <Text style={[pStyles.historyPrice, { color: COLORS.text }]}>₱{h.price.toFixed(2)}</Text>
+                                                <Text style={[pStyles.historyDate, { color: COLORS.textMuted }]}>
+                                                    {new Date(h.recordedAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+                                                </Text>
+                                            </View>
+                                        ))}
+                                    </View>
+                                </View>
+                            ) : cached && cached.price ? (
                                 <View style={[pStyles.historyBadge, { backgroundColor: '#22c55e15', borderColor: '#22c55e30' }]}>
                                     <Feather name="clock" size={13} color="#22c55e" />
                                     <View style={{ flex: 1 }}>
@@ -152,7 +185,6 @@ export default function ProductResultModal({
                                             </Text>
                                         )}
                                     </View>
-                                    <Feather name="check-circle" size={14} color="#22c55e" />
                                 </View>
                             ) : null}
 
@@ -263,6 +295,13 @@ const pStyles = StyleSheet.create({
     },
     historyText: { fontSize: 13, fontWeight: '600' },
     historyCount: { fontSize: 11, marginTop: 2 },
+    historySection: { borderRadius: 16, borderWidth: 1, padding: 12, marginBottom: 16 },
+    historyHeader: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 8 },
+    historyTitle: { fontSize: 12, fontWeight: '800', textTransform: 'uppercase', letterSpacing: 0.5 },
+    historyList: { flexDirection: 'row', justifyContent: 'space-between' },
+    historyItem: { alignItems: 'center' },
+    historyPrice: { fontSize: 14, fontWeight: '800' },
+    historyDate: { fontSize: 10, fontWeight: '600', marginTop: 2 },
     actions: { flexDirection: 'row', gap: 12 },
     scanAgainBtn: {
         flex: 1, flexDirection: 'row', justifyContent: 'center', alignItems: 'center',

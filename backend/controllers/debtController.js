@@ -1,5 +1,6 @@
 const Debt = require('../models/debtModel');
 const DebtPayment = require('../models/debtPaymentModel');
+const Transaction = require('../models/transactionModel');
 const { invalidatePrefixes } = require('../utils/cache');
 const { sendPushNotification } = require('../utils/pushNotification');
 
@@ -186,6 +187,32 @@ const logPayment = async (req, res) => {
             note: note || '',
         });
 
+        // ── Auto-Log to Transactions for Recent Activity updates ──
+        const txType = debt.direction === 'owed_by_me' ? 'expense' : 'income';
+        const txDesc = debt.direction === 'owed_by_me' 
+            ? `Paid debt to ${debt.personName}` 
+            : `Received debt payment from ${debt.personName}`;
+
+        const newTx = await Transaction.create({
+            user: req.userId,
+            type: txType,
+            amount,
+            description: txDesc,
+            category: 'Debt Repayment',
+            categoryIcon: 'check-circle',
+            categoryColor: '#8b5cf6', // purple color for debts
+            date: new Date(),
+            note: note || ''
+        });
+
+        // Invalidate transaction caches since we inject a new transaction
+        invalidatePrefixes('transaction');
+
+        const io = req.app.get('io');
+        if (io) {
+            io.to(`user:${req.userId}`).emit('new_transaction', newTx);
+        }
+
         // Update debt's amountPaid
         debt.amountPaid = Math.min(debt.amount, (debt.amountPaid || 0) + amount);
         if (debt.amountPaid >= debt.amount) {
@@ -196,7 +223,6 @@ const logPayment = async (req, res) => {
 
         await debt.save();
 
-        const io = req.app.get('io');
         if (io) io.to(`user:${req.userId}`).emit('update_debt', debt);
 
         res.status(201).json({
