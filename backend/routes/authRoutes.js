@@ -7,7 +7,7 @@ const {
     register, login, refresh,
     logout, logoutAll,
     getSessions, revokeSession,
-    verify2FA, resend2FA, toggle2FA,
+    verify2FA, resend2FA, toggle2FA, verifyPassword,
 } = require('../controllers/authController');
 
 // ── Rate Limiters ──────────────────────────────────────────────────────────────
@@ -80,5 +80,8 @@ router.get('/2fa/status',   requireAuth, async (req, res) => {
         res.json({ twoFactorEnabled: user?.twoFactorEnabled ?? false });
     } catch { res.status(500).json({ error: 'Failed.' }); }
 });
+
+// Step-up authentication — verify master password before sensitive actions
+router.post('/verify-password', requireAuth, verifyPassword);
 
 module.exports = router;

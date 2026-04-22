@@ -12,6 +12,7 @@ import { useAuth } from '../../context/AuthContext';
 import { spacing, radius } from '../../theme/colors';
 import { get2FAStatus, toggle2FA } from '../../api/api';
 import CustomAlertModal from '../../components/CustomAlertModal';
+import VerifyIdentityModal from '../../components/VerifyIdentityModal';
 
 export default function SettingsScreen({ navigation }) {
     const { COLORS, isDarkMode, toggleTheme } = useTheme();
@@ -28,7 +29,12 @@ export default function SettingsScreen({ navigation }) {
     const [togglingBio, setTogglingBio] = useState(false);
     const [twoFAEnabled, setTwoFAEnabled] = useState(false);
     const [loading2FA, setLoading2FA] = useState(false);
-    
+
+    // Step-up verification modal
+    const [verifyModal, setVerifyModal] = useState({ visible: false, onSuccess: null, subtitle: '' });
+    const openVerify = (onSuccess, subtitle = '') => setVerifyModal({ visible: true, onSuccess, subtitle });
+    const closeVerify = () => setVerifyModal({ visible: false, onSuccess: null, subtitle: '' });
+
     // 2FA Feedback Modal
     const [twoFAModal, setTwoFAModal] = useState({ visible: false, title: '', message: '', type: 'info' });
 
@@ -45,29 +51,33 @@ export default function SettingsScreen({ navigation }) {
         }
     };
 
-    const handleToggle2FA = async (value) => {
-        setLoading2FA(true);
-        try {
-            const res = await toggle2FA();
-            setTwoFAEnabled(res.twoFactorEnabled);
-            setTwoFAModal({
-                visible: true,
-                title: '2FA Updated',
-                message: res.twoFactorEnabled 
-                    ? 'Two-factor authentication is now enabled. You will need to verify your email on your next login.' 
-                    : 'Two-factor authentication has been disabled.',
-                type: 'success'
-            });
-        } catch (err) {
-            setTwoFAModal({
-                visible: true,
-                title: 'Update Failed',
-                message: err.response?.data?.error || 'Failed to update 2FA setting. Please check your connection.',
-                type: 'error'
-            });
-        } finally {
-            setLoading2FA(false);
-        }
+    const handleToggle2FA = (value) => {
+        // Gate the toggle behind PIN/biometric verification
+        openVerify(async () => {
+            closeVerify();
+            setLoading2FA(true);
+            try {
+                const res = await toggle2FA();
+                setTwoFAEnabled(res.twoFactorEnabled);
+                setTwoFAModal({
+                    visible: true,
+                    title: '2FA Updated',
+                    message: res.twoFactorEnabled
+                        ? 'Two-factor authentication is now enabled. You will need to verify your email on your next login.'
+                        : 'Two-factor authentication has been disabled.',
+                    type: 'success'
+                });
+            } catch (err) {
+                setTwoFAModal({
+                    visible: true,
+                    title: 'Update Failed',
+                    message: err.response?.data?.error || 'Failed to update 2FA setting. Please check your connection.',
+                    type: 'error'
+                });
+            } finally {
+                setLoading2FA(false);
+            }
+        }, 'Confirm your identity to change Two-Factor Auth');
     };
 
     const getBiometricLabel = () =>
@@ -88,6 +98,22 @@ export default function SettingsScreen({ navigation }) {
     const handleRemovePin = async () => {
         await removePin();
         setRemovePinModal(false);
+    };
+
+    // Verify then go to PinSetup (Change PIN)
+    const handleChangePinPress = () => {
+        openVerify(() => {
+            closeVerify();
+            navigation.navigate('PinSetup');
+        }, 'Confirm your identity to change your PIN');
+    };
+
+    // Verify then remove PIN
+    const handleRemovePinPress = () => {
+        openVerify(() => {
+            closeVerify();
+            setRemovePinModal(true);
+        }, 'Confirm your identity to remove PIN protection');
     };
 
     // ─── Section / Row helpers ────────────────────────────────────────────────
@@ -171,7 +197,7 @@ export default function SettingsScreen({ navigation }) {
                                 label="Change PIN"
                                 sublabel="Update your 6-digit security PIN"
                                 right={<Feather name="chevron-right" size={18} color={COLORS.textMuted} />}
-                                onPress={() => navigation.navigate('PinSetup')}
+                                onPress={handleChangePinPress}
                             />
                             <SettingRow
                                 icon="devices"
@@ -188,7 +214,7 @@ export default function SettingsScreen({ navigation }) {
                                 danger
                                 noBorder
                                 right={<Feather name="chevron-right" size={18} color={COLORS.danger} />}
-                                onPress={() => setRemovePinModal(true)}
+                                onPress={handleRemovePinPress}
                             />
                             <SettingRow
                                 icon="email-check"
@@ -297,6 +323,14 @@ export default function SettingsScreen({ navigation }) {
                 title={twoFAModal.title}
                 message={twoFAModal.message}
                 type={twoFAModal.type}
+            />
+
+            {/* Step-up Identity Verification */}
+            <VerifyIdentityModal
+                visible={verifyModal.visible}
+                subtitle={verifyModal.subtitle}
+                onSuccess={verifyModal.onSuccess}
+                onCancel={closeVerify}
             />
         </SafeAreaView>
     );

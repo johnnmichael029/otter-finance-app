@@ -20,7 +20,7 @@ const transporter = nodemailer.createTransport({
 // ── Send a 2FA OTP email ───────────────────────────────────────────────────────
 const send2FAOTP = async (toEmail, toName, otp) => {
     // Path to the app icon
-    const iconPath = path.join(__dirname, '../../mobile/assets/icon/otter.png');
+    const iconPath = path.join(__dirname, '../assets/otter.png');
 
     const mailOptions = {
     from: `"OTTER Finance" <${process.env.EMAIL_USER}>`,

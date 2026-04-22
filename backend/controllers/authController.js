@@ -346,7 +346,7 @@ const revokeSession = async (req, res) => {
     }
 };
 
-module.exports = { register, login, refresh, logout, logoutAll, getSessions, revokeSession, verify2FA, resend2FA, toggle2FA };
+module.exports = { register, login, refresh, logout, logoutAll, getSessions, revokeSession, verify2FA, resend2FA, toggle2FA, verifyPassword };
 
 // ── 2FA Helpers ───────────────────────────────────────────────────────────────
 // Signed short-lived temp token used only for 2FA verification step
@@ -457,5 +457,25 @@ async function toggle2FA(req, res) {
         res.json({ twoFactorEnabled: user.twoFactorEnabled });
     } catch (err) {
         res.status(500).json({ error: 'Failed to update 2FA setting.' });
+    }
+}
+// -----------------------------------------------------------------------------
+//  POST /api/auth/verify-password
+// -----------------------------------------------------------------------------
+async function verifyPassword(req, res) {
+    try {
+        const { password } = req.body;
+        if (!password) return res.status(400).json({ error: 'Password is required.' });
+
+        const user = await User.findById(req.userId).select('+password');
+        if (!user) return res.status(404).json({ error: 'User not found.' });
+
+        const isMatch = await user.comparePassword(password);
+        if (!isMatch) return res.status(401).json({ error: 'Incorrect password.' });
+
+        res.json({ success: true, message: 'Password verified.' });
+    } catch (err) {
+        console.error('[AUTH] Verify password error:', err.message);
+        res.status(500).json({ error: 'Failed to verify password.' });
     }
 }

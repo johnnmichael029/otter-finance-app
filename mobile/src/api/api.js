@@ -69,6 +69,10 @@ export const toggle2FA = () =>
 export const get2FAStatus = () =>
     axios.get(`${API_BASE}/auth/2fa/status`).then(r => r.data);
 
+export const verifyPassword = (password) =>
+    axios.post(`${API_BASE}/auth/verify-password`, { password }).then(r => r.data);
+
+
 // ─── Barcode Price History ────────────────────────────────────────────────────
 
 export const getBarcodePrice = (barcode) =>
