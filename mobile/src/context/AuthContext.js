@@ -11,7 +11,7 @@ export const AuthContext = createContext();
 // Replace the IP with YOUR machine's local IP when testing on a physical device
 export const API_BASE = __DEV__
     ? 'http://192.168.100.254:4000/api'
-    : 'otter-backend-api-f7ccaagqf9gac0a8.japaneast-01.azurewebsites.net/api';
+    : 'https://otter-backend-api-f7ccaagqf9gac0a8.japaneast-01.azurewebsites.net/api';
 
 export const useAuth = () => useContext(AuthContext);
 

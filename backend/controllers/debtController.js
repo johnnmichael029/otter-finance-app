@@ -97,6 +97,8 @@ const createDebt = async (req, res) => {
             gracePeriodMonths: gracePeriodMonths || 0,
             penaltyRate: penaltyRate || 0,
         });
+        const io = req.app.get('io');
+        if (io) io.to(`user:${req.userId}`).emit('new_debt', debt);
 
         res.status(201).json(debt);
     } catch (err) {
@@ -128,6 +130,10 @@ const updateDebt = async (req, res) => {
         }
 
         await debt.save();
+
+        const io = req.app.get('io');
+        if (io) io.to(`user:${req.userId}`).emit('update_debt', debt);
+
         res.json(debt);
     } catch (err) {
         console.error('[DEBT] updateDebt error:', err.message);
@@ -146,6 +152,9 @@ const deleteDebt = async (req, res) => {
 
         // Also delete associated payment logs
         await DebtPayment.deleteMany({ debt: debt._id });
+
+        const io = req.app.get('io');
+        if (io) io.to(`user:${req.userId}`).emit('delete_debt', { _id: debt._id });
 
         res.json({ message: 'Debt record deleted successfully.' });
     } catch (err) {
@@ -186,6 +195,9 @@ const logPayment = async (req, res) => {
         }
 
         await debt.save();
+
+        const io = req.app.get('io');
+        if (io) io.to(`user:${req.userId}`).emit('update_debt', debt);
 
         res.status(201).json({
             payment,

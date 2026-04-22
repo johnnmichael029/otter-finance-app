@@ -43,7 +43,7 @@ const DebtCard = ({ debt, onPay, onView, COLORS }) => {
 
     const accentColor = isPaid ? '#22c55e'
         : isOverdue ? '#ef4444'
-        : isOwedToMe ? '#8b5cf6' : '#f59e0b';
+            : isOwedToMe ? '#8b5cf6' : '#f59e0b';
 
     return (
         <TouchableOpacity
@@ -176,15 +176,15 @@ export default function DebtScreen({ navigation }) {
     const SCREEN_H = Dimensions.get('window').height;
 
     const addSlide = useRef(new Animated.Value(SCREEN_H)).current;
-    const addFade  = useRef(new Animated.Value(0)).current;
+    const addFade = useRef(new Animated.Value(0)).current;
     const [addMounted, setAddMounted] = useState(false);
 
     const paySlide = useRef(new Animated.Value(SCREEN_H)).current;
-    const payFade  = useRef(new Animated.Value(0)).current;
+    const payFade = useRef(new Animated.Value(0)).current;
     const [payMounted, setPayMounted] = useState(false);
 
     const detailSlide = useRef(new Animated.Value(SCREEN_H)).current;
-    const detailFade  = useRef(new Animated.Value(0)).current;
+    const detailFade = useRef(new Animated.Value(0)).current;
     const [detailMounted, setDetailMounted] = useState(false);
 
     const animateIn = (slide, fade, setMounted) => {
@@ -405,6 +405,7 @@ export default function DebtScreen({ navigation }) {
                     style={[styles.addBtn, { backgroundColor: COLORS.primary }]}
                 >
                     <Feather name="plus" size={20} color="#fff" />
+                    <Text style={styles.startBtnText}>Debt</Text>
                 </TouchableOpacity>
             </View>
 
@@ -482,166 +483,166 @@ export default function DebtScreen({ navigation }) {
                         </TouchableOpacity>
                     </View>
 
-                                <ScrollView showsVerticalScrollIndicator={false}>
-                                    {/* Direction Toggle */}
-                                    <Text style={[styles.formLabel, { color: COLORS.textMuted }]}>TYPE</Text>
-                                    <View style={styles.toggleRow}>
-                                        {[
-                                            { key: 'owed_by_me', label: 'I Owe', icon: 'arrow-up-right', lib: 'feather', color: '#ef4444' },
-                                            { key: 'owed_to_me', label: 'Owed to Me', icon: 'arrow-down-left', lib: 'feather', color: '#8b5cf6' },
-                                        ].map(opt => {
-                                            const isActive = form.direction === opt.key;
-                                            return (
-                                                <TouchableOpacity
-                                                    key={opt.key}
-                                                    onPress={() => setForm(f => ({ ...f, direction: opt.key }))}
-                                                    style={[styles.toggleBtn, isActive && { backgroundColor: COLORS.primary }]}
-                                                >
-                                                    <Feather
-                                                        name={opt.icon}
-                                                        size={16}
-                                                        color={isActive ? '#fff' : opt.color}
-                                                        style={{ marginRight: 6 }}
-                                                    />
-                                                    <Text style={[styles.toggleText, { color: isActive ? '#fff' : COLORS.textMuted }]}>
-                                                        {opt.label}
-                                                    </Text>
-                                                </TouchableOpacity>
-                                            );
-                                        })}
-                                    </View>
-
-                                    {/* Name */}
-                                    <Text style={[styles.formLabel, { color: COLORS.textMuted }]}>NAME / LABEL</Text>
-                                    <View style={[styles.inputWrap, { backgroundColor: COLORS.background, borderColor: COLORS.border }]}>
-                                        <Feather name="user" size={16} color={COLORS.textMuted} style={{ marginRight: 8 }} />
-                                        <TextInput
-                                            style={[styles.input, { color: COLORS.text }]}
-                                            placeholder="e.g. BDO Phone Installment"
-                                            placeholderTextColor={COLORS.textMuted}
-                                            value={form.personName}
-                                            onChangeText={v => setForm(f => ({ ...f, personName: v }))}
-                                        />
-                                    </View>
-
-                                    {/* Amount */}
-                                    <Text style={[styles.formLabel, { color: COLORS.textMuted }]}>TOTAL AMOUNT</Text>
-                                    <View style={[styles.inputWrap, { backgroundColor: COLORS.background, borderColor: COLORS.border }]}>
-                                        <Text style={{ color: COLORS.primary, fontWeight: '800', marginRight: 8 }}>₱</Text>
-                                        <TextInput
-                                            style={[styles.input, { color: COLORS.text }]}
-                                            placeholder="0.00"
-                                            placeholderTextColor={COLORS.textMuted}
-                                            keyboardType="decimal-pad"
-                                            value={form.amount}
-                                            onChangeText={v => setForm(f => ({ ...f, amount: v }))}
-                                        />
-                                    </View>
-
-                                    {/* Description */}
-                                    <Text style={[styles.formLabel, { color: COLORS.textMuted }]}>DESCRIPTION (OPTIONAL)</Text>
-                                    <View style={[styles.inputWrap, { backgroundColor: COLORS.background, borderColor: COLORS.border }]}>
-                                        <Feather name="file-text" size={16} color={COLORS.textMuted} style={{ marginRight: 8 }} />
-                                        <TextInput
-                                            style={[styles.input, { color: COLORS.text }]}
-                                            placeholder="e.g. Samsung S25 via GCash"
-                                            placeholderTextColor={COLORS.textMuted}
-                                            value={form.description}
-                                            onChangeText={v => setForm(f => ({ ...f, description: v }))}
-                                        />
-                                    </View>
-
-                                    {/* Installment Toggle */}
+                    <ScrollView showsVerticalScrollIndicator={false}>
+                        {/* Direction Toggle */}
+                        <Text style={[styles.formLabel, { color: COLORS.textMuted }]}>TYPE</Text>
+                        <View style={styles.toggleRow}>
+                            {[
+                                { key: 'owed_by_me', label: 'I Owe', icon: 'arrow-up-right', lib: 'feather', color: '#ef4444' },
+                                { key: 'owed_to_me', label: 'Owed to Me', icon: 'arrow-down-left', lib: 'feather', color: '#8b5cf6' },
+                            ].map(opt => {
+                                const isActive = form.direction === opt.key;
+                                return (
                                     <TouchableOpacity
-                                        onPress={() => setForm(f => ({ ...f, isInstallment: !f.isInstallment }))}
-                                        style={[styles.installmentToggle, { backgroundColor: COLORS.background, borderColor: COLORS.border }]}
+                                        key={opt.key}
+                                        onPress={() => setForm(f => ({ ...f, direction: opt.key }))}
+                                        style={[styles.toggleBtn, isActive && { backgroundColor: COLORS.primary }]}
                                     >
-                                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                                            <MaterialCommunityIcons
-                                                name="calendar-clock"
-                                                size={20}
-                                                color={form.isInstallment ? COLORS.primary : COLORS.textMuted}
-                                            />
-                                            <View>
-                                                <Text style={[styles.toggleMainText, { color: COLORS.text }]}>Installment Plan</Text>
-                                                <Text style={[styles.toggleSubText, { color: COLORS.textMuted }]}>
-                                                    Set monthly payments & penalty rate
-                                                </Text>
-                                            </View>
-                                        </View>
-                                        <View style={[styles.checkCircle, form.isInstallment && { backgroundColor: COLORS.primary }]}>
-                                            {form.isInstallment && <Feather name="check" size={14} color="#fff" />}
-                                        </View>
+                                        <Feather
+                                            name={opt.icon}
+                                            size={16}
+                                            color={isActive ? '#fff' : opt.color}
+                                            style={{ marginRight: 6 }}
+                                        />
+                                        <Text style={[styles.toggleText, { color: isActive ? '#fff' : COLORS.textMuted }]}>
+                                            {opt.label}
+                                        </Text>
                                     </TouchableOpacity>
+                                );
+                            })}
+                        </View>
 
-                                    {form.isInstallment && (
-                                        <View style={[styles.installmentBox, { backgroundColor: COLORS.background, borderColor: COLORS.border }]}>
-                                            <Text style={[styles.formLabel, { color: COLORS.textMuted }]}>MONTHLY PAYMENT</Text>
-                                            <View style={[styles.inputWrap, { backgroundColor: COLORS.surface, borderColor: COLORS.border }]}>
-                                                <Text style={{ color: '#f59e0b', fontWeight: '800', marginRight: 8 }}>₱</Text>
-                                                <TextInput
-                                                    style={[styles.input, { color: COLORS.text }]}
-                                                    placeholder="e.g. 1000"
-                                                    placeholderTextColor={COLORS.textMuted}
-                                                    keyboardType="decimal-pad"
-                                                    value={form.monthlyPayment}
-                                                    onChangeText={v => setForm(f => ({ ...f, monthlyPayment: v }))}
-                                                />
-                                            </View>
+                        {/* Name */}
+                        <Text style={[styles.formLabel, { color: COLORS.textMuted }]}>NAME / LABEL</Text>
+                        <View style={[styles.inputWrap, { backgroundColor: COLORS.background, borderColor: COLORS.border }]}>
+                            <Feather name="user" size={16} color={COLORS.textMuted} style={{ marginRight: 8 }} />
+                            <TextInput
+                                style={[styles.input, { color: COLORS.text }]}
+                                placeholder="e.g. BDO Phone Installment"
+                                placeholderTextColor={COLORS.textMuted}
+                                value={form.personName}
+                                onChangeText={v => setForm(f => ({ ...f, personName: v }))}
+                            />
+                        </View>
 
-                                            <Text style={[styles.formLabel, { color: COLORS.textMuted }]}>GRACE PERIOD (MONTHS)</Text>
-                                            <View style={[styles.inputWrap, { backgroundColor: COLORS.surface, borderColor: COLORS.border }]}>
-                                                <Feather name="calendar" size={16} color={COLORS.textMuted} style={{ marginRight: 8 }} />
-                                                <TextInput
-                                                    style={[styles.input, { color: COLORS.text }]}
-                                                    placeholder="e.g. 12"
-                                                    placeholderTextColor={COLORS.textMuted}
-                                                    keyboardType="number-pad"
-                                                    value={form.gracePeriodMonths}
-                                                    onChangeText={v => setForm(f => ({ ...f, gracePeriodMonths: v }))}
-                                                />
-                                            </View>
+                        {/* Amount */}
+                        <Text style={[styles.formLabel, { color: COLORS.textMuted }]}>TOTAL AMOUNT</Text>
+                        <View style={[styles.inputWrap, { backgroundColor: COLORS.background, borderColor: COLORS.border }]}>
+                            <Text style={{ color: COLORS.primary, fontWeight: '800', marginRight: 8 }}>₱</Text>
+                            <TextInput
+                                style={[styles.input, { color: COLORS.text }]}
+                                placeholder="0.00"
+                                placeholderTextColor={COLORS.textMuted}
+                                keyboardType="decimal-pad"
+                                value={form.amount}
+                                onChangeText={v => setForm(f => ({ ...f, amount: v }))}
+                            />
+                        </View>
 
-                                            <Text style={[styles.formLabel, { color: COLORS.textMuted }]}>PENALTY RATE (% PER MONTH)</Text>
-                                            <View style={[styles.inputWrap, { backgroundColor: COLORS.surface, borderColor: COLORS.border }]}>
-                                                <Feather name="percent" size={16} color={COLORS.textMuted} style={{ marginRight: 8 }} />
-                                                <TextInput
-                                                    style={[styles.input, { color: COLORS.text }]}
-                                                    placeholder="e.g. 20"
-                                                    placeholderTextColor={COLORS.textMuted}
-                                                    keyboardType="decimal-pad"
-                                                    value={form.penaltyRate}
-                                                    onChangeText={v => setForm(f => ({ ...f, penaltyRate: v }))}
-                                                />
-                                            </View>
+                        {/* Description */}
+                        <Text style={[styles.formLabel, { color: COLORS.textMuted }]}>DESCRIPTION (OPTIONAL)</Text>
+                        <View style={[styles.inputWrap, { backgroundColor: COLORS.background, borderColor: COLORS.border }]}>
+                            <Feather name="file-text" size={16} color={COLORS.textMuted} style={{ marginRight: 8 }} />
+                            <TextInput
+                                style={[styles.input, { color: COLORS.text }]}
+                                placeholder="e.g. Samsung S25 via GCash"
+                                placeholderTextColor={COLORS.textMuted}
+                                value={form.description}
+                                onChangeText={v => setForm(f => ({ ...f, description: v }))}
+                            />
+                        </View>
 
-                                            {form.gracePeriodMonths ? (
-                                                <View style={[styles.dueDatePreview, { backgroundColor: '#f59e0b10', borderColor: '#f59e0b50' }]}>
-                                                    <Feather name="calendar" size={14} color="#f59e0b" />
-                                                    <Text style={[styles.dueDatePreviewText, { color: '#f59e0b' }]}>
-                                                        Due date: {formatDate(
-                                                            (() => {
-                                                                const d = new Date();
-                                                                d.setMonth(d.getMonth() + (parseInt(form.gracePeriodMonths) || 0));
-                                                                return d;
-                                                            })()
-                                                        )}
-                                                    </Text>
-                                                </View>
-                                            ) : null}
-                                        </View>
-                                    )}
+                        {/* Installment Toggle */}
+                        <TouchableOpacity
+                            onPress={() => setForm(f => ({ ...f, isInstallment: !f.isInstallment }))}
+                            style={[styles.installmentToggle, { backgroundColor: COLORS.background, borderColor: COLORS.border }]}
+                        >
+                            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                                <MaterialCommunityIcons
+                                    name="calendar-clock"
+                                    size={20}
+                                    color={form.isInstallment ? COLORS.primary : COLORS.textMuted}
+                                />
+                                <View>
+                                    <Text style={[styles.toggleMainText, { color: COLORS.text }]}>Installment Plan</Text>
+                                    <Text style={[styles.toggleSubText, { color: COLORS.textMuted }]}>
+                                        Set monthly payments & penalty rate
+                                    </Text>
+                                </View>
+                            </View>
+                            <View style={[styles.checkCircle, form.isInstallment && { backgroundColor: COLORS.primary }]}>
+                                {form.isInstallment && <Feather name="check" size={14} color="#fff" />}
+                            </View>
+                        </TouchableOpacity>
 
-                    <TouchableOpacity
-                                        onPress={handleCreate}
-                                        disabled={saving}
-                                        style={[styles.saveBtn, { backgroundColor: COLORS.primary }]}
-                                    >
-                                        {saving
-                                            ? <ActivityIndicator color="#fff" />
-                                            : <Text style={styles.saveBtnText}>Save Debt</Text>}
-                                    </TouchableOpacity>
-                                </ScrollView>
+                        {form.isInstallment && (
+                            <View style={[styles.installmentBox, { backgroundColor: COLORS.background, borderColor: COLORS.border }]}>
+                                <Text style={[styles.formLabel, { color: COLORS.textMuted }]}>MONTHLY PAYMENT</Text>
+                                <View style={[styles.inputWrap, { backgroundColor: COLORS.surface, borderColor: COLORS.border }]}>
+                                    <Text style={{ color: '#f59e0b', fontWeight: '800', marginRight: 8 }}>₱</Text>
+                                    <TextInput
+                                        style={[styles.input, { color: COLORS.text }]}
+                                        placeholder="e.g. 1000"
+                                        placeholderTextColor={COLORS.textMuted}
+                                        keyboardType="decimal-pad"
+                                        value={form.monthlyPayment}
+                                        onChangeText={v => setForm(f => ({ ...f, monthlyPayment: v }))}
+                                    />
+                                </View>
+
+                                <Text style={[styles.formLabel, { color: COLORS.textMuted }]}>GRACE PERIOD (MONTHS)</Text>
+                                <View style={[styles.inputWrap, { backgroundColor: COLORS.surface, borderColor: COLORS.border }]}>
+                                    <Feather name="calendar" size={16} color={COLORS.textMuted} style={{ marginRight: 8 }} />
+                                    <TextInput
+                                        style={[styles.input, { color: COLORS.text }]}
+                                        placeholder="e.g. 12"
+                                        placeholderTextColor={COLORS.textMuted}
+                                        keyboardType="number-pad"
+                                        value={form.gracePeriodMonths}
+                                        onChangeText={v => setForm(f => ({ ...f, gracePeriodMonths: v }))}
+                                    />
+                                </View>
+
+                                <Text style={[styles.formLabel, { color: COLORS.textMuted }]}>PENALTY RATE (% PER MONTH)</Text>
+                                <View style={[styles.inputWrap, { backgroundColor: COLORS.surface, borderColor: COLORS.border }]}>
+                                    <Feather name="percent" size={16} color={COLORS.textMuted} style={{ marginRight: 8 }} />
+                                    <TextInput
+                                        style={[styles.input, { color: COLORS.text }]}
+                                        placeholder="e.g. 20"
+                                        placeholderTextColor={COLORS.textMuted}
+                                        keyboardType="decimal-pad"
+                                        value={form.penaltyRate}
+                                        onChangeText={v => setForm(f => ({ ...f, penaltyRate: v }))}
+                                    />
+                                </View>
+
+                                {form.gracePeriodMonths ? (
+                                    <View style={[styles.dueDatePreview, { backgroundColor: '#f59e0b10', borderColor: '#f59e0b50' }]}>
+                                        <Feather name="calendar" size={14} color="#f59e0b" />
+                                        <Text style={[styles.dueDatePreviewText, { color: '#f59e0b' }]}>
+                                            Due date: {formatDate(
+                                                (() => {
+                                                    const d = new Date();
+                                                    d.setMonth(d.getMonth() + (parseInt(form.gracePeriodMonths) || 0));
+                                                    return d;
+                                                })()
+                                            )}
+                                        </Text>
+                                    </View>
+                                ) : null}
+                            </View>
+                        )}
+
+                        <TouchableOpacity
+                            onPress={handleCreate}
+                            disabled={saving}
+                            style={[styles.saveBtn, { backgroundColor: COLORS.primary }]}
+                        >
+                            {saving
+                                ? <ActivityIndicator color="#fff" />
+                                : <Text style={styles.saveBtnText}>Save Debt</Text>}
+                        </TouchableOpacity>
+                    </ScrollView>
                 </Animated.View>
             </Modal>
 
@@ -653,65 +654,65 @@ export default function DebtScreen({ navigation }) {
                 <Animated.View style={[styles.sheet, { backgroundColor: COLORS.surface, transform: [{ translateY: paySlide }] }]}>
                     <View style={[styles.handle, { backgroundColor: COLORS.border }]} />
                     <View style={styles.sheetHeader}>
-                                    <View>
-                                        <Text style={[styles.sheetTitle, { color: COLORS.text }]}>Log Payment</Text>
-                                        <Text style={[styles.sheetSub, { color: COLORS.textMuted }]}>
-                                            {payModal.debt?.personName} · {formatCurrency(payModal.debt?.principal)} remaining
-                                        </Text>
-                                    </View>
-                                    <TouchableOpacity onPress={() => setPayModal({ visible: false, debt: null })}>
-                                        <Feather name="x" size={24} color={COLORS.textMuted} />
-                                    </TouchableOpacity>
-                                </View>
+                        <View>
+                            <Text style={[styles.sheetTitle, { color: COLORS.text }]}>Log Payment</Text>
+                            <Text style={[styles.sheetSub, { color: COLORS.textMuted }]}>
+                                {payModal.debt?.personName} · {formatCurrency(payModal.debt?.principal)} remaining
+                            </Text>
+                        </View>
+                        <TouchableOpacity onPress={() => setPayModal({ visible: false, debt: null })}>
+                            <Feather name="x" size={24} color={COLORS.textMuted} />
+                        </TouchableOpacity>
+                    </View>
 
-                                {payModal.debt?.monthlyPayment && (
-                                    <TouchableOpacity
-                                        onPress={() => setPayAmount(String(payModal.debt.monthlyPayment))}
-                                        style={[styles.quickFill, { backgroundColor: COLORS.background }]}
-                                    >
-                                        <Feather name="zap" size={14} color={COLORS.primary} />
-                                        <Text style={[styles.quickFillText, { color: COLORS.primary }]}>
-                                            Use monthly payment: {formatCurrency(payModal.debt.monthlyPayment)}
-                                        </Text>
-                                    </TouchableOpacity>
-                                )}
+                    {payModal.debt?.monthlyPayment && (
+                        <TouchableOpacity
+                            onPress={() => setPayAmount(String(payModal.debt.monthlyPayment))}
+                            style={[styles.quickFill, { backgroundColor: COLORS.background }]}
+                        >
+                            <Feather name="zap" size={14} color={COLORS.primary} />
+                            <Text style={[styles.quickFillText, { color: COLORS.primary }]}>
+                                Use monthly payment: {formatCurrency(payModal.debt.monthlyPayment)}
+                            </Text>
+                        </TouchableOpacity>
+                    )}
 
-                                <Text style={[styles.formLabel, { color: COLORS.textMuted }]}>AMOUNT PAID</Text>
-                                <View style={[styles.inputWrap, { backgroundColor: COLORS.background, borderColor: COLORS.border }]}>
-                                    <Text style={{ color: '#22c55e', fontWeight: '800', marginRight: 8 }}>₱</Text>
-                                    <TextInput
-                                        style={[styles.input, { color: COLORS.text }]}
-                                        placeholder="0.00"
-                                        placeholderTextColor={COLORS.textMuted}
-                                        keyboardType="decimal-pad"
-                                        value={payAmount}
-                                        onChangeText={setPayAmount}
-                                        autoFocus
-                                    />
-                                </View>
+                    <Text style={[styles.formLabel, { color: COLORS.textMuted }]}>AMOUNT PAID</Text>
+                    <View style={[styles.inputWrap, { backgroundColor: COLORS.background, borderColor: COLORS.border }]}>
+                        <Text style={{ color: '#22c55e', fontWeight: '800', marginRight: 8 }}>₱</Text>
+                        <TextInput
+                            style={[styles.input, { color: COLORS.text }]}
+                            placeholder="0.00"
+                            placeholderTextColor={COLORS.textMuted}
+                            keyboardType="decimal-pad"
+                            value={payAmount}
+                            onChangeText={setPayAmount}
+                            autoFocus
+                        />
+                    </View>
 
-                                <Text style={[styles.formLabel, { color: COLORS.textMuted }]}>NOTE (OPTIONAL)</Text>
-                                <View style={[styles.inputWrap, { backgroundColor: COLORS.background, borderColor: COLORS.border }]}>
-                                    <TextInput
-                                        style={[styles.input, { color: COLORS.text }]}
-                                        placeholder="e.g. GCash transfer"
-                                        placeholderTextColor={COLORS.textMuted}
-                                        value={payNote}
-                                        onChangeText={setPayNote}
-                                    />
-                                </View>
+                    <Text style={[styles.formLabel, { color: COLORS.textMuted }]}>NOTE (OPTIONAL)</Text>
+                    <View style={[styles.inputWrap, { backgroundColor: COLORS.background, borderColor: COLORS.border }]}>
+                        <TextInput
+                            style={[styles.input, { color: COLORS.text }]}
+                            placeholder="e.g. GCash transfer"
+                            placeholderTextColor={COLORS.textMuted}
+                            value={payNote}
+                            onChangeText={setPayNote}
+                        />
+                    </View>
 
-                                <TouchableOpacity
-                                    onPress={handleLogPayment}
-                                    disabled={saving}
-                                    style={[styles.saveBtn, { backgroundColor: '#22c55e' }]}
-                                >
-                                    {saving
-                                        ? <ActivityIndicator color="#fff" />
-                                        : <><Feather name="check-circle" size={18} color="#fff" style={{ marginRight: 8 }} />
-                                            <Text style={styles.saveBtnText}>Confirm Payment</Text></>
-                                    }
-                                </TouchableOpacity>
+                    <TouchableOpacity
+                        onPress={handleLogPayment}
+                        disabled={saving}
+                        style={[styles.saveBtn, { backgroundColor: '#22c55e' }]}
+                    >
+                        {saving
+                            ? <ActivityIndicator color="#fff" />
+                            : <><Feather name="check-circle" size={18} color="#fff" style={{ marginRight: 8 }} />
+                                <Text style={styles.saveBtnText}>Confirm Payment</Text></>
+                        }
+                    </TouchableOpacity>
                 </Animated.View>
             </Modal>
 
@@ -722,76 +723,76 @@ export default function DebtScreen({ navigation }) {
                 </TouchableWithoutFeedback>
                 <Animated.View style={[styles.sheet, { backgroundColor: COLORS.surface, maxHeight: '82%', transform: [{ translateY: detailSlide }] }]}>
                     <View style={[styles.handle, { backgroundColor: COLORS.border }]} />
-                            <View style={styles.sheetHeader}>
-                                <View>
-                                    <Text style={[styles.sheetTitle, { color: COLORS.text }]}>{detailModal.debt?.personName}</Text>
-                                    <Text style={[styles.sheetSub, { color: COLORS.textMuted }]}>Payment History</Text>
-                                </View>
-                                <View style={{ flexDirection: 'row', gap: 12, alignItems: 'center' }}>
-                                    <TouchableOpacity onPress={() => { setDetailModal(s => ({ ...s, visible: false })); handleDelete(detailModal.debt); }}>
-                                        <Feather name="trash-2" size={20} color="#ef4444" />
-                                    </TouchableOpacity>
-                                    <TouchableOpacity onPress={() => setDetailModal(s => ({ ...s, visible: false }))}>
-                                        <Feather name="x" size={24} color={COLORS.textMuted} />
-                                    </TouchableOpacity>
-                                </View>
-                            </View>
+                    <View style={styles.sheetHeader}>
+                        <View>
+                            <Text style={[styles.sheetTitle, { color: COLORS.text }]}>{detailModal.debt?.personName}</Text>
+                            <Text style={[styles.sheetSub, { color: COLORS.textMuted }]}>Payment History</Text>
+                        </View>
+                        <View style={{ flexDirection: 'row', gap: 12, alignItems: 'center' }}>
+                            <TouchableOpacity onPress={() => { setDetailModal(s => ({ ...s, visible: false })); handleDelete(detailModal.debt); }}>
+                                <Feather name="trash-2" size={20} color="#ef4444" />
+                            </TouchableOpacity>
+                            <TouchableOpacity onPress={() => setDetailModal(s => ({ ...s, visible: false }))}>
+                                <Feather name="x" size={24} color={COLORS.textMuted} />
+                            </TouchableOpacity>
+                        </View>
+                    </View>
 
-                            {/* Debt Summary */}
-                            {detailModal.debt && (
-                                <View style={[styles.detailSummary, { backgroundColor: COLORS.background }]}>
-                                    <View style={styles.detailRow}>
-                                        <Text style={[styles.detailKey, { color: COLORS.textMuted }]}>Original</Text>
-                                        <Text style={[styles.detailVal, { color: COLORS.text }]}>{formatCurrency(detailModal.debt.amount)}</Text>
-                                    </View>
-                                    <View style={styles.detailRow}>
-                                        <Text style={[styles.detailKey, { color: COLORS.textMuted }]}>Paid</Text>
-                                        <Text style={[styles.detailVal, { color: '#22c55e' }]}>{formatCurrency(detailModal.debt.amountPaid)}</Text>
-                                    </View>
-                                    {detailModal.debt.accruedInterest > 0 && (
-                                        <View style={styles.detailRow}>
-                                            <Text style={[styles.detailKey, { color: COLORS.textMuted }]}>Penalty</Text>
-                                            <Text style={[styles.detailVal, { color: '#ef4444' }]}>+{formatCurrency(detailModal.debt.accruedInterest)}</Text>
-                                        </View>
-                                    )}
-                                    <View style={[styles.detailRow, { borderTopWidth: 1, borderTopColor: COLORS.border, marginTop: 8, paddingTop: 8 }]}>
-                                        <Text style={[styles.detailKey, { color: COLORS.textMuted }]}>Total Owed</Text>
-                                        <Text style={[styles.detailVal, { color: COLORS.primary, fontWeight: '800' }]}>{formatCurrency(detailModal.debt.totalOwed)}</Text>
-                                    </View>
-                                    {detailModal.debt.dueDate && (
-                                        <View style={styles.detailRow}>
-                                            <Text style={[styles.detailKey, { color: COLORS.textMuted }]}>Due Date</Text>
-                                            <Text style={[styles.detailVal, { color: COLORS.text }]}>{formatDate(detailModal.debt.dueDate)}</Text>
-                                        </View>
-                                    )}
-                                    {detailModal.debt.penaltyRate > 0 && (
-                                        <View style={styles.detailRow}>
-                                            <Text style={[styles.detailKey, { color: COLORS.textMuted }]}>Penalty Rate</Text>
-                                            <Text style={[styles.detailVal, { color: '#ef4444' }]}>{detailModal.debt.penaltyRate}%/month</Text>
-                                        </View>
-                                    )}
+                    {/* Debt Summary */}
+                    {detailModal.debt && (
+                        <View style={[styles.detailSummary, { backgroundColor: COLORS.background }]}>
+                            <View style={styles.detailRow}>
+                                <Text style={[styles.detailKey, { color: COLORS.textMuted }]}>Original</Text>
+                                <Text style={[styles.detailVal, { color: COLORS.text }]}>{formatCurrency(detailModal.debt.amount)}</Text>
+                            </View>
+                            <View style={styles.detailRow}>
+                                <Text style={[styles.detailKey, { color: COLORS.textMuted }]}>Paid</Text>
+                                <Text style={[styles.detailVal, { color: '#22c55e' }]}>{formatCurrency(detailModal.debt.amountPaid)}</Text>
+                            </View>
+                            {detailModal.debt.accruedInterest > 0 && (
+                                <View style={styles.detailRow}>
+                                    <Text style={[styles.detailKey, { color: COLORS.textMuted }]}>Penalty</Text>
+                                    <Text style={[styles.detailVal, { color: '#ef4444' }]}>+{formatCurrency(detailModal.debt.accruedInterest)}</Text>
                                 </View>
                             )}
+                            <View style={[styles.detailRow, { borderTopWidth: 1, borderTopColor: COLORS.border, marginTop: 8, paddingTop: 8 }]}>
+                                <Text style={[styles.detailKey, { color: COLORS.textMuted }]}>Total Owed</Text>
+                                <Text style={[styles.detailVal, { color: COLORS.primary, fontWeight: '800' }]}>{formatCurrency(detailModal.debt.totalOwed)}</Text>
+                            </View>
+                            {detailModal.debt.dueDate && (
+                                <View style={styles.detailRow}>
+                                    <Text style={[styles.detailKey, { color: COLORS.textMuted }]}>Due Date</Text>
+                                    <Text style={[styles.detailVal, { color: COLORS.text }]}>{formatDate(detailModal.debt.dueDate)}</Text>
+                                </View>
+                            )}
+                            {detailModal.debt.penaltyRate > 0 && (
+                                <View style={styles.detailRow}>
+                                    <Text style={[styles.detailKey, { color: COLORS.textMuted }]}>Penalty Rate</Text>
+                                    <Text style={[styles.detailVal, { color: '#ef4444' }]}>{detailModal.debt.penaltyRate}%/month</Text>
+                                </View>
+                            )}
+                        </View>
+                    )}
 
-                            <Text style={[styles.formLabel, { color: COLORS.textMuted, marginTop: spacing.md }]}>PAYMENT HISTORY</Text>
-                            <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 20 }}>
-                                {detailModal.payments.length === 0 ? (
-                                    <Text style={[styles.emptySub, { color: COLORS.textMuted, textAlign: 'center', marginTop: 16 }]}>
-                                        No payments logged yet.
-                                    </Text>
-                                ) : (
-                                    detailModal.payments.map(pay => (
-                                        <View key={pay._id} style={[styles.paymentItem, { borderBottomColor: COLORS.border }]}>
-                                            <View style={[styles.payDot, { backgroundColor: '#22c55e' }]} />
-                                            <View style={{ flex: 1 }}>
-                                                <Text style={[styles.payAmount, { color: '#22c55e' }]}>{formatCurrency(pay.amount)}</Text>
-                                                {pay.note ? <Text style={[styles.payNote, { color: COLORS.textMuted }]}>{pay.note}</Text> : null}
-                                            </View>
-                                            <Text style={[styles.payDate, { color: COLORS.textMuted }]}>{formatDate(pay.paidAt)}</Text>
-                                        </View>
-                                    ))
-                                )}
-                            </ScrollView>
+                    <Text style={[styles.formLabel, { color: COLORS.textMuted, marginTop: spacing.md }]}>PAYMENT HISTORY</Text>
+                    <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 20 }}>
+                        {detailModal.payments.length === 0 ? (
+                            <Text style={[styles.emptySub, { color: COLORS.textMuted, textAlign: 'center', marginTop: 16 }]}>
+                                No payments logged yet.
+                            </Text>
+                        ) : (
+                            detailModal.payments.map(pay => (
+                                <View key={pay._id} style={[styles.paymentItem, { borderBottomColor: COLORS.border }]}>
+                                    <View style={[styles.payDot, { backgroundColor: '#22c55e' }]} />
+                                    <View style={{ flex: 1 }}>
+                                        <Text style={[styles.payAmount, { color: '#22c55e' }]}>{formatCurrency(pay.amount)}</Text>
+                                        {pay.note ? <Text style={[styles.payNote, { color: COLORS.textMuted }]}>{pay.note}</Text> : null}
+                                    </View>
+                                    <Text style={[styles.payDate, { color: COLORS.textMuted }]}>{formatDate(pay.paidAt)}</Text>
+                                </View>
+                            ))
+                        )}
+                    </ScrollView>
                 </Animated.View>
             </Modal>
 
@@ -814,7 +815,7 @@ const styles = StyleSheet.create({
     backBtn: { width: 40, height: 40, borderRadius: 12, justifyContent: 'center', alignItems: 'center' },
     headerTitle: { fontSize: 20, fontWeight: '800' },
     headerSub: { fontSize: 12 },
-    addBtn: { marginLeft: 'auto', width: 40, height: 40, borderRadius: 12, justifyContent: 'center', alignItems: 'center' },
+    addBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 16, paddingVertical: 10, borderRadius: 20, marginLeft: 'auto' },
 
     summaryRow: { flexDirection: 'row', paddingHorizontal: spacing.lg, marginBottom: spacing.md },
     summaryCard: { flex: 1, borderRadius: radius.xl, padding: spacing.md, paddingVertical: 14 },
@@ -833,7 +834,7 @@ const styles = StyleSheet.create({
     cardIcon: { width: 44, height: 44, borderRadius: 12, justifyContent: 'center', alignItems: 'center' },
     cardName: { fontSize: 15, fontWeight: '800' },
     cardDesc: { fontSize: 12, marginTop: 2 },
-    badge: { paddingHorizontal: 8, paddingVertical: 4, borderRadius: radius.xs },
+    badge: { paddingHorizontal: 8, paddingVertical: 4, borderRadius: radius.lg },
     badgeText: { fontSize: 10, fontWeight: '800', letterSpacing: 0.5 },
 
     amountRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-end', marginBottom: spacing.sm },
@@ -913,4 +914,5 @@ const styles = StyleSheet.create({
     payAmount: { fontSize: 15, fontWeight: '800' },
     payNote: { fontSize: 12, marginTop: 2 },
     payDate: { fontSize: 12, fontWeight: '600' },
+    startBtnText: { color: '#fff', fontWeight: '800', fontSize: 14 },
 });

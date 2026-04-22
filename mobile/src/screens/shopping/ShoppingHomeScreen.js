@@ -103,6 +103,9 @@ export default function ShoppingHomeScreen({ navigation }) {
         <SafeAreaView style={[styles.safe, { backgroundColor: COLORS.background }]}>
             {/* Header */}
             <View style={styles.header}>
+                <TouchableOpacity onPress={() => navigation.goBack()} style={[styles.backBtn, { backgroundColor: COLORS.surface }]}>
+                    <Feather name="arrow-left" size={20} color={COLORS.text} />
+                </TouchableOpacity>
                 <View>
                     <Text style={[styles.headerTitle, { color: COLORS.text }]}>Smart Shopping</Text>
                     <Text style={[styles.headerSub, { color: COLORS.textMuted }]}>
@@ -186,10 +189,10 @@ export default function ShoppingHomeScreen({ navigation }) {
 
 const getStyles = (COLORS) => StyleSheet.create({
     safe: { flex: 1 },
-    header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: spacing.lg, paddingBottom: 8 },
+    header: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, padding: spacing.lg, paddingBottom: spacing.md },
     headerTitle: { fontSize: 26, fontWeight: '900' },
     headerSub: { fontSize: 13, fontWeight: '600', marginTop: 2 },
-    startBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 16, paddingVertical: 10, borderRadius: 20 },
+    startBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 16, paddingVertical: 10, borderRadius: 20, marginLeft: 'auto' },
     startBtnText: { color: '#fff', fontWeight: '800', fontSize: 14 },
     statsCard: { marginHorizontal: spacing.lg, marginBottom: spacing.lg, borderRadius: radius.xl, padding: 20, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-around' },
     statItem: { alignItems: 'center' },
@@ -212,4 +215,5 @@ const getStyles = (COLORS) => StyleSheet.create({
     emptyEmoji: { fontSize: 56, marginBottom: 16 },
     emptyText: { fontSize: 16, fontWeight: '800', marginBottom: 8 },
     emptySubText: { fontSize: 13, fontWeight: '500', textAlign: 'center', paddingHorizontal: 32 },
+    backBtn: { width: 40, height: 40, borderRadius: 12, justifyContent: 'center', alignItems: 'center' },
 });
