@@ -501,12 +501,18 @@ export default function HomeScreen({ navigation }) {
                 {/* Quick Actions — GCash Style */}
                 <View style={[styles.quickActionsCard, { backgroundColor: COLORS.surface }]}>
                     <Text style={[styles.quickActionsTitle, { color: COLORS.textMuted }]}>QUICK ACTIONS</Text>
-                    <View style={styles.quickActionsRow}>
+                    <ScrollView 
+                        horizontal 
+                        showsHorizontalScrollIndicator={false}
+                        contentContainerStyle={styles.quickActionsRow}
+                    >
                         {[
                             { icon: 'shopping-cart', label: 'Shopping', color: '#E91E8C', onPress: () => navigation.navigate('ShoppingHome') },
                             { icon: 'credit-card', label: 'Debts', color: '#f59e0b', onPress: () => navigation.navigate('DebtScreen') },
                             { icon: 'dollar-sign', label: 'Convert', color: '#8b5cf6', onPress: () => navigation.navigate('CurrencyConverter') },
                             { icon: 'repeat', label: 'Bills', color: '#22c55e', onPress: () => navigation.navigate('Bills') },
+                            { icon: 'maximize', label: 'Scanner', color: '#06b6d4', onPress: () => navigation.navigate('BarcodeScanner') },
+                            { icon: 'grid', label: 'View All', color: '#6b7280', onPress: () => navigation.navigate('AllServices') },
                         ].map((action) => (
                             <TouchableOpacity
                                 key={action.label}
@@ -520,7 +526,7 @@ export default function HomeScreen({ navigation }) {
                                 <Text style={[styles.quickActionLabel, { color: COLORS.textMuted }]}>{action.label}</Text>
                             </TouchableOpacity>
                         ))}
-                    </View>
+                    </ScrollView>
                 </View>
 
                 {/* Recent Transactions */}
@@ -692,10 +698,10 @@ const styles = StyleSheet.create({
     balanceLabel: { color: 'rgba(255,255,255,0.7)', fontSize: 12, fontWeight: '600', letterSpacing: 1 },
     balanceAmount: { color: '#fff', fontSize: 36, fontWeight: '800', marginTop: 4 },
     analyticsRow: { flexDirection: 'row', paddingHorizontal: spacing.lg, marginBottom: spacing.md, height: 170 },
-    quickActionsCard: { marginHorizontal: spacing.lg, marginBottom: spacing.lg, borderRadius: radius.xl, padding: spacing.md, paddingVertical: 14 },
-    quickActionsTitle: { fontSize: 10, fontWeight: '900', letterSpacing: 1.2, marginBottom: 12 },
-    quickActionsRow: { flexDirection: 'row', justifyContent: 'space-around' },
-    quickActionItem: { alignItems: 'center', gap: 6 },
+    quickActionsCard: { marginHorizontal: spacing.lg, marginBottom: spacing.lg, borderRadius: radius.xl, paddingVertical: 14 },
+    quickActionsTitle: { fontSize: 10, fontWeight: '900', letterSpacing: 1.2, marginBottom: 12, paddingHorizontal: spacing.md },
+    quickActionsRow: { flexDirection: 'row', gap: 20, paddingHorizontal: spacing.md },
+    quickActionItem: { alignItems: 'center', gap: 6, width: 60 },
     quickActionIcon: { width: 52, height: 52, borderRadius: 26, justifyContent: 'center', alignItems: 'center' },
     quickActionLabel: { fontSize: 11, fontWeight: '700' },
     analyticsCard: {
