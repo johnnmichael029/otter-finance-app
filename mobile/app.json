@@ -48,8 +48,7 @@
       "expo-camera",
       "@react-native-community/datetimepicker",
       "expo-secure-store",
-      "./plugins/withAndroidWidget",
-      "@sentry/react-native"
+      "./plugins/withAndroidWidget"
     ],
     "extra": {
       "eas": {

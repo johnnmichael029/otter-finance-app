@@ -1,0 +1,29 @@
+
+# Dependency directories
+node_modules/
+
+# Native directories (Forces EAS to run clean prebuild)
+android/
+ios/
+
+# Local Expo files
+.expo/
+
+# Build assets
+*.apk
+*.aab
+*.zip
+
+# Credentials (should not be uploaded to EAS via archive)
+*.jks
+*.p12
+*.keystore
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# OS files
+.DS_Store
+Thumbs.db

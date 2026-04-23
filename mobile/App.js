@@ -14,7 +14,7 @@ import ErrorBoundary from './src/components/ErrorBoundary';
 
 // Initialize Sentry
 Sentry.init({
-    dsn: 'https://placeholder_key@o0.ingest.sentry.io/0', // TODO: Replace with real user DSN
+    dsn: 'https://1bf9c89d4d85c2cbbe9f46a366662602@o4511268540776448.ingest.us.sentry.io/4511268551393280',
     tracesSampleRate: 1.0,
 });
 

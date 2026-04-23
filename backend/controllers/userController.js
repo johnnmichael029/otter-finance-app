@@ -88,7 +88,19 @@ const completeOnboarding = async (req, res) => {
     try {
         const { currency } = req.body;
         const updates = { isOnboarded: true };
-        if (currency) updates.currency = currency;
+
+        // ── Handle Currency Migration ──────────────────────────────────────────
+        // If they already have data (legacy user) and choose a different currency
+        if (currency && currency !== req.user.currency) {
+            try {
+                await convertUserFinances(req.userId, req.user.currency, currency);
+                updates.currency = currency;
+            } catch (err) {
+                return res.status(503).json({ error: 'Currency conversion service unavailable. Conversion failed.' });
+            }
+        } else if (currency) {
+            updates.currency = currency;
+        }
 
         const user = await User.findByIdAndUpdate(
             req.userId,
@@ -98,6 +110,7 @@ const completeOnboarding = async (req, res) => {
 
         res.json(user);
     } catch (err) {
+        console.error('[USER] completeOnboarding error:', err.message);
         res.status(500).json({ error: 'Failed to complete onboarding.' });
     }
 };
