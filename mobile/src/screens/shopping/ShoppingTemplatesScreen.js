@@ -1,8 +1,10 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import {
     View, Text, StyleSheet, TouchableOpacity, FlatList,
-    ActivityIndicator, RefreshControl, Alert, Modal, TextInput
+    ActivityIndicator, RefreshControl, Modal, TextInput, Animated as RNAnimated
 } from 'react-native';
+import Animated, { ZoomIn, ZoomOut } from 'react-native-reanimated';
+import { Swipeable } from 'react-native-gesture-handler';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Feather, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useTheme } from '../../context/ThemeContext';
@@ -159,42 +161,62 @@ export default function ShoppingTemplatesScreen({ navigation }) {
         }
     };
 
+    const renderRightActions = (progress, dragX, item) => {
+        const scale = dragX.interpolate({
+            inputRange: [-80, 0],
+            outputRange: [1, 0],
+            extrapolate: 'clamp',
+        });
+
+        return (
+            <TouchableOpacity
+                onPress={() => handleDelete(item._id, item.name)}
+                style={[styles.hiddenDeleteBtn, { backgroundColor: '#ef4444' }]}
+                activeOpacity={0.8}
+            >
+                <RNAnimated.View style={{ transform: [{ scale }] }}>
+                    <Feather name="trash-2" size={24} color="#fff" />
+                    <Text style={{ color: '#fff', fontSize: 10, fontWeight: '800', marginTop: 4 }}>Delete</Text>
+                </RNAnimated.View>
+            </TouchableOpacity>
+        );
+    };
+
     const renderItem = ({ item }) => (
-        <TouchableOpacity
-            style={[styles.templateCard, { backgroundColor: COLORS.surface }]}
-            onPress={() => handleUse(item)}
-            activeOpacity={0.8}
-        >
-            <View style={[styles.emojiBox, { backgroundColor: COLORS.primary + '15' }]}>
-                <Text style={styles.emojiText}>{item.emoji}</Text>
-            </View>
-            <View style={{ flex: 1 }}>
-                <Text style={[styles.templateName, { color: COLORS.text }]}>{item.name}</Text>
-                <Text style={[styles.templateMeta, { color: COLORS.textMuted }]}>
-                    {item.items?.length || 0} items · Used {item.usageCount || 0} times
-                </Text>
-            </View>
-            <View style={{ flexDirection: 'row', gap: 4 }}>
-                <TouchableOpacity
-                    onPress={() => { setSelectedTemplate(item); setItemsModalVisible(true); }}
-                    style={[styles.actionIconBtn, { backgroundColor: COLORS.border + '30' }]}
-                >
-                    <Feather name="edit-3" size={16} color={COLORS.primary} />
-                </TouchableOpacity>
-                <TouchableOpacity
-                    onPress={() => handleDelete(item._id, item.name)}
-                    style={[styles.actionIconBtn, { backgroundColor: '#ef444415' }]}
-                >
-                    <Feather name="trash-2" size={16} color="#ef4444" />
-                </TouchableOpacity>
-            </View>
-        </TouchableOpacity>
+        <Animated.View key={item._id} entering={ZoomIn.springify().damping(50).mass(0.9)} exiting={ZoomOut.duration(100)}>
+            <Swipeable 
+                renderRightActions={(prog, drag) => renderRightActions(prog, drag, item)} 
+                friction={1} 
+                overshootRight={false}
+                containerStyle={{ marginBottom: 12 }}
+            >
+            <TouchableOpacity
+                style={[styles.templateCard, { backgroundColor: COLORS.surface }]}
+                onPress={() => handleUse(item)}
+                activeOpacity={0.8}
+            >
+                <View style={[styles.emojiBox, { backgroundColor: COLORS.primary + '15' }]}><Text style={styles.emojiText}>{item.emoji}</Text></View>
+                <View style={{ flex: 1 }}>
+                    <Text style={[styles.templateName, { color: COLORS.text }]}>{item.name}</Text>
+                    <Text style={[styles.templateMeta, { color: COLORS.textMuted }]}>{item.items?.length || 0} items · Used {item.usageCount || 0} times</Text>
+                </View>
+                <View style={{ flexDirection: 'row', gap: 4 }}>
+                    <TouchableOpacity onPress={() => { setSelectedTemplate(item); setItemsModalVisible(true); }} style={[styles.actionIconBtn, { backgroundColor: COLORS.border + '30' }]}>
+                        <Feather name="edit-3" size={16} color={COLORS.primary} />
+                    </TouchableOpacity>
+                </View>
+            </TouchableOpacity>
+        </Swipeable>
+        </Animated.View>
     );
 
     return (
         <SafeAreaView style={[styles.safe, { backgroundColor: COLORS.background }]}>
             <View style={styles.header}>
-                <TouchableOpacity onPress={() => navigation.goBack()} style={[styles.backBtn, { backgroundColor: COLORS.surface }]}>
+                <TouchableOpacity 
+                    onPress={() => navigation.canGoBack() ? navigation.goBack() : navigation.navigate('ShoppingHome')} 
+                    style={[styles.backBtn, { backgroundColor: COLORS.surface }]}
+                >
                     <Feather name="arrow-left" size={20} color={COLORS.text} />
                 </TouchableOpacity>
                 <Text style={[styles.headerTitle, { color: COLORS.text }]}>Shopping Templates</Text>
@@ -356,12 +378,12 @@ const getStyles = (COLORS) => StyleSheet.create({
     backBtn: { width: 40, height: 40, borderRadius: 12, justifyContent: 'center', alignItems: 'center' },
     headerTitle: { fontSize: 20, fontWeight: '800' },
     addBtn: { width: 40, height: 40, borderRadius: 12, justifyContent: 'center', alignItems: 'center' },
-    templateCard: { flexDirection: 'row', alignItems: 'center', gap: 12, padding: 16, borderRadius: radius.xl, marginBottom: 12, elevation: 2, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.1, shadowRadius: 4 },
+    templateCard: { flexDirection: 'row', alignItems: 'center', gap: 12, padding: 16, borderRadius: radius.xl, elevation: 2, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.1, shadowRadius: 4 },
     emojiBox: { width: 48, height: 48, borderRadius: 12, justifyContent: 'center', alignItems: 'center' },
     emojiText: { fontSize: 24 },
     templateName: { fontSize: 16, fontWeight: '800' },
     templateMeta: { fontSize: 12, fontWeight: '600', marginTop: 2 },
-    deleteBtn: { padding: 8 },
+    hiddenDeleteBtn: { width: 80, height: '100%', borderRadius: radius.xl, justifyContent: 'center', alignItems: 'center', marginLeft: 12, elevation: 1 },
     emptyContainer: { alignItems: 'center', justifyContent: 'center', paddingTop: 100 },
     emptyText: { fontSize: 18, fontWeight: '800', marginTop: 16 },
     emptySub: { fontSize: 13, fontWeight: '500', textAlign: 'center', paddingHorizontal: 40, marginTop: 8 },

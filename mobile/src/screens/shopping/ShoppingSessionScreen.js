@@ -460,7 +460,11 @@ export default function ShoppingSessionScreen({ route, navigation }) {
             onConfirm: async () => {
                 setAlertConfig(p => ({ ...p, visible: false }));
                 if (session) await cancelShopping(session._id).catch(() => {});
-                navigation.goBack();
+                if (navigation.canGoBack()) {
+                    navigation.goBack();
+                } else {
+                    navigation.navigate('ShoppingHome');
+                }
             }
         });
     };
@@ -472,7 +476,10 @@ export default function ShoppingSessionScreen({ route, navigation }) {
         return (
             <SafeAreaView style={[styles.safe, { backgroundColor: COLORS.background }]}>
                 <View style={styles.setupContainer}>
-                    <TouchableOpacity onPress={() => navigation.goBack()} style={[styles.backBtn, { backgroundColor: COLORS.surface }]}>
+                    <TouchableOpacity 
+                        onPress={() => navigation.canGoBack() ? navigation.goBack() : navigation.navigate('ShoppingHome')} 
+                        style={[styles.backBtn, { backgroundColor: COLORS.surface }]}
+                    >
                         <Feather name="arrow-left" size={20} color={COLORS.text} />
                     </TouchableOpacity>
 

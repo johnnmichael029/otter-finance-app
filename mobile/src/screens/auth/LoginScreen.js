@@ -115,6 +115,7 @@ export default function LoginScreen({ navigation }) {
                                         value={password}
                                         onChangeText={setPassword}
                                         secureTextEntry={!showPassword}
+                                        autoCapitalize="none"
                                     />
                                     <TouchableOpacity onPress={() => setShowPassword(!showPassword)} style={styles.eyeIcon}>
                                         <Feather name={showPassword ? 'eye' : 'eye-off'} size={20} color={COLORS.textMuted} />

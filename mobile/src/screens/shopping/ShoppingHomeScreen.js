@@ -1,13 +1,15 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import {
     View, Text, StyleSheet, TouchableOpacity, FlatList,
-    ActivityIndicator, RefreshControl
+    ActivityIndicator, RefreshControl, Animated as RNAnimated
 } from 'react-native';
+import Animated, { ZoomIn, ZoomOut } from 'react-native-reanimated';
+import { Swipeable } from 'react-native-gesture-handler';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Feather, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useTheme } from '../../context/ThemeContext';
 import { useAuth } from '../../context/AuthContext';
-import { getShoppingSessions } from '../../api/api';
+import { getShoppingSessions, deleteShoppingSession } from '../../api/api';
 import { spacing, radius } from '../../theme/colors';
 import CustomAlertModal from '../../components/CustomAlertModal';
 import Skeleton from '../../components/Skeleton';
@@ -52,12 +54,40 @@ export default function ShoppingHomeScreen({ navigation }) {
     const completedSessions = sessions.filter(s => s.status === 'completed');
     const totalSpent = completedSessions.reduce((sum, s) => sum + s.total, 0);
 
+    const handleDelete = (id) => {
+        deleteShoppingSession(id).then(() => {
+            loadSessions();
+        }).catch(() => {});
+    };
+
+    const renderRightActions = (progress, dragX, item) => {
+        const scale = dragX.interpolate({
+            inputRange: [-80, 0],
+            outputRange: [1, 0],
+            extrapolate: 'clamp',
+        });
+
+        return (
+            <TouchableOpacity
+                onPress={() => handleDelete(item._id)}
+                style={[styles.hiddenDeleteBtn, { backgroundColor: '#ef4444' }]}
+                activeOpacity={0.8}
+            >
+                <RNAnimated.View style={{ transform: [{ scale }] }}>
+                    <Feather name="trash-2" size={24} color="#fff" />
+                    <Text style={{ color: '#fff', fontSize: 10, fontWeight: '800', marginTop: 4 }}>Delete</Text>
+                </RNAnimated.View>
+            </TouchableOpacity>
+        );
+    };
+
     const renderItem = ({ item }) => {
         const statusColor = STATUS_COLORS[item.status] || COLORS.textMuted;
         const pmIconName = PM_ICONS[item.paymentMethod] || 'dots-horizontal';
-        return (
+
+        const content = (
             <TouchableOpacity
-                style={[styles.sessionCard, { backgroundColor: COLORS.surface }]}
+                style={[styles.sessionCard, { backgroundColor: COLORS.surface, marginBottom: 0 }]}
                 onPress={() => {
                     if (item.status === 'active') {
                         navigation.navigate('ShoppingSession', { resumeSession: item });
@@ -97,13 +127,35 @@ export default function ShoppingHomeScreen({ navigation }) {
                 </View>
             </TouchableOpacity>
         );
+
+        return (
+            <Animated.View key={item._id} entering={ZoomIn.springify().damping(50).mass(0.9)} exiting={ZoomOut.duration(100)}>
+                {item.status === 'cancelled' ? (
+                    <Swipeable
+                        renderRightActions={(prog, drag) => renderRightActions(prog, drag, item)}
+                        friction={1}
+                        overshootRight={false}
+                        containerStyle={{ marginBottom: spacing.sm }}
+                    >
+                        {content}
+                    </Swipeable>
+                ) : (
+                    <View style={{ marginBottom: spacing.sm }}>
+                        {content}
+                    </View>
+                )}
+            </Animated.View>
+        );
     };
 
     return (
         <SafeAreaView style={[styles.safe, { backgroundColor: COLORS.background }]}>
             {/* Header */}
             <View style={styles.header}>
-                <TouchableOpacity onPress={() => navigation.goBack()} style={[styles.backBtn, { backgroundColor: COLORS.surface }]}>
+                <TouchableOpacity 
+                    onPress={() => navigation.canGoBack() ? navigation.goBack() : navigation.navigate('HomeRoot')} 
+                    style={[styles.backBtn, { backgroundColor: COLORS.surface }]}
+                >
                     <Feather name="arrow-left" size={20} color={COLORS.text} />
                 </TouchableOpacity>
                 <View>
@@ -226,4 +278,5 @@ const getStyles = (COLORS) => StyleSheet.create({
     emptyText: { fontSize: 16, fontWeight: '800', marginBottom: 8 },
     emptySubText: { fontSize: 13, fontWeight: '500', textAlign: 'center', paddingHorizontal: 32 },
     backBtn: { width: 40, height: 40, borderRadius: 12, justifyContent: 'center', alignItems: 'center' },
+    hiddenDeleteBtn: { width: 80, height: '100%', borderRadius: radius.xl, justifyContent: 'center', alignItems: 'center', marginLeft: 12, elevation: 1 },
 });

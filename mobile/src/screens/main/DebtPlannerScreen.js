@@ -6,6 +6,7 @@ import { useTheme } from '../../context/ThemeContext';
 import { useAuth } from '../../context/AuthContext';
 import { spacing, radius } from '../../theme/colors';
 import { getDebts, logDebtPayment } from '../../api/api';
+import { connectSocket, getSocket } from '../../utils/socket';
 import BottomSheetModal from '../../components/BottomSheetModal';
 import CustomAlertModal from '../../components/CustomAlertModal';
 
@@ -107,7 +108,7 @@ const simulatePayoff = (debts, strategy, totalMonthlyBudget) => {
 
 export default function DebtPlannerScreen({ navigation }) {
     const { COLORS, isBaseDark } = useTheme();
-    const { userToken } = useAuth();
+    const { userToken, userInfo } = useAuth();
     
     const [debts, setDebts] = useState([]);
     const [loading, setLoading] = useState(true);
@@ -122,11 +123,7 @@ export default function DebtPlannerScreen({ navigation }) {
     const [paying, setPaying] = useState(false);
     const [alert, setAlert] = useState({ visible: false, title: '', message: '', type: 'info' });
 
-    useEffect(() => {
-        fetchDebts();
-    }, []);
-
-    const fetchDebts = async () => {
+    const fetchDebts = React.useCallback(async () => {
         try {
             const data = await getDebts();
             
@@ -144,7 +141,29 @@ export default function DebtPlannerScreen({ navigation }) {
         } finally {
             setLoading(false);
         }
-    };
+    }, []);
+
+    useEffect(() => {
+        fetchDebts();
+    }, [fetchDebts]);
+
+    useEffect(() => {
+        if (!userInfo?._id) return;
+        connectSocket(userInfo._id);
+        const socket = getSocket();
+
+        const handleUpdate = () => { fetchDebts(); };
+
+        socket.on('new_debt', handleUpdate);
+        socket.on('update_debt', handleUpdate);
+        socket.on('delete_debt', handleUpdate);
+
+        return () => {
+            socket.off('new_debt', handleUpdate);
+            socket.off('update_debt', handleUpdate);
+            socket.off('delete_debt', handleUpdate);
+        };
+    }, [userInfo?._id, fetchDebts]);
 
     const handleLogPayment = async () => {
         const amt = parseFloat(payModal.amount);

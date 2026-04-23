@@ -2,8 +2,11 @@ const ShoppingSession = require('../models/shoppingSessionModel');
 const BarcodePrice = require('../models/barcodePriceModel');
 const SavingsGoal = require('../models/savingsGoalModel');
 const SavingsTransfer = require('../models/savingsTransferModel');
+const Wallet = require('../models/walletModel');
 const Transaction = require('../models/transactionModel');
+const mongoose = require('mongoose');
 const { invalidatePrefixes } = require('../utils/cache');
+const { encrypt, decryptNote } = require('../utils/encryption');
 
 // ─── POST /api/shopping/sessions ─────────────────────────────────────────────
 // Create a new active shopping session
@@ -88,14 +91,14 @@ const updateCartItems = async (req, res) => {
 // Confirm checkout: deduct balance, log transaction, complete session
 const checkoutSession = async (req, res) => {
     try {
-        const { paymentMethod, source, note } = req.body;
+        const io = req.app.get('io');
+        const { paymentMethod, source, note, walletDeductAmount } = req.body;
         const session = await ShoppingSession.findOne({ _id: req.params.id, user: req.userId });
         if (!session) return res.status(404).json({ error: 'Session not found.' });
         if (session.status !== 'active') return res.status(400).json({ error: 'Session already completed.' });
         if (session.items.length === 0) return res.status(400).json({ error: 'Cart is empty.' });
 
         const total = session.total;
-        const io = req.app.get('io');
 
         // ── Deduct from chosen source ─────────────────────────────────────────
         if (source === 'savings_balance') {
@@ -123,18 +126,77 @@ const checkoutSession = async (req, res) => {
                 io.to(`user:${req.userId}`).emit('new_savings_transfer', xfer);
             }
         } else {
-            // Deduct from Main Balance via a transaction record
+            // Deduct from a specific Wallet or Main Balance
+            let walletId = null;
+            if (mongoose.Types.ObjectId.isValid(source)) {
+                walletId = source;
+            }
+
+            // Calculate current total balance of "HAND" money (wallet: null)
+            const balanceAgg = await Transaction.aggregate([
+                { $match: { user: new mongoose.Types.ObjectId(req.userId), wallet: null } },
+                { $group: { _id: '$type', total: { $sum: '$amount' } } },
+            ]);
+            let currentBalance = 0;
+            balanceAgg.forEach(r => {
+                if (r._id === 'income') currentBalance += r.total;
+                if (r._id === 'expense') currentBalance -= r.total;
+            });
+
             const tx = await Transaction.create({
                 user: req.userId,
                 type: 'expense',
                 category: 'Shopping',
                 amount: total,
                 description: `Shopping: ${session.label}`,
-                note: note || paymentMethod,
+                note: encrypt(note || paymentMethod),
                 date: new Date(),
+                runningBalance: walletId ? currentBalance : (currentBalance - total),
+                wallet: walletId
             });
 
-            if (io) io.to(`user:${req.userId}`).emit('new_transaction', tx);
+            if (walletId) {
+                const wallet = await Wallet.findOne({ _id: walletId, userId: req.userId });
+                if (wallet) {
+                    const fiatTypes = ['Debit', 'Credit', 'Cash', 'E-Wallet'];
+                    const isFiat = fiatTypes.includes(wallet.type);
+                    const isCrypto = wallet.type === 'Crypto';
+                    const isStocks = wallet.type === 'Stocks';
+
+                    // Use walletDeductAmount (native coin units) for crypto/stocks
+                    const nativeAmount = (isCrypto || isStocks)
+                        ? (walletDeductAmount != null ? Math.abs(parseFloat(walletDeductAmount)) : total)
+                        : total;
+
+                    if (isFiat || isCrypto || isStocks) {
+                        const isCredit = wallet.type === 'Credit';
+                        
+                        if (isCredit) {
+                            // FOR CREDIT WALLETS: Shopping (expense) increases the owed balance
+                            wallet.balance += nativeAmount;
+                        } else {
+                            // NORMAL WALLETS: Expense decreases balance
+                            wallet.balance -= nativeAmount;
+                        }
+
+                        // Guard against negative balance for non-credit wallets
+                        if (!isCredit && wallet.balance < 0) wallet.balance = 0;
+                        
+                        await wallet.save();
+                        
+                        // Attach native info to the transaction (tx) for history view
+                        tx.walletAmount = nativeAmount;
+                        tx.walletCurrency = isCrypto ? wallet.coinSymbol : (isStocks ? (wallet.stockSymbol || wallet.stockTicker) : 'PHP');
+                        await tx.save();
+                        if (io) io.to(`user:${req.userId}`).emit('wallet_updated', wallet.toObject());
+                    }
+                }
+            }
+
+            const fullTx = await Transaction.findById(tx._id).populate('wallet', 'name type color').lean();
+            const decryptedTx = decryptNote(fullTx);
+
+            if (io) io.to(`user:${req.userId}`).emit('new_transaction', decryptedTx);
         }
 
         // ── Save Barcoded Items to User's Personal Price DB ───────────────────

@@ -13,8 +13,8 @@ const shoppingSessionSchema = new mongoose.Schema({
     budget: { type: Number, required: true },
     items: [cartItemSchema],
     total: { type: Number, default: 0 },
-    paymentMethod: { type: String, enum: ['cash', 'gcash', 'card', 'other'], default: 'cash' },
-    source: { type: String, enum: ['main_balance', 'savings_balance'], default: 'main_balance' },
+    paymentMethod: { type: String, default: 'cash' },
+    source: { type: String, default: 'main_balance' },
     status: { type: String, enum: ['active', 'completed', 'cancelled'], default: 'active' },
     note: { type: String, default: '' },
 }, { timestamps: true });

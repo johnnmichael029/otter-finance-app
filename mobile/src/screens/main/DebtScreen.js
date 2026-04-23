@@ -5,17 +5,22 @@ import {
     Platform, TouchableWithoutFeedback, Keyboard, ActivityIndicator,
     Animated, Dimensions,
 } from 'react-native';
+import { FlashList } from '@shopify/flash-list';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Feather, MaterialCommunityIcons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useTheme } from '../../context/ThemeContext';
+import { useAuth } from '../../context/AuthContext';
+import { useFinanceStore } from '../../store/financeStore';
 import { spacing, radius } from '../../theme/colors';
 import {
     getDebts, createDebt, updateDebt, deleteDebt,
     logDebtPayment, getDebtPayments,
 } from '../../api/api';
+import { connectSocket, getSocket } from '../../utils/socket';
 import CustomAlertModal from '../../components/CustomAlertModal';
 import Skeleton from '../../components/Skeleton';
+import WalletSelector, { calcNativeDeduct, hasEnoughBalance } from '../../components/WalletSelector';
 
 const formatCurrency = (v) =>
     new Intl.NumberFormat('en-PH', { style: 'currency', currency: 'PHP' }).format(v ?? 0);
@@ -145,7 +150,10 @@ const DebtCard = ({ debt, onPay, onView, COLORS }) => {
 // ── Main Screen ───────────────────────────────────────────────────────────────
 export default function DebtScreen({ navigation }) {
     const { COLORS } = useTheme();
-    const [debts, setDebts] = useState([]);
+    const { userToken, userInfo } = useAuth();
+    const debts = useFinanceStore(state => state.debts);
+    const fetchDebts = useFinanceStore(state => state.fetchDebts);
+    const loadingDebts = useFinanceStore(state => state.isLoadingDebts);
     const [loading, setLoading] = useState(true);
     const [refreshing, setRefreshing] = useState(false);
     const [filter, setFilter] = useState('all'); // 'all' | 'owed_by_me' | 'owed_to_me' | 'settled'
@@ -170,7 +178,10 @@ export default function DebtScreen({ navigation }) {
     });
     const [payAmount, setPayAmount] = useState('');
     const [payNote, setPayNote] = useState('');
+    const [selectedWallet, setSelectedWallet] = useState(null); // full wallet object
     const [saving, setSaving] = useState(false);
+
+    const cryptoPrices = useFinanceStore(state => state.cryptoPrices);
 
     // ── Animated sheet refs ───────────────────────────────────────────────────
     const SCREEN_H = Dimensions.get('window').height;
@@ -223,19 +234,38 @@ export default function DebtScreen({ navigation }) {
         setAlert({ visible: true, type, title, message, onConfirm });
     const closeAlert = () => setAlert(a => ({ ...a, visible: false }));
 
-    const load = useCallback(async () => {
+    const load = useCallback(async (force = false) => {
         try {
-            const data = await getDebts();
-            setDebts(data);
+            await fetchDebts(force);
         } catch (e) {
             console.warn('[DebtScreen] Load error:', e.message);
         } finally {
             setLoading(false);
             setRefreshing(false);
         }
-    }, []);
+    }, [fetchDebts]);
 
-    useEffect(() => { load(); }, [load]);
+    useEffect(() => {
+        load(false); // don't force on mount if we have cache
+    }, [load]);
+
+    useEffect(() => {
+        if (!userInfo?._id) return;
+        connectSocket(userInfo._id);
+        const socket = getSocket();
+
+        const handleDebtChange = () => { load(true); };
+
+        socket.on('new_debt', handleDebtChange);
+        socket.on('update_debt', handleDebtChange);
+        socket.on('delete_debt', handleDebtChange);
+
+        return () => {
+            socket.off('new_debt', handleDebtChange);
+            socket.off('update_debt', handleDebtChange);
+            socket.off('delete_debt', handleDebtChange);
+        };
+    }, [debts, load]);
 
     const onRefresh = () => { setRefreshing(true); load(); };
 
@@ -293,12 +323,39 @@ export default function DebtScreen({ navigation }) {
     const handleLogPayment = async () => {
         const amount = parseFloat(payAmount);
         if (!amount || amount <= 0) return showAlert('warning', 'Invalid Amount', 'Enter a valid payment amount.');
+
+        const remaining = (payModal.debt.amount || 0) - (payModal.debt.amountPaid || 0);
+        if (amount > (remaining + 0.01)) {
+            return showAlert('warning', 'Overpayment', `You are trying to pay ₱${amount.toLocaleString()}, but the remaining debt is only ₱${remaining.toLocaleString()}.`);
+        }
+
+        // Balance pre-check
+        if (selectedWallet) {
+            if (!hasEnoughBalance(selectedWallet, amount, cryptoPrices)) {
+                return showAlert('warning', 'Insufficient Balance',
+                    `Your ${selectedWallet.name} wallet doesn't have enough balance to cover this payment.`);
+            }
+        }
+
         setSaving(true);
         try {
-            await logDebtPayment(payModal.debt._id, { amount, note: payNote });
+            // Calculate native deduct for crypto wallets
+            let walletDeductAmount = null;
+            if (selectedWallet) {
+                const deduct = calcNativeDeduct(selectedWallet, amount, cryptoPrices);
+                walletDeductAmount = deduct?.nativeAmount ?? null;
+            }
+
+            await logDebtPayment(payModal.debt._id, {
+                amount: parseFloat(payAmount),
+                note: payNote,
+                walletId: selectedWallet?._id || null,
+                walletDeductAmount,
+            });
             setPayModal({ visible: false, debt: null });
             setPayAmount('');
             setPayNote('');
+            setSelectedWallet(null);
             load();
             showAlert('success', 'Payment Logged!', `${formatCurrency(amount)} recorded as paid.`);
         } catch (e) {
@@ -318,14 +375,46 @@ export default function DebtScreen({ navigation }) {
     };
 
     const handleDelete = (debt) => {
-        showAlert('confirm', 'Delete Debt?', `Remove "${debt.personName}" from your debt records?`, async () => {
-            try {
-                await deleteDebt(debt._id);
-                load();
-            } catch (e) {
-                showAlert('error', 'Failed', 'Could not delete.');
-            }
-        });
+        const hasPayments = debt.amountPaid > 0;
+
+        if (hasPayments) {
+            setAlert({
+                visible: true,
+                type: 'confirm',
+                title: 'Delete Debt?',
+                message: `"${debt.personName}" has existing payments. Do you want to undo those payments (return money to wallet) or keep them in your history?`,
+                confirmText: 'Undo Payments & Delete',
+                cancelText: 'Cancel',
+                extraBtnText: 'Keep History & Delete',
+                onConfirm: async () => {
+                    try {
+                        await deleteDebt(debt._id, { keepTransactions: false });
+                        load();
+                        showAlert('success', 'Deleted', 'Debt and related payments removed.');
+                    } catch (e) {
+                        showAlert('error', 'Failed', 'Could not delete.');
+                    }
+                },
+                onExtra: async () => {
+                    try {
+                        await deleteDebt(debt._id, { keepTransactions: true });
+                        load();
+                        showAlert('success', 'Deleted', 'Debt removed, wallet history preserved.');
+                    } catch (e) {
+                        showAlert('error', 'Failed', 'Could not delete.');
+                    }
+                }
+            });
+        } else {
+            showAlert('confirm', 'Delete Debt?', `Remove "${debt.personName}" from your records?`, async () => {
+                try {
+                    await deleteDebt(debt._id);
+                    load();
+                } catch (e) {
+                    showAlert('error', 'Failed', 'Could not delete.');
+                }
+            });
+        }
     };
 
     const resetForm = () => setForm({
@@ -338,7 +427,7 @@ export default function DebtScreen({ navigation }) {
         return (
             <SafeAreaView style={[styles.safe, { backgroundColor: COLORS.background }]}>
                 <View style={styles.header}>
-                    <TouchableOpacity onPress={() => navigation.goBack()} style={[styles.backBtn, { backgroundColor: COLORS.surface }]}>
+                    <TouchableOpacity onPress={() => navigation.canGoBack() ? navigation.goBack() : navigation.navigate('HomeRoot')} style={[styles.backBtn, { backgroundColor: COLORS.surface }]}>
                         <Feather name="arrow-left" size={20} color={COLORS.text} />
                     </TouchableOpacity>
                     <Text style={[styles.headerTitle, { color: COLORS.text }]}>Debts</Text>
@@ -393,7 +482,7 @@ export default function DebtScreen({ navigation }) {
         <SafeAreaView style={[styles.safe, { backgroundColor: COLORS.background }]}>
             {/* Header */}
             <View style={styles.header}>
-                <TouchableOpacity onPress={() => navigation.goBack()} style={[styles.backBtn, { backgroundColor: COLORS.surface }]}>
+                <TouchableOpacity onPress={() => navigation.canGoBack() ? navigation.goBack() : navigation.navigate('HomeRoot')} style={[styles.backBtn, { backgroundColor: COLORS.surface }]}>
                     <Feather name="arrow-left" size={20} color={COLORS.text} />
                 </TouchableOpacity>
                 <View>
@@ -442,32 +531,39 @@ export default function DebtScreen({ navigation }) {
             </ScrollView>
 
             {/* Debt List */}
-            <ScrollView
-                contentContainerStyle={styles.list}
-                refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={COLORS.primary} />}
-            >
-                {filtered.length === 0 ? (
-                    <View style={styles.empty}>
-                        <MaterialCommunityIcons name="credit-card-check-outline" size={56} color={COLORS.textMuted} />
-                        <Text style={[styles.emptyTitle, { color: COLORS.text }]}>
-                            {filter === 'settled' ? 'No settled debts yet' : 'No active debts!'}
-                        </Text>
-                        <Text style={[styles.emptySub, { color: COLORS.textMuted }]}>
-                            {filter === 'settled' ? 'Pay off debts to see them here.' : 'Tap + to add an installment or loan.'}
-                        </Text>
-                    </View>
-                ) : (
-                    filtered.map(debt => (
+            <View style={{ flex: 1 }}>
+                <FlashList
+                    contentContainerStyle={styles.list}
+                    data={filtered}
+                    keyExtractor={item => item._id}
+                    estimatedItemSize={120}
+                    refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={COLORS.primary} />}
+                    ListEmptyComponent={() => (
+                        <View style={styles.empty}>
+                            <MaterialCommunityIcons name="credit-card-check-outline" size={56} color={COLORS.textMuted} />
+                            <Text style={[styles.emptyTitle, { color: COLORS.text }]}>
+                                {filter === 'settled' ? 'No settled debts yet' : 'No active debts!'}
+                            </Text>
+                            <Text style={[styles.emptySub, { color: COLORS.textMuted }]}>
+                                {filter === 'settled' ? 'Pay off debts to see them here.' : 'Tap + to add an installment or loan.'}
+                            </Text>
+                        </View>
+                    )}
+                    renderItem={({ item: debt }) => (
                         <DebtCard
-                            key={debt._id}
                             debt={debt}
                             COLORS={COLORS}
-                            onPay={(d) => { setPayModal({ visible: true, debt: d }); setPayAmount(''); setPayNote(''); }}
+                            onPay={(d) => {
+                                setPayModal({ visible: true, debt: d });
+                                setPayAmount('');
+                                setPayNote('');
+                                setSelectedWallet(null);
+                            }}
                             onView={handleViewDetail}
                         />
-                    ))
-                )}
-            </ScrollView>
+                    )}
+                />
+            </View>
 
             {/* ── Add Debt Sheet ─────────────────────────────────────────────────────── */}
             <Modal transparent visible={addMounted} animationType="none" onRequestClose={() => setAddModal(false)} statusBarTranslucent>
@@ -677,7 +773,18 @@ export default function DebtScreen({ navigation }) {
                         </TouchableOpacity>
                     )}
 
-                    <Text style={[styles.formLabel, { color: COLORS.textMuted }]}>AMOUNT PAID</Text>
+                    <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <Text style={[styles.formLabel, { color: COLORS.textMuted }]}>AMOUNT PAID</Text>
+                        <TouchableOpacity
+                            onPress={() => {
+                                const remaining = (payModal.debt?.amount || 0) - (payModal.debt?.amountPaid || 0);
+                                setPayAmount(String(remaining.toFixed(2)));
+                            }}
+                            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                        >
+                            <Text style={{ fontSize: 10, fontWeight: '800', color: COLORS.primary, letterSpacing: 1, backgroundColor: '#ff00b31e', padding: 7, borderRadius: 20 }}>MAX</Text>
+                        </TouchableOpacity>
+                    </View>
                     <View style={[styles.inputWrap, { backgroundColor: COLORS.background, borderColor: COLORS.border }]}>
                         <Text style={{ color: '#22c55e', fontWeight: '800', marginRight: 8 }}>₱</Text>
                         <TextInput
@@ -691,7 +798,17 @@ export default function DebtScreen({ navigation }) {
                         />
                     </View>
 
-                    <Text style={[styles.formLabel, { color: COLORS.textMuted }]}>NOTE (OPTIONAL)</Text>
+                    {/* Wallet Selector */}
+                    <Text style={[styles.formLabel, { color: COLORS.textMuted, marginTop: spacing.md }]}>DEDUCT FROM WALLET</Text>
+                    <WalletSelector
+                        selectedWalletId={selectedWallet?._id}
+                        onSelect={(w) => setSelectedWallet(w)}
+                        COLORS={COLORS}
+                        amountPHP={parseFloat(payAmount) || 0}
+                        isExpense={true}
+                    />
+
+                    <Text style={[styles.formLabel, { color: COLORS.textMuted, marginTop: spacing.md }]}>NOTE (OPTIONAL)</Text>
                     <View style={[styles.inputWrap, { backgroundColor: COLORS.background, borderColor: COLORS.border }]}>
                         <TextInput
                             style={[styles.input, { color: COLORS.text }]}
@@ -785,8 +902,18 @@ export default function DebtScreen({ navigation }) {
                                 <View key={pay._id} style={[styles.paymentItem, { borderBottomColor: COLORS.border }]}>
                                     <View style={[styles.payDot, { backgroundColor: '#22c55e' }]} />
                                     <View style={{ flex: 1 }}>
-                                        <Text style={[styles.payAmount, { color: '#22c55e' }]}>{formatCurrency(pay.amount)}</Text>
-                                        {pay.note ? <Text style={[styles.payNote, { color: COLORS.textMuted }]}>{pay.note}</Text> : null}
+                                        <Text style={[styles.payAmount, { color: '#22c55e' }]}>
+                                            {formatCurrency(pay.amount)}
+                                            <Text style={{ fontSize: 10, color: COLORS.textMuted, fontWeight: '400' }}>
+                                                {pay.wallet ? ` via ${pay.wallet.name}` : ' (HAND)'}
+                                            </Text>
+                                        </Text>
+                                        {pay.walletAmount !== null && pay.walletAmount !== undefined && (
+                                            <Text style={{ fontSize: 11, color: COLORS.primary, fontWeight: '600', marginTop: 1 }}>
+                                                {pay.walletAmount.toLocaleString(undefined, { maximumFractionDigits: 8 })} {pay.walletCurrency}
+                                            </Text>
+                                        )}
+                                        {pay.note ? <Text style={[styles.payNote, { color: COLORS.textMuted, marginTop: 2 }]}>{pay.note}</Text> : null}
                                     </View>
                                     <Text style={[styles.payDate, { color: COLORS.textMuted }]}>{formatDate(pay.paidAt)}</Text>
                                 </View>
@@ -803,7 +930,10 @@ export default function DebtScreen({ navigation }) {
                 title={alert.title}
                 message={alert.message}
                 type={alert.type}
-                confirmText={alert.type === 'confirm' ? 'Yes, Delete' : 'OK'}
+                confirmText={alert.confirmText || (alert.type === 'confirm' ? 'Yes, Delete' : 'OK')}
+                cancelText={alert.cancelText || 'Cancel'}
+                extraBtnText={alert.extraBtnText}
+                onExtra={() => { closeAlert(); alert.onExtra?.(); }}
             />
         </SafeAreaView>
     );

@@ -7,6 +7,8 @@
  * API: https://open.er-api.com/v6/latest/USD  (free, updates every 24h)
  */
 
+const axios = require('axios');
+
 const CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour
 
 // In-memory cache: { USD: { rates: {...}, fetchedAt: Date } }
@@ -24,9 +26,8 @@ const getRates = async (base = 'USD') => {
 
     try {
         const url = `https://open.er-api.com/v6/latest/${base}`;
-        const res = await fetch(url);
-        if (!res.ok) throw new Error(`Exchange API responded with ${res.status}`);
-        const data = await res.json();
+        const res = await axios.get(url);
+        const data = res.data;
 
         if (data.result !== 'success') {
             throw new Error(`Exchange API error: ${data['error-type'] || 'unknown'}`);

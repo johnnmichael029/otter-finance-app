@@ -2,15 +2,19 @@ import React, { useState } from 'react';
 import {
     View, Text, StyleSheet, TouchableOpacity, TextInput,
     ScrollView, KeyboardAvoidingView, Platform, ActivityIndicator,
-    Modal, TouchableWithoutFeedback, Keyboard, Alert
+    Modal, TouchableWithoutFeedback, Keyboard, Alert, Image
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { Feather, MaterialIcons } from '@expo/vector-icons';
+import { Feather, MaterialIcons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useTheme } from '../../context/ThemeContext';
 import { radius, spacing } from '../../theme/colors';
-import { createTransaction, getTransactions, getCurrencyList, convertCurrency } from '../../api/api';
+import * as ImagePicker from 'expo-image-picker';
+import { createTransaction, getTransactions, getCurrencyList, convertCurrency, uploadReceipt, getCategories } from '../../api/api';
 import CustomAlertModal from '../../components/CustomAlertModal';
+import { useSecurity } from '../../context/SecurityContext';
+import { useFinanceStore } from '../../store/financeStore';
+import WalletSelector, { calcNativeDeduct, hasEnoughBalance } from '../../components/WalletSelector';
 
 const CATEGORIES = {
     income: [
@@ -18,7 +22,6 @@ const CATEGORIES = {
         { label: 'Freelance', icon: 'code', color: '#3b82f6' },
         { label: 'Investment', icon: 'trending-up', color: '#8b5cf6' },
         { label: 'Gift', icon: 'gift', color: '#f59e0b' },
-        { label: 'Other', icon: 'plus-circle', color: '#6b7280' },
     ],
     expense: [
         { label: 'Food', icon: 'coffee', color: '#f59e0b' },
@@ -27,7 +30,6 @@ const CATEGORIES = {
         { label: 'Bills', icon: 'file-text', color: '#ef4444' },
         { label: 'Health', icon: 'heart', color: '#22c55e' },
         { label: 'Entertainment', icon: 'tv', color: '#8b5cf6' },
-        { label: 'Other', icon: 'more-horizontal', color: '#6b7280' },
     ],
 };
 
@@ -39,19 +41,35 @@ const EXTRA_ICONS = [
     'mic', 'moon', 'music', 'package', 'paperclip', 'pen-tool',
     'phone', 'printer', 'radio', 'scissors', 'shield', 'star',
     'sun', 'tool', 'trash', 'umbrella', 'unlock', 'user', 'video',
-    'smile', 'heart', 'briefcase', 'coffee', 'truck', 'shopping-bag', 'file-text'
+    'smile', 'heart', 'briefcase', 'coffee', 'truck', 'shopping-bag', 'file-text',
+    'piggy-bank-outline', 'account-cash'
 ];
+
+const DynamicIcon = ({ name, size, color, style }) => {
+    const MCI_ICONS = ['piggy-bank-outline', 'account-cash'];
+    if (MCI_ICONS.includes(name)) {
+        return <MaterialCommunityIcons name={name} size={size} color={color} style={style} />;
+    }
+    return <Feather name={name} size={size} color={color} style={style} />;
+};
 
 
 export default function AddTransactionScreen({ navigation, route }) {
     const { type = 'expense', prefillData = null } = route.params || {};
     const { COLORS } = useTheme();
+    const { setShouldIgnoreLock } = useSecurity();
 
     const [amount, setAmount] = useState(prefillData?.price ? String(prefillData.price) : '');
     const [note, setNote] = useState(prefillData?.name || '');
     const [category, setCategory] = useState(null);
+    const [selectedWallet, setSelectedWallet] = useState(null);   // full wallet object
     const [isLoading, setIsLoading] = useState(false);
+
+    const cryptoPrices = useFinanceStore(state => state.cryptoPrices);
     const [alert, setAlert] = useState({ visible: false, type: 'info', title: '', message: '' });
+
+    const [image, setImage] = useState(null);
+    const [isUploading, setIsUploading] = useState(false);
 
     // Multi-Currency States
     const [currency, setCurrency] = useState({ code: 'PHP', symbol: '₱', flag: '🇵🇭' });
@@ -60,20 +78,9 @@ export default function AddTransactionScreen({ navigation, route }) {
     const [convertedPreview, setConvertedPreview] = useState(null);
     const [exchangeRate, setExchangeRate] = useState(1);
 
-    const [customCatModalVisible, setCustomCatModalVisible] = useState(false);
-    const [customCatName, setCustomCatName] = useState('Tag');
-    const [customCatIcon, setCustomCatIcon] = useState('tag');
-
+    const [remoteCats, setRemoteCats] = useState([]);
     const formatIconName = (name) => {
         return name.split('-').map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(' ');
-    };
-
-    const handleIconSelect = (iconName) => {
-        // Auto-fill the name if the user hasn't typed a custom one yet
-        if (!customCatName || customCatName === formatIconName(customCatIcon)) {
-            setCustomCatName(formatIconName(iconName));
-        }
-        setCustomCatIcon(iconName);
     };
 
     const showAlert = (type, title, message, onConfirm = null) => setAlert({ visible: true, type, title, message, onConfirm });
@@ -84,6 +91,11 @@ export default function AddTransactionScreen({ navigation, route }) {
     React.useEffect(() => {
         const fetchEssential = async () => {
             try {
+                const catRes = await getCategories();
+                if (catRes?.categories?.length > 0) {
+                    setRemoteCats(catRes.categories.map(c => ({ label: c.name, icon: c.icon, color: c.color, type: c.type })));
+                }
+
                 // Fetch templates
                 const res = await getTransactions({ type, limit: 20 });
                 if (res?.transactions) {
@@ -104,6 +116,33 @@ export default function AddTransactionScreen({ navigation, route }) {
         };
         fetchEssential();
     }, [type]);
+
+    const handlePickImage = async (useCamera = false) => {
+        try {
+            setShouldIgnoreLock(true);
+            const permissionResult = useCamera
+                ? await ImagePicker.requestCameraPermissionsAsync()
+                : await ImagePicker.requestMediaLibraryPermissionsAsync();
+
+            if (permissionResult.granted === false) {
+                showAlert('warning', 'Permission Required', `Allow access to your ${useCamera ? 'camera' : 'gallery'} to attach photos.`);
+                return;
+            }
+
+            const result = useCamera
+                ? await ImagePicker.launchCameraAsync({ allowsEditing: true, quality: 0.5 })
+                : await ImagePicker.launchImageLibraryAsync({ allowsEditing: true, quality: 0.5 });
+
+            if (!result.canceled) {
+                setImage(result.assets[0].uri);
+            }
+        } catch (e) {
+            console.warn('Image error:', e);
+        } finally {
+            // Restore security lock behavior after a short delay to ensure app is active
+            setTimeout(() => setShouldIgnoreLock(false), 1000);
+        }
+    };
 
     // Live Conversion logic
     React.useEffect(() => {
@@ -154,7 +193,9 @@ export default function AddTransactionScreen({ navigation, route }) {
     };
 
     const isIncome = type === 'income';
-    const cats = CATEGORIES[type];
+    const fallbackCats = CATEGORIES[type];
+    const serverCats = remoteCats.filter(c => c.type === type);
+    const cats = serverCats.length > 0 ? serverCats : fallbackCats;
     const accentColor = isIncome ? '#22c55e' : '#ef4444';
     const gradientColors = isIncome ? ['#22c55e', '#16a34a'] : ['#ef4444', '#b91c1c'];
 
@@ -165,10 +206,49 @@ export default function AddTransactionScreen({ navigation, route }) {
         if (!category) {
             return showAlert('warning', 'No Category', 'Please select a category for this transaction.');
         }
+
+        // ── Wallet balance pre-check ──────────────────────────────────
+        const finalAmountPHPForCheck = convertedPreview !== null ? convertedPreview : parseFloat(amount);
+        if (!isIncome && selectedWallet) {
+            if (!hasEnoughBalance(selectedWallet, finalAmountPHPForCheck, cryptoPrices)) {
+                const label = selectedWallet.type === 'Crypto'
+                    ? `${selectedWallet.coinSymbol?.toUpperCase() || 'COIN'}`
+                    : '₱';
+                return showAlert('warning', 'Insufficient Balance',
+                    `Your ${selectedWallet.name} wallet doesn't have enough balance to cover this expense.`);
+            }
+        }
         setIsLoading(true);
         try {
-            // If currency is not PHP, use the converted preview for the base 'amount'
+            let finalAttachmentUrl = null;
+
+            // 1. Upload image if present
+            if (image) {
+                setIsUploading(true);
+                const formData = new FormData();
+                const uriParts = image.split('.');
+                const fileType = uriParts[uriParts.length - 1];
+
+                formData.append('receipt', {
+                    uri: image,
+                    name: `receipt.${fileType}`,
+                    type: `image/${fileType}`,
+                });
+
+                const uploadRes = await uploadReceipt(formData);
+                finalAttachmentUrl = uploadRes.url;
+                setIsUploading(false);
+            }
+
+            // 2. Create transaction
             const finalAmountPHP = convertedPreview !== null ? convertedPreview : parseFloat(amount);
+
+            // Calculate native deduct amount for crypto/stocks wallets
+            let walletDeductAmount = null;
+            if (selectedWallet) {
+                const deduct = calcNativeDeduct(selectedWallet, finalAmountPHP, cryptoPrices);
+                walletDeductAmount = deduct?.nativeAmount ?? null;
+            }
 
             await createTransaction({
                 type,
@@ -181,6 +261,9 @@ export default function AddTransactionScreen({ navigation, route }) {
                 categoryColor: category.color,
                 note,
                 date: new Date().toISOString(),
+                attachment: finalAttachmentUrl,
+                walletId: selectedWallet?._id || null,
+                walletDeductAmount,
             });
             showAlert('success', isIncome ? 'Income Added!' : 'Expense Logged!',
                 `${currency.symbol}${parseFloat(amount).toFixed(2)} recorded.${currency.code !== 'PHP' ? ` (≈ ₱${finalAmountPHP.toFixed(2)})` : ''}`
@@ -188,37 +271,19 @@ export default function AddTransactionScreen({ navigation, route }) {
         } catch (err) {
             const errorData = err?.response?.data;
             let errorMsg = errorData?.error || errorData?.message || 'Something went wrong. Please try again.';
-            
-            // If it's a validation error with details, use the first detail message
+
             if (errorData?.details && Array.isArray(errorData.details) && errorData.details.length > 0) {
                 errorMsg = errorData.details[0].message;
             }
-            
+
             showAlert('error', 'Failed', errorMsg);
+            setIsUploading(false);
         } finally {
             setIsLoading(false);
         }
     };
 
-    const handleSaveCustomCategory = () => {
-        if (!customCatName.trim()) {
-            return showAlert('warning', 'Missing Name', 'Please enter a name for your custom category.');
-        }
-        const newCat = {
-            label: customCatName.trim(),
-            icon: customCatIcon,
-            color: accentColor // Give it the income/expense accent color automatically
-        };
-        setCategory(newCat);
-        setCustomCatModalVisible(false);
-    };
 
-    // Inject custom category into the list if it's set and not "Other"
-    const displayCats = [...cats];
-    if (category && !cats.find(c => c.label === category.label) && category.label !== 'Other') {
-        // Insert right before 'Other'
-        displayCats.splice(displayCats.length - 1, 0, category);
-    }
 
     return (
         <SafeAreaView style={[styles.safe, { backgroundColor: COLORS.background }]}>
@@ -249,13 +314,13 @@ export default function AddTransactionScreen({ navigation, route }) {
                             <Text style={[styles.sectionTitle, { color: COLORS.textMuted }]}>RECENT / QUICK ADD</Text>
                             <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8 }}>
                                 {frequentTxs.map(tx => (
-                                    <TouchableOpacity 
-                                        key={tx._id} 
+                                    <TouchableOpacity
+                                        key={tx._id}
                                         onPress={() => handleQuickAdd(tx)}
                                         style={[styles.templateChip, { backgroundColor: COLORS.surface, borderColor: COLORS.border }]}
                                     >
                                         <View style={[styles.templateIcon, { backgroundColor: (tx.categoryColor || accentColor) + '20' }]}>
-                                            <Feather name={tx.categoryIcon || 'tag'} size={14} color={tx.categoryColor || accentColor} />
+                                            <DynamicIcon name={tx.categoryIcon || 'tag'} size={14} color={tx.categoryColor || accentColor} />
                                         </View>
                                         <View>
                                             <Text style={[styles.templateCat, { color: COLORS.text }]}>{tx.category}</Text>
@@ -271,7 +336,7 @@ export default function AddTransactionScreen({ navigation, route }) {
                     <View style={[styles.amountCard, { backgroundColor: COLORS.surface }]}>
                         <Text style={[styles.amountLabel, { color: COLORS.textMuted }]}>AMOUNT</Text>
                         <View style={styles.amountRow}>
-                            <TouchableOpacity 
+                            <TouchableOpacity
                                 onPress={() => setCurrencyModalVisible(true)}
                                 style={[styles.currencyPicker, { backgroundColor: COLORS.background, borderColor: COLORS.border }]}
                             >
@@ -289,7 +354,7 @@ export default function AddTransactionScreen({ navigation, route }) {
                                 autoFocus
                             />
                         </View>
-                        
+
                         {convertedPreview !== null && (
                             <View style={styles.conversionInfo}>
                                 <Text style={[styles.conversionText, { color: COLORS.textMuted }]}>
@@ -302,11 +367,25 @@ export default function AddTransactionScreen({ navigation, route }) {
                         )}
                     </View>
 
+                    {/* Wallet Selector */}
+                    <View style={styles.section}>
+                        <Text style={[styles.sectionTitle, { color: COLORS.textMuted }]}>
+                            {isIncome ? 'RECEIVE TO WALLET' : 'PAY FROM WALLET'}
+                        </Text>
+                        <WalletSelector
+                            selectedWalletId={selectedWallet?._id}
+                            onSelect={(w) => setSelectedWallet(w)}
+                            COLORS={COLORS}
+                            amountPHP={convertedPreview !== null ? convertedPreview : parseFloat(amount) || 0}
+                            isExpense={!isIncome}
+                        />
+                    </View>
+                    
                     {/* Category Picker */}
                     <View style={styles.section}>
                         <Text style={[styles.sectionTitle, { color: COLORS.textMuted }]}>CATEGORY</Text>
                         <View style={styles.categoryGrid}>
-                            {displayCats.map((cat) => {
+                            {cats.map((cat) => {
                                 const isSelected = category?.label === cat.label;
                                 return (
                                     <TouchableOpacity
@@ -315,18 +394,10 @@ export default function AddTransactionScreen({ navigation, route }) {
                                             styles.categoryBtn,
                                             { backgroundColor: isSelected ? cat.color : COLORS.surface, borderColor: isSelected ? cat.color : COLORS.border }
                                         ]}
-                                        onPress={() => {
-                                            if (cat.label === 'Other') {
-                                                setCustomCatName('Tag');
-                                                setCustomCatIcon('tag');
-                                                setCustomCatModalVisible(true);
-                                            } else {
-                                                setCategory(cat);
-                                            }
-                                        }}
+                                        onPress={() => setCategory(cat)}
                                         activeOpacity={0.75}
                                     >
-                                        <Feather name={cat.icon} size={18} color={isSelected ? '#fff' : cat.color} />
+                                        <DynamicIcon name={cat.icon} size={18} color={isSelected ? '#fff' : cat.color} />
                                         <Text style={[styles.categoryLabel, { color: isSelected ? '#fff' : COLORS.text }]}>
                                             {cat.label}
                                         </Text>
@@ -362,6 +433,42 @@ export default function AddTransactionScreen({ navigation, route }) {
                         </View>
                     )}
 
+                    {/* Attachment Section */}
+                    <View style={styles.section}>
+                        <Text style={[styles.sectionTitle, { color: COLORS.textMuted }]}>ATTACHMENT</Text>
+                        {image ? (
+                            <View style={[styles.imagePreviewContainer, { borderColor: COLORS.border }]}>
+                                <Image source={{ uri: image }} style={styles.imagePreview} />
+                                <TouchableOpacity onPress={() => setImage(null)} style={styles.removeImageBtn}>
+                                    <Feather name="x" size={20} color="#fff" />
+                                </TouchableOpacity>
+                                <View style={styles.imageInfo}>
+                                    <View style={styles.imageBadge}>
+                                        <Feather name="image" size={12} color="#fff" />
+                                        <Text style={styles.imageBadgeText}>Receipt Attached</Text>
+                                    </View>
+                                </View>
+                            </View>
+                        ) : (
+                            <View style={styles.attachmentButtons}>
+                                <TouchableOpacity
+                                    onPress={() => handlePickImage(true)}
+                                    style={[styles.attachBtn, { backgroundColor: COLORS.surface, borderColor: COLORS.border }]}
+                                >
+                                    <Feather name="camera" size={20} color={COLORS.primary} />
+                                    <Text style={[styles.attachBtnText, { color: COLORS.text }]}>Take Photo</Text>
+                                </TouchableOpacity>
+                                <TouchableOpacity
+                                    onPress={() => handlePickImage(false)}
+                                    style={[styles.attachBtn, { backgroundColor: COLORS.surface, borderColor: COLORS.border }]}
+                                >
+                                    <Feather name="image" size={20} color={COLORS.textMuted} />
+                                    <Text style={[styles.attachBtnText, { color: COLORS.text }]}>Gallery</Text>
+                                </TouchableOpacity>
+                            </View>
+                        )}
+                    </View>
+
                     {/* Submit */}
                     <TouchableOpacity
                         disabled={isLoading}
@@ -375,7 +482,7 @@ export default function AddTransactionScreen({ navigation, route }) {
                                 : <>
                                     <Feather name="check-circle" size={18} color="#fff" style={{ marginRight: 8 }} />
                                     <Text style={styles.submitText}>Save {isIncome ? 'Income' : 'Expense'}</Text>
-                                  </>
+                                </>
                             }
                         </LinearGradient>
                     </TouchableOpacity>
@@ -399,17 +506,17 @@ export default function AddTransactionScreen({ navigation, route }) {
                                     <Feather name="x" size={24} color={COLORS.textMuted} />
                                 </TouchableOpacity>
                             </View>
-                            
+
                             <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingVertical: spacing.md }}>
                                 {currencyList.map((item) => (
-                                    <TouchableOpacity 
+                                    <TouchableOpacity
                                         key={item.code}
                                         onPress={() => {
                                             setCurrency(item);
                                             setCurrencyModalVisible(false);
                                         }}
                                         style={[
-                                            styles.currencyItem, 
+                                            styles.currencyItem,
                                             { backgroundColor: currency.code === item.code ? COLORS.primary + '10' : 'transparent' }
                                         ]}
                                     >
@@ -427,65 +534,7 @@ export default function AddTransactionScreen({ navigation, route }) {
                 </TouchableWithoutFeedback>
             </Modal>
 
-            {/* Custom Category Modal */}
-            <Modal
-                visible={customCatModalVisible}
-                transparent
-                animationType="fade"
-                onRequestClose={() => setCustomCatModalVisible(false)}
-            >
-                <TouchableWithoutFeedback onPress={() => Keyboard.dismiss()}>
-                    <View style={styles.modalOverlay}>
-                        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.modalKav}>
-                            <View style={[styles.modalSheet, { backgroundColor: COLORS.surface }]}>
-                                <View style={styles.modalHeaderRow}>
-                                    <Text style={[styles.modalTitle, { color: COLORS.text }]}>Custom Category</Text>
-                                    <TouchableOpacity onPress={() => setCustomCatModalVisible(false)}>
-                                        <Feather name="x" size={24} color={COLORS.textMuted} />
-                                    </TouchableOpacity>
-                                </View>
 
-                                <Text style={[styles.sectionTitle, { color: COLORS.textMuted, marginTop: spacing.md }]}>CATEGORY NAME</Text>
-                                <View style={[styles.modalInputWrapper, { backgroundColor: COLORS.background, borderColor: COLORS.border }]}>
-                                    <Feather name={customCatIcon} size={18} color={accentColor} style={{ marginRight: 10 }} />
-                                    <TextInput
-                                        style={[styles.modalInput, { color: COLORS.text }]}
-                                        placeholder="e.g. Pet Supplies"
-                                        placeholderTextColor={COLORS.textMuted}
-                                        value={customCatName}
-                                        onChangeText={setCustomCatName}
-                                        maxLength={20}
-                                    />
-                                </View>
-
-                                <Text style={[styles.sectionTitle, { color: COLORS.textMuted, marginTop: spacing.lg }]}>CHOOSE ICON</Text>
-                                <ScrollView style={{ maxHeight: 200 }} contentContainerStyle={styles.iconGrid} showsVerticalScrollIndicator={false}>
-                                    {EXTRA_ICONS.map((iconName) => {
-                                        const isIconSelected = customCatIcon === iconName;
-                                        return (
-                                            <TouchableOpacity
-                                                key={iconName}
-                                                style={[
-                                                    styles.iconBtn,
-                                                    { backgroundColor: isIconSelected ? accentColor : COLORS.background, borderColor: isIconSelected ? accentColor : COLORS.border }
-                                                ]}
-                                                onPress={() => handleIconSelect(iconName)}
-                                                activeOpacity={0.7}
-                                            >
-                                                <Feather name={iconName} size={20} color={isIconSelected ? '#fff' : COLORS.textMuted} />
-                                            </TouchableOpacity>
-                                        );
-                                    })}
-                                </ScrollView>
-
-                                <TouchableOpacity onPress={handleSaveCustomCategory} style={[styles.modalSaveBtn, { backgroundColor: accentColor }]}>
-                                    <Text style={styles.modalSaveBtnText}>Save Category</Text>
-                                </TouchableOpacity>
-                            </View>
-                        </KeyboardAvoidingView>
-                    </View>
-                </TouchableWithoutFeedback>
-            </Modal>
 
             <CustomAlertModal
                 visible={alert.visible}
@@ -526,7 +575,7 @@ const styles = StyleSheet.create({
     currencyFlag: { fontSize: 20 },
     currencyCode: { fontSize: 16, fontWeight: '800' },
     amountInput: { fontSize: 40, fontWeight: '800', flex: 1 },
-    
+
     conversionInfo: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 12, paddingTop: 12, borderTopWidth: 1, borderTopColor: 'rgba(0,0,0,0.05)' },
     conversionText: { fontSize: 16, fontWeight: '700' },
     rateTag: { paddingHorizontal: 8, paddingVertical: 4, borderRadius: radius.xs },
@@ -543,7 +592,7 @@ const styles = StyleSheet.create({
     categoryLabel: { fontSize: 13, fontWeight: '600' },
     templateChip: {
         flexDirection: 'row', alignItems: 'center', gap: 8,
-        padding: spacing.sm, paddingRight: spacing.md, 
+        padding: spacing.sm, paddingRight: spacing.md,
         borderRadius: radius.md, borderWidth: 1,
     },
     templateIcon: { width: 32, height: 32, borderRadius: 16, justifyContent: 'center', alignItems: 'center' },
@@ -564,7 +613,28 @@ const styles = StyleSheet.create({
     submitBtn: { borderRadius: radius.xl, overflow: 'hidden', marginTop: spacing.sm },
     gradient: { flexDirection: 'row', justifyContent: 'center', alignItems: 'center', paddingVertical: 16 },
     submitText: { color: '#fff', fontSize: 16, fontWeight: '800' },
-    
+
+    // Attachment Styles
+    attachmentButtons: { flexDirection: 'row', gap: 12 },
+    attachBtn: {
+        flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+        gap: 8, paddingVertical: 14, borderRadius: radius.lg, borderWidth: 1.5,
+    },
+    attachBtnText: { fontSize: 14, fontWeight: '700' },
+    imagePreviewContainer: {
+        width: '100%', height: 200, borderRadius: radius.xl,
+        overflow: 'hidden', borderWidth: 1.5, position: 'relative'
+    },
+    imagePreview: { width: '100%', height: '100%', resizeMode: 'cover' },
+    removeImageBtn: {
+        position: 'absolute', top: 12, right: 12, width: 36, height: 36,
+        borderRadius: 18, backgroundColor: 'rgba(0,0,0,0.6)',
+        justifyContent: 'center', alignItems: 'center'
+    },
+    imageInfo: { position: 'absolute', bottom: 0, left: 0, right: 0, padding: 12, backgroundColor: 'rgba(0,0,0,0.3)' },
+    imageBadge: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+    imageBadgeText: { color: '#fff', fontSize: 12, fontWeight: '800' },
+
     // Custom Modal Styles
     modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
     modalKav: { justifyContent: 'flex-end' },

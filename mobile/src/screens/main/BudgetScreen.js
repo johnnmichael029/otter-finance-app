@@ -2,14 +2,16 @@ import React, { useState, useCallback, useEffect } from 'react';
 import {
     View, Text, StyleSheet, TouchableOpacity, ScrollView,
     ActivityIndicator, RefreshControl, TouchableWithoutFeedback,
-    TextInput, Alert,
+    TextInput, Alert, Animated as RNAnimated
 } from 'react-native';
+import Animated, { ZoomIn, ZoomOut } from 'react-native-reanimated';
+import { Swipeable } from 'react-native-gesture-handler';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Feather } from '@expo/vector-icons';
 import BottomSheetModal from '../../components/BottomSheetModal';
 import { useTheme } from '../../context/ThemeContext';
 import { useAuth } from '../../context/AuthContext';
-import { getBudgets, upsertBudget, deleteBudget } from '../../api/api';
+import { getBudgets, upsertBudget, deleteBudget, getCategories } from '../../api/api';
 import { spacing, radius } from '../../theme/colors';
 import Skeleton from '../../components/Skeleton';
 import CustomAlertModal from '../../components/CustomAlertModal';
@@ -38,6 +40,7 @@ export default function BudgetScreen() {
     const now = new Date();
     const [selectedMonth, setSelectedMonth] = useState(now.toISOString().slice(0, 7));
     const [budgets, setBudgets] = useState([]);
+    const [remoteCats, setRemoteCats] = useState([]);
     const [totalSpent, setTotalSpent] = useState(0);
     const [loading, setLoading] = useState(true);
     const [refreshing, setRefreshing] = useState(false);
@@ -49,9 +52,17 @@ export default function BudgetScreen() {
 
     const load = useCallback(async () => {
         try {
-            const res = await getBudgets(selectedMonth);
-            setBudgets(res.budgets || []);
-            setTotalSpent(res.totalSpent || 0);
+            const [bRes, cRes] = await Promise.all([
+                getBudgets(selectedMonth),
+                getCategories()
+            ]);
+            setBudgets(bRes.budgets || []);
+            setTotalSpent(bRes.totalSpent || 0);
+            if (cRes?.categories) {
+                const expCats = cRes.categories.filter(c => c.type === 'expense')
+                    .map(c => ({ label: c.name, icon: c.icon, color: c.color }));
+                setRemoteCats(expCats);
+            }
         } catch (e) {
             console.warn(e.message);
         } finally {
@@ -113,8 +124,34 @@ export default function BudgetScreen() {
     const [yr, mn] = selectedMonth.split('-').map(Number);
     const monthLabel = `${MONTH_LABELS[mn - 1]} ${yr}`;
 
+    const PRESET_CATS = [
+        { label: 'Overall', icon: 'pie-chart', color: '#E91E8C' },
+        ...(remoteCats.length > 0 ? remoteCats : PRESET_CATEGORIES.slice(1))
+    ];
+
     const overallBudget = budgets.find(b => b.category === 'Overall');
     const categoryBudgets = budgets.filter(b => b.category !== 'Overall');
+
+    const renderRightActions = (progress, dragX, id) => {
+        const scale = dragX.interpolate({
+            inputRange: [-80, 0],
+            outputRange: [1, 0],
+            extrapolate: 'clamp',
+        });
+
+        return (
+            <TouchableOpacity
+                onPress={() => handleDelete(id)}
+                style={[styles.hiddenDeleteBtn, { backgroundColor: '#ef4444' }]}
+                activeOpacity={0.8}
+            >
+                <RNAnimated.View style={{ transform: [{ scale }] }}>
+                    <Feather name="trash-2" size={24} color="#fff" />
+                    <Text style={{ color: '#fff', fontSize: 10, fontWeight: '800', marginTop: 4 }}>Delete</Text>
+                </RNAnimated.View>
+            </TouchableOpacity>
+        );
+    };
 
     const renderBudgetCard = (budget) => {
         const pct = budget.allocatedAmount > 0 ? Math.min((budget.spent / budget.allocatedAmount) * 100, 100) : 0;
@@ -124,25 +161,29 @@ export default function BudgetScreen() {
         const remaining = budget.allocatedAmount - budget.spent;
 
         return (
-            <View key={budget._id} style={[styles.budgetCard, { backgroundColor: COLORS.surface }]}>
-                <View style={styles.budgetCardTop}>
-                    <View style={[styles.budgetIcon, { backgroundColor: (budget.categoryColor || '#E91E8C') + '20' }]}>
-                        <Feather name={budget.categoryIcon || 'pie-chart'} size={18} color={budget.categoryColor || '#E91E8C'} />
-                    </View>
-                    <View style={{ flex: 1 }}>
-                        <Text style={[styles.budgetCat, { color: COLORS.text }]}>{budget.category}</Text>
-                        <Text style={[styles.budgetSub, { color: over ? '#ef4444' : warn ? '#f59e0b' : COLORS.textMuted }]}>
-                            {over ? `Over by ${formatCurrency(Math.abs(remaining), userInfo?.currency)}` : `${formatCurrency(remaining, userInfo?.currency)} left`}
-                        </Text>
-                    </View>
-                    <View style={{ alignItems: 'flex-end' }}>
-                        <Text style={[styles.budgetAmt, { color: COLORS.text }]}>{formatCurrency(budget.allocatedAmount, userInfo?.currency)}</Text>
-                        <Text style={[styles.budgetSpent, { color: COLORS.textMuted }]}>Spent: {formatCurrency(budget.spent, userInfo?.currency)}</Text>
-                    </View>
-                    <TouchableOpacity onPress={() => handleDelete(budget._id)} style={styles.deleteBtn}>
-                        <Feather name="trash-2" size={14} color="#ef4444" />
-                    </TouchableOpacity>
-                </View>
+            <Animated.View key={budget._id} entering={ZoomIn.springify().damping(50).mass(0.9)} exiting={ZoomOut.duration(100)}>
+                <Swipeable
+                    renderRightActions={(prog, drag) => renderRightActions(prog, drag, budget._id)}
+                    friction={1}
+                    overshootRight={false}
+                    containerStyle={{ marginBottom: spacing.sm }}
+                >
+                    <View style={[styles.budgetCard, { backgroundColor: COLORS.surface, marginBottom: 0 }]}>
+                        <View style={styles.budgetCardTop}>
+                            <View style={[styles.budgetIcon, { backgroundColor: (budget.categoryColor || '#E91E8C') + '20' }]}>
+                                <Feather name={budget.categoryIcon || 'pie-chart'} size={18} color={budget.categoryColor || '#E91E8C'} />
+                            </View>
+                            <View style={{ flex: 1 }}>
+                                <Text style={[styles.budgetCat, { color: COLORS.text }]}>{budget.category}</Text>
+                                <Text style={[styles.budgetSub, { color: over ? '#ef4444' : warn ? '#f59e0b' : COLORS.textMuted }]}>
+                                    {over ? `Over by ${formatCurrency(Math.abs(remaining), userInfo?.currency)}` : `${formatCurrency(remaining, userInfo?.currency)} left`}
+                                </Text>
+                            </View>
+                            <View style={{ alignItems: 'flex-end' }}>
+                                <Text style={[styles.budgetAmt, { color: COLORS.text }]}>{formatCurrency(budget.allocatedAmount, userInfo?.currency)}</Text>
+                                <Text style={[styles.budgetSpent, { color: COLORS.textMuted }]}>Spent: {formatCurrency(budget.spent, userInfo?.currency)}</Text>
+                            </View>
+                        </View>
 
                 {/* Progress Bar */}
                 <View style={styles.barBg}>
@@ -153,7 +194,9 @@ export default function BudgetScreen() {
                     {over && <Text style={[styles.overTag, { color: '#ef4444', backgroundColor: '#ef444415' }]}>Over Budget</Text>}
                     {warn && <Text style={[styles.overTag, { color: '#f59e0b', backgroundColor: '#f59e0b15' }]}>Almost Full</Text>}
                 </View>
-            </View>
+                    </View>
+                </Swipeable>
+            </Animated.View>
         );
     };
 
@@ -245,7 +288,7 @@ export default function BudgetScreen() {
                 {/* Category Selection */}
                 <Text style={[styles.label, { color: COLORS.textMuted }]}>CATEGORY</Text>
                 <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8, paddingBottom: spacing.sm }}>
-                    {PRESET_CATEGORIES.map(cat => {
+                    {PRESET_CATS.map(cat => {
                         const selected = !useCustom && form.category === cat.label;
                         return (
                             <TouchableOpacity key={cat.label} onPress={() => { setUseCustom(false); setForm(f => ({ ...f, category: cat.label, categoryIcon: cat.icon, categoryColor: cat.color })); }}
@@ -318,7 +361,7 @@ const getStyles = (COLORS) => StyleSheet.create({
     budgetSub: { fontSize: 12, marginTop: 1 },
     budgetAmt: { fontWeight: '800', fontSize: 14 },
     budgetSpent: { fontSize: 11, marginTop: 1 },
-    deleteBtn: { padding: 6 },
+    hiddenDeleteBtn: { width: 80, height: '100%', borderRadius: radius.lg, justifyContent: 'center', alignItems: 'center', marginLeft: 12, elevation: 1 },
     barBg: { height: 8, backgroundColor: COLORS.border, borderRadius: 4, overflow: 'hidden' },
     barFill: { height: '100%', borderRadius: 4 },
     barLabels: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 6 },

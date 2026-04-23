@@ -1,6 +1,7 @@
 const SavingsGoal = require('../models/savingsGoalModel');
 const SavingsTransfer = require('../models/savingsTransferModel');
 const Transaction = require('../models/transactionModel');
+const Notification = require('../models/Notification');
 const { invalidatePrefixes } = require('../utils/cache');
 const mongoose = require('mongoose');
 
@@ -114,6 +115,17 @@ const completeGoal = async (req, res) => {
             io.to(`user:${req.userId}`).emit('new_savings_transfer', transferRecord);
         }
 
+        // ── Notification ───────────────────────────────────────────
+        await Notification.create({
+            user: req.userId,
+            type: 'savings_goal',
+            title: '🎉 Goal Finalized!',
+            message: `You've officially completed "${goal.name}". Great job staying disciplined!`,
+            data: { goalId: goal._id }
+        }).then(n => {
+            if (io) io.to(`user:${req.userId}`).emit('new_notification', n);
+        }).catch(() => {});
+
         res.json(goal);
     } catch (err) {
         console.error('[CompleteGoal Error]:', err);
@@ -136,6 +148,8 @@ const createGoal = async (req, res) => {
 
         // Emit real-time event
         const io = req.app.get('io');
+        invalidatePrefixes('savings');
+
         if (io) {
             io.to(`user:${req.userId}`).emit('new_savings_goal', goal);
         }
@@ -158,6 +172,8 @@ const updateGoal = async (req, res) => {
 
         // Emit real-time event
         const io = req.app.get('io');
+        invalidatePrefixes('savings');
+
         if (io) {
             io.to(`user:${req.userId}`).emit('update_savings_goal', goal);
         }
@@ -211,6 +227,8 @@ const deleteGoal = async (req, res) => {
         }
 
         await goal.deleteOne();
+        
+        invalidatePrefixes('savings');
 
         // Emit real-time event
         if (io) {
@@ -370,6 +388,29 @@ const transfer = async (req, res) => {
         if (io) {
             io.to(`user:${req.userId}`).emit('new_savings_transfer', transferRecord);
             io.to(`user:${req.userId}`).emit('update_savings_goal', goal);
+        }
+
+        // ── Feature #7: Goal Reached Alert ────────────────────────
+        if (goal.targetAmount > 0 && goal.currentAmount >= goal.targetAmount && !goal.isCompleted) {
+            // Check if alert already sent for this goal
+            const exists = await Notification.findOne({
+                user: req.userId,
+                type: 'savings_goal',
+                'data.goalId': goal._id,
+                'data.type': 'target_reached'
+            });
+
+            if (!exists) {
+                await Notification.create({
+                    user: req.userId,
+                    type: 'savings_goal',
+                    title: '🎯 Target Reached!',
+                    message: `Congratulations! You've reached your target for "${goal.name}".`,
+                    data: { goalId: goal._id, type: 'target_reached' }
+                }).then(n => {
+                    if (io) io.to(`user:${req.userId}`).emit('new_notification', n);
+                }).catch(() => {});
+            }
         }
 
         res.json({ goal, transfer: transferRecord });

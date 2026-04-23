@@ -4,14 +4,25 @@ import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { ActivityIndicator, View, TouchableOpacity, Text, StyleSheet } from 'react-native';
 import Toast from 'react-native-toast-message';
-import { Feather } from '@expo/vector-icons';
+import { Feather, Ionicons } from '@expo/vector-icons';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import QuickAddSheet from './src/components/QuickAddSheet';
 import SavingsQuickAddSheet from './src/components/SavingsQuickAddSheet';
+import AnimatedFAB from './src/components/AnimatedFAB';
+import * as Sentry from '@sentry/react-native';
+import ErrorBoundary from './src/components/ErrorBoundary';
+
+// Initialize Sentry
+Sentry.init({
+    dsn: 'https://placeholder_key@o0.ingest.sentry.io/0', // TODO: Replace with real user DSN
+    tracesSampleRate: 1.0,
+});
 
 // Contexts
 import { AuthProvider, useAuth } from './src/context/AuthContext';
 import { ThemeProvider, useTheme } from './src/context/ThemeContext';
 import { SecurityProvider, useSecurity } from './src/context/SecurityContext';
+import { useUIStore } from './src/store/uiStore';
 
 // Auth Screens
 import LoginScreen from './src/screens/auth/LoginScreen';
@@ -19,6 +30,7 @@ import RegisterScreen from './src/screens/auth/RegisterScreen';
 import TwoFAScreen from './src/screens/auth/TwoFAScreen';
 import AppLockScreen from './src/screens/auth/AppLockScreen';
 import PinSetupScreen from './src/screens/auth/PinSetupScreen';
+import OnboardingScreen from './src/screens/auth/OnboardingScreen';
 
 // Settings
 import SettingsScreen from './src/screens/main/SettingsScreen';
@@ -28,6 +40,7 @@ import SessionManagementScreen from './src/screens/main/SessionManagementScreen'
 import HomeScreen from './src/screens/main/HomeScreen';
 import TransactionsScreen from './src/screens/main/TransactionsScreen';
 import RecurringBillsScreen from './src/screens/main/RecurringBillsScreen';
+import WalletScreen from './src/screens/main/WalletScreen';
 import BudgetScreen from './src/screens/main/BudgetScreen';
 import AddTransactionScreen from './src/screens/main/AddTransactionScreen';
 import BarcodeScannerScreen from './src/screens/main/BarcodeScannerScreen';
@@ -36,6 +49,7 @@ import CurrencyConverterScreen from './src/screens/main/CurrencyConverterScreen'
 import AllServicesScreen from './src/screens/main/AllServicesScreen';
 import DebtPlannerScreen from './src/screens/main/DebtPlannerScreen';
 import AnalyticsScreen from './src/screens/main/AnalyticsScreen';
+import NotificationsScreen from './src/screens/main/NotificationsScreen';
 
 // Savings Screens
 import SavingsHomeScreen from './src/screens/savings/SavingsHomeScreen';
@@ -52,15 +66,23 @@ import ShoppingSessionScreen from './src/screens/shopping/ShoppingSessionScreen'
 import ShoppingCheckoutScreen from './src/screens/shopping/ShoppingCheckoutScreen';
 import ShoppingHistoryDetailScreen from './src/screens/shopping/ShoppingHistoryDetailScreen';
 import ShoppingTemplatesScreen from './src/screens/shopping/ShoppingTemplatesScreen';
+import ManageCategoriesScreen from './src/screens/main/ManageCategoriesScreen';
 
 import { StatusBar } from 'expo-status-bar';
 
 const Stack = createNativeStackNavigator();
 const Tab = createBottomTabNavigator();
 
-// ── Wallet Mode Context ────────────────────────────────────────
-const WalletModeContext = React.createContext({ isSavingsMode: false, setIsSavingsMode: () => {} });
-export const useWalletMode = () => React.useContext(WalletModeContext);
+const linking = {
+    prefixes: ['otter://'],
+    config: {
+        screens: {
+            AddTransaction: 'add',
+        },
+    },
+};
+
+// Wallet mode is now in src/context/WalletModeContext.js
 
 const AuthStack = () => (
     <Stack.Navigator screenOptions={{ headerShown: false }}>
@@ -73,7 +95,7 @@ const AuthStack = () => (
 // ── Shared Custom Tab Bar ──────────────────────────────────────
 const CustomTabBar = ({ state, descriptors, navigation: tabNav, onPressAdd }) => {
     const { COLORS } = useTheme();
-    const { setIsSavingsMode } = useWalletMode();
+    const setIsSavingsMode = useUIStore(state => state.setIsSavingsMode);
     const leftTabs = state.routes.slice(0, 2);
     const rightTabs = state.routes.slice(2);
 
@@ -82,15 +104,15 @@ const CustomTabBar = ({ state, descriptors, navigation: tabNav, onPressAdd }) =>
         const isFocused = state.index === index;
         const color = isFocused ? COLORS.primary : COLORS.textMuted;
         const label = options.title ?? route.name;
-        
+
         return (
             <TouchableOpacity
                 key={route.key}
-                onPress={() => { 
+                onPress={() => {
                     if (route.name === 'ExitSavings') {
                         setIsSavingsMode(false);
                     } else if (!isFocused) {
-                        tabNav.navigate(route.name); 
+                        tabNav.navigate(route.name);
                     }
                 }}
                 activeOpacity={0.75}
@@ -106,10 +128,7 @@ const CustomTabBar = ({ state, descriptors, navigation: tabNav, onPressAdd }) =>
         <View style={[styles.tabBarWrapper, { backgroundColor: COLORS.surface }]}>
             <View style={styles.tabSide}>{leftTabs.map((r, i) => renderTab(r, i))}</View>
             <View style={styles.tabCenter}>
-                <TouchableOpacity onPress={onPressAdd} activeOpacity={0.85}
-                    style={[styles.centerFab, { backgroundColor: COLORS.primary, shadowColor: COLORS.primary }]}>
-                    <Feather name="plus" size={28} color="#fff" />
-                </TouchableOpacity>
+                <AnimatedFAB navigation={tabNav} isSavingsMode={state.routes.some(r => r.name.includes('Savings'))} />
             </View>
             <View style={styles.tabSide}>{rightTabs.map((r, i) => renderTab(r, i + 2))}</View>
         </View>
@@ -137,19 +156,17 @@ const styles = StyleSheet.create({
 // ── Main Mode Tabs ─────────────────────────────────────────────
 const MainTabs = ({ navigation }) => {
     const { COLORS } = useTheme();
-    const [sheetVisible, setSheetVisible] = React.useState(false);
     return (
         <View style={{ flex: 1, backgroundColor: COLORS.background }}>
             <Tab.Navigator
                 screenOptions={{ headerShown: false }}
-                tabBar={(props) => <CustomTabBar {...props} onPressAdd={() => setSheetVisible(true)} />}
+                tabBar={(props) => <CustomTabBar {...props} />}
             >
                 <Tab.Screen name="Home" component={HomeScreen} options={{ title: 'Home', tabBarIcon: ({ color }) => <Feather name="home" size={22} color={color} /> }} />
+                <Tab.Screen name="Wallets" component={WalletScreen} options={{ title: 'Wallets', tabBarIcon: ({ color }) => <Ionicons name="wallet-outline" size={22} color={color} /> }} />
                 <Tab.Screen name="Transactions" component={TransactionsScreen} options={{ title: 'Transactions', tabBarIcon: ({ color }) => <Feather name="list" size={22} color={color} /> }} />
-                <Tab.Screen name="Bills" component={RecurringBillsScreen} options={{ title: 'Bills', tabBarIcon: ({ color }) => <Feather name="repeat" size={22} color={color} /> }} />
                 <Tab.Screen name="Budget" component={BudgetScreen} options={{ title: 'Budget', tabBarIcon: ({ color }) => <Feather name="pie-chart" size={22} color={color} /> }} />
             </Tab.Navigator>
-            <QuickAddSheet visible={sheetVisible} onClose={() => setSheetVisible(false)} navigation={navigation} />
         </View>
     );
 };
@@ -157,14 +174,12 @@ const MainTabs = ({ navigation }) => {
 // ── Savings Mode Tabs ──────────────────────────────────────────
 const SavingsTabs = ({ navigation: rootNav }) => {
     const { COLORS } = useTheme();
-    const { setIsSavingsMode } = useWalletMode();
-    const [sheetVisible, setSheetVisible] = React.useState(false);
-
+    const setIsSavingsMode = useUIStore(state => state.setIsSavingsMode);
     return (
         <View style={{ flex: 1, backgroundColor: COLORS.background }}>
             <Tab.Navigator
                 screenOptions={{ headerShown: false }}
-                tabBar={(props) => <CustomTabBar {...props} onPressAdd={() => setSheetVisible(true)} />}
+                tabBar={(props) => <CustomTabBar {...props} />}
             >
                 <Tab.Screen name="SavingsHome" component={SavingsHomeScreen} options={{ title: 'Overview', tabBarIcon: ({ color }) => <Feather name="home" size={22} color={color} /> }} />
                 <Tab.Screen name="SavingsGoals" component={SavingsHomeScreen} options={{ title: 'Goals', tabBarIcon: ({ color }) => <Feather name="target" size={22} color={color} /> }} />
@@ -176,7 +191,6 @@ const SavingsTabs = ({ navigation: rootNav }) => {
                     options={{ title: 'Main', tabBarIcon: ({ color }) => <Feather name="log-out" size={22} color={color} /> }}
                 />
             </Tab.Navigator>
-            <SavingsQuickAddSheet visible={sheetVisible} onClose={() => setSheetVisible(false)} navigation={rootNav} />
         </View>
     );
 };
@@ -187,9 +201,9 @@ const GlobalStatusBar = () => {
 };
 
 const AppNavigator = () => {
-    const { userToken, isSplashLoading } = useAuth();
+    const { userToken, userInfo, isSplashLoading } = useAuth();
     const { COLORS, isDarkMode } = useTheme();
-    const { isSavingsMode } = useWalletMode();
+    const isSavingsMode = useUIStore(state => state.isSavingsMode);
 
     const navTheme = isDarkMode
         ? { ...DarkTheme, colors: { ...DarkTheme.colors, background: COLORS.background, card: COLORS.surface } }
@@ -204,54 +218,54 @@ const AppNavigator = () => {
     }
 
     return (
-        <NavigationContainer theme={navTheme}>
+        <NavigationContainer theme={navTheme} linking={linking}>
             <View style={{ flex: 1, backgroundColor: COLORS.background }}>
                 {userToken ? (
-                    <Stack.Navigator
-                        screenOptions={{
-                            headerShown: false,
-                            contentStyle: { backgroundColor: COLORS.background },
-                            animation: 'slide_from_right',
-                            animationDuration: 280,
-                        }}
-                    >
-                        {isSavingsMode ? (
-                            <Stack.Screen 
-                                name="SavingsTabs" 
-                                component={SavingsTabs} 
-                                options={{ animation: 'slide_from_right' }} 
+                    !userInfo?.isOnboarded ? (
+                        <OnboardingScreen />
+                    ) : (
+                        <Stack.Navigator
+                            screenOptions={{
+                                headerShown: false,
+                                contentStyle: { backgroundColor: COLORS.background },
+                                animation: 'slide_from_right',
+                                animationDuration: 280,
+                            }}
+                        >
+                            <Stack.Screen
+                                name="HomeRoot"
+                                component={isSavingsMode ? SavingsTabs : MainTabs}
+                                options={{ 
+                                    animation: isSavingsMode ? 'slide_from_right' : 'slide_from_left' 
+                                }}
                             />
-                        ) : (
-                            <Stack.Screen 
-                                name="MainTabs" 
-                                component={MainTabs}
-                                options={{ animation: 'slide_from_left' }}
-                            />
-                        )}
-                        
-                        {/* Shared Screens available in both modes */}
-                        <Stack.Screen name="AddTransaction" component={AddTransactionScreen} />
-                        <Stack.Screen name="BarcodeScanner" component={BarcodeScannerScreen} />
-                        <Stack.Screen name="DebtScreen" component={DebtScreen} />
-                        <Stack.Screen name="SavingsGoalDetail" component={SavingsGoalDetailScreen} />
-                        <Stack.Screen name="SavingsTransfer" component={SavingsTransferScreen} />
-                        <Stack.Screen name="SavingsTransferHistory" component={SavingsTransferHistoryScreen} />
-                        <Stack.Screen name="AddSavingsGoal" component={AddSavingsGoalScreen} />
-                        <Stack.Screen name="SavingsGoalSelector" component={SavingsGoalSelectorScreen} />
-                        <Stack.Screen name="SavingsArchive" component={SavingsArchiveScreen} />
-                        <Stack.Screen name="ShoppingHome" component={ShoppingHomeScreen} />
-                        <Stack.Screen name="ShoppingSession" component={ShoppingSessionScreen} />
-                        <Stack.Screen name="ShoppingCheckout" component={ShoppingCheckoutScreen} />
-                        <Stack.Screen name="ShoppingHistoryDetail" component={ShoppingHistoryDetailScreen} />
-                    <Stack.Screen name="ShoppingTemplates" component={ShoppingTemplatesScreen} />
-                        <Stack.Screen name="Settings" component={SettingsScreen} />
-                        <Stack.Screen name="PinSetup" component={PinSetupScreen} />
-                        <Stack.Screen name="Sessions" component={SessionManagementScreen} />
-                        <Stack.Screen name="CurrencyConverter" component={CurrencyConverterScreen} />
-                        <Stack.Screen name="AllServices" component={AllServicesScreen} />
-                        <Stack.Screen name="DebtPlanner" component={DebtPlannerScreen} />
-                        <Stack.Screen name="Analytics" component={AnalyticsScreen} />
-                    </Stack.Navigator>
+
+                            {/* Shared Screens available in both modes */}
+                            <Stack.Screen name="AddTransaction" component={AddTransactionScreen} />
+                            <Stack.Screen name="BarcodeScanner" component={BarcodeScannerScreen} />
+                            <Stack.Screen name="DebtScreen" component={DebtScreen} />
+                            <Stack.Screen name="SavingsGoalDetail" component={SavingsGoalDetailScreen} />
+                            <Stack.Screen name="SavingsTransfer" component={SavingsTransferScreen} />
+                            <Stack.Screen name="SavingsTransferHistory" component={SavingsTransferHistoryScreen} />
+                            <Stack.Screen name="AddSavingsGoal" component={AddSavingsGoalScreen} />
+                            <Stack.Screen name="SavingsGoalSelector" component={SavingsGoalSelectorScreen} />
+                            <Stack.Screen name="SavingsArchive" component={SavingsArchiveScreen} />
+                            <Stack.Screen name="ShoppingHome" component={ShoppingHomeScreen} />
+                            <Stack.Screen name="ShoppingSession" component={ShoppingSessionScreen} />
+                            <Stack.Screen name="ShoppingCheckout" component={ShoppingCheckoutScreen} />
+                            <Stack.Screen name="ShoppingHistoryDetail" component={ShoppingHistoryDetailScreen} />
+                            <Stack.Screen name="ShoppingTemplates" component={ShoppingTemplatesScreen} />
+                            <Stack.Screen name="Settings" component={SettingsScreen} />
+                            <Stack.Screen name="ManageCategories" component={ManageCategoriesScreen} />
+                            <Stack.Screen name="PinSetup" component={PinSetupScreen} />
+                            <Stack.Screen name="Sessions" component={SessionManagementScreen} />
+                            <Stack.Screen name="CurrencyConverter" component={CurrencyConverterScreen} />
+                            <Stack.Screen name="AllServices" component={AllServicesScreen} />
+                            <Stack.Screen name="DebtPlanner" component={DebtPlannerScreen} />
+                            <Stack.Screen name="Analytics" component={AnalyticsScreen} />
+                            <Stack.Screen name="Notifications" component={NotificationsScreen} />
+                        </Stack.Navigator>
+                    )
                 ) : <AuthStack />}
             </View>
         </NavigationContainer>
@@ -266,20 +280,23 @@ const AppLockOverlay = () => {
     return <AppLockScreen />;
 };
 
-export default function App() {
-    const [isSavingsMode, setIsSavingsMode] = React.useState(false);
+function App() {
     return (
-        <ThemeProvider>
-            <AuthProvider>
-                <SecurityProvider>
-                    <WalletModeContext.Provider value={{ isSavingsMode, setIsSavingsMode }}>
-                        <GlobalStatusBar />
-                        <AppNavigator />
-                        <AppLockOverlay />
-                        <Toast />
-                    </WalletModeContext.Provider>
-                </SecurityProvider>
-            </AuthProvider>
-        </ThemeProvider>
+        <GestureHandlerRootView style={{ flex: 1 }}>
+            <ThemeProvider>
+                <AuthProvider>
+                    <SecurityProvider>
+                        <ErrorBoundary>
+                            <GlobalStatusBar />
+                            <AppNavigator />
+                            <AppLockOverlay />
+                            <Toast />
+                        </ErrorBoundary>
+                    </SecurityProvider>
+                </AuthProvider>
+            </ThemeProvider>
+        </GestureHandlerRootView>
     );
 }
+
+export default Sentry.wrap(App);

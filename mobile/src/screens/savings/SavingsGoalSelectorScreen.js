@@ -26,7 +26,7 @@ const IconRenderer = ({ name, family, size, color }) => {
 };
 
 export default function SavingsGoalSelectorScreen({ route, navigation }) {
-    const { action } = route.params; // 'deposit', 'income', 'move_from', 'move_to'
+    const action = route.params?.action || 'deposit'; // 'deposit', 'income', 'move_from', 'move_to'
     const { COLORS } = useTheme();
     const { userInfo } = useAuth();
     const [goals, setGoals] = useState([]);
@@ -36,7 +36,25 @@ export default function SavingsGoalSelectorScreen({ route, navigation }) {
         const load = async () => {
             try {
                 const res = await getSavingsGoals();
-                const fetchedGoals = res.goals?.filter(g => !g.isCompleted) || [];
+                const fetchedGoals = res.goals?.filter(g => {
+                    // Prevent selecting the same goal as source and target
+                    if (route.params?.sourceGoal?._id && String(g._id) === String(route.params.sourceGoal._id)) {
+                        return false;
+                    }
+
+                    const isMaster = g.name === 'Savings Balance';
+                    if (isMaster) return true; // Never filter out Master Pot
+                    
+                    const isComplete = g.isCompleted || (g.targetAmount > 0 && g.currentAmount >= g.targetAmount);
+                    
+                    if (action === 'move_from') {
+                        // When withdrawing, hide goals that are empty
+                        return g.currentAmount > 0;
+                    } else {
+                        // When depositing, hide completed goals
+                        return !isComplete;
+                    }
+                }) || [];
                 setGoals(fetchedGoals);
 
                 // Auto-select logic for direct "Save Money" from Main Balance
@@ -75,6 +93,8 @@ export default function SavingsGoalSelectorScreen({ route, navigation }) {
     };
 
     const getTitle = () => {
+        if (route.params?.titleOverride) return route.params.titleOverride;
+        
         switch (action) {
             case 'deposit': return 'Select Target Goal';
             case 'income': return 'Add Income To...';

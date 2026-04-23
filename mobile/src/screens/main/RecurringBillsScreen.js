@@ -1,24 +1,30 @@
 import React, { useState, useCallback, useEffect } from 'react';
 import {
-    View, Text, StyleSheet, TouchableOpacity, ScrollView,
-    ActivityIndicator, RefreshControl, TouchableWithoutFeedback,
-    TextInput, Alert,
+    View, Text, StyleSheet, TouchableOpacity, ScrollView, ActivityIndicator,
+    TextInput, Alert, Platform, Animated as RNAnimated, RefreshControl
 } from 'react-native';
+import { FlashList } from '@shopify/flash-list';
+import Animated, { ZoomIn, FadeOut, ZoomOut } from 'react-native-reanimated';
+import { Swipeable } from 'react-native-gesture-handler';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Feather } from '@expo/vector-icons';
+import Constants from 'expo-constants';
 import * as Notifications from 'expo-notifications';
 import BottomSheetModal from '../../components/BottomSheetModal';
 import { useTheme } from '../../context/ThemeContext';
+import { useFinanceStore } from '../../store/financeStore';
 import { getRecurringBills, createRecurringBill, deleteRecurringBill, markBillPaid } from '../../api/api';
 import { spacing, radius } from '../../theme/colors';
 import Skeleton from '../../components/Skeleton';
 import CustomAlertModal from '../../components/CustomAlertModal';
 import { useAuth } from '../../context/AuthContext';
+import { getSocket, connectSocket } from '../../utils/socket';
 
 // ── Notification setup ────────────────────────────────────────────────────────
 Notifications.setNotificationHandler({
     handleNotification: async () => ({
-        shouldShowAlert: true,
+        shouldShowBanner: true,
+        shouldShowList: true,
         shouldPlaySound: true,
         shouldSetBadge: true,
     }),
@@ -45,34 +51,73 @@ const getDaysUntilDue = (dateStr) => {
     return Math.ceil(diff / (1000 * 60 * 60 * 24));
 };
 
+const isExpoGo = Constants.appOwnership === 'expo';
+
 const scheduleNotification = async (bill) => {
-    await Notifications.cancelScheduledNotificationAsync(bill._id).catch(() => { });
-    const dueDate = new Date(bill.nextDueDate);
-    // Notify 3 days before
-    const notifDate = new Date(dueDate);
-    notifDate.setDate(notifDate.getDate() - 3);
-    if (notifDate > new Date()) {
-        await Notifications.scheduleNotificationAsync({
-            identifier: bill._id,
-            content: {
-                title: '🔔 Upcoming Bill',
-                body: `${bill.name} — ${formatCurrency(bill.amount)} is due in 3 days!`,
-                data: { billId: bill._id },
-            },
-            trigger: notifDate,
-        });
+    // Expo Go does NOT support real scheduled notifications.
+    // Notifications will only work correctly in a development or production build.
+    if (isExpoGo) {
+        console.log(`[NotifLog] Skipping notification scheduling in Expo Go for: ${bill.name}`);
+        return;
     }
-    // Also notify on the due date itself
-    if (dueDate > new Date()) {
-        await Notifications.scheduleNotificationAsync({
-            identifier: `${bill._id}_due`,
-            content: {
-                title: '💳 Bill Due Today!',
-                body: `${bill.name} — ${formatCurrency(bill.amount)} is due today.`,
-                data: { billId: bill._id },
-            },
-            trigger: dueDate,
-        });
+    try {
+        await Notifications.cancelScheduledNotificationAsync(`${bill._id}_upcoming`).catch(() => { });
+        await Notifications.cancelScheduledNotificationAsync(`${bill._id}_due`).catch(() => { });
+
+        const dueDate = new Date(bill.nextDueDate);
+        const now = new Date();
+
+        console.log(`[NotifLog] Scheduling for ${bill.name}. Due: ${dueDate.toLocaleString()}, Now: ${now.toLocaleString()}`);
+
+        if (Platform.OS === 'android') {
+            await Notifications.setNotificationChannelAsync('bill-alerts', {
+                name: 'Bill & Payment Reminders',
+                importance: Notifications.AndroidImportance.MAX,
+                enableVibrate: true,
+            });
+        }
+
+        // Logic: For triggers > 24 days away, 'seconds' overflows 32-bit int in Android (2^31 ms).
+        // We use a Date object trigger which Expo handles more robustly.
+
+        // 1. Upcoming Reminder (3 days before)
+        const notifDate = new Date(dueDate.getTime());
+        notifDate.setDate(notifDate.getDate() - 3);
+
+        if (notifDate > now) {
+            console.log(`[NotifLog] Scheduling upcoming for: ${notifDate.toLocaleString()}`);
+            await Notifications.scheduleNotificationAsync({
+                identifier: `${bill._id}_upcoming`,
+                content: {
+                    title: '🔔 Upcoming Bill',
+                    body: `${bill.name} — ${formatCurrency(bill.amount)} is due in 3 days!`,
+                    data: { billId: bill._id },
+                },
+                trigger: {
+                    date: notifDate,
+                    channelId: 'bill-alerts'
+                },
+            });
+        }
+
+        // 2. Due Date Reminder (Day of)
+        if (dueDate > now) {
+            console.log(`[NotifLog] Scheduling due date for: ${dueDate.toLocaleString()}`);
+            await Notifications.scheduleNotificationAsync({
+                identifier: `${bill._id}_due`,
+                content: {
+                    title: '💳 Bill Due Today!',
+                    body: `${bill.name} — ${formatCurrency(bill.amount)} is due today.`,
+                    data: { billId: bill._id },
+                },
+                trigger: {
+                    date: dueDate,
+                    channelId: 'bill-alerts'
+                },
+            });
+        }
+    } catch (e) {
+        console.warn('[RecurringBills] Notification Error:', e.message);
     }
 };
 
@@ -86,7 +131,10 @@ export default function RecurringBillsScreen() {
     const { userInfo } = useAuth();
     const styles = getStyles(COLORS);
 
-    const [bills, setBills] = useState([]);
+    const bills = useFinanceStore(state => state.recurringBills);
+    const fetchRecurringBills = useFinanceStore(state => state.fetchRecurringBills);
+    const loadingBills = useFinanceStore(state => state.isLoadingBills);
+
     const [loading, setLoading] = useState(true);
     const [refreshing, setRefreshing] = useState(false);
     const [modalVisible, setModalVisible] = useState(false);
@@ -94,22 +142,52 @@ export default function RecurringBillsScreen() {
     const [saving, setSaving] = useState(false);
     const [alertConfig, setAlertConfig] = useState({ visible: false, title: '', message: '', type: 'info', onConfirm: null });
 
-    const load = useCallback(async () => {
+    const load = useCallback(async (force = false) => {
         try {
-            const data = await getRecurringBills();
-            setBills(data);
+            await fetchRecurringBills(force);
         } catch (e) {
             console.warn(e.message);
         } finally {
             setLoading(false);
             setRefreshing(false);
         }
-    }, []);
+    }, [fetchRecurringBills]);
 
     useEffect(() => {
         requestNotifPermission();
-        load();
+        load(false);
     }, [load]);
+
+    useEffect(() => {
+        if (!userInfo?._id) return;
+        connectSocket(userInfo._id);
+        const socket = getSocket();
+
+        const handleNew = (bill) => {
+            load(true);
+            scheduleNotification(bill);
+        };
+
+        const handleUpdate = (bill) => {
+            load(true);
+            scheduleNotification(bill);
+        };
+
+        const handleDelete = (data) => {
+            load(true);
+            Notifications.cancelScheduledNotificationAsync(data._id).catch(() => { });
+        };
+
+        socket.on('new_recurring_bill', handleNew);
+        socket.on('update_recurring_bill', handleUpdate);
+        socket.on('delete_recurring_bill', handleDelete);
+
+        return () => {
+            socket.off('new_recurring_bill', handleNew);
+            socket.off('update_recurring_bill', handleUpdate);
+            socket.off('delete_recurring_bill', handleDelete);
+        };
+    }, [userInfo?._id]);
 
     const handleCreate = async () => {
         if (!form.name.trim() || !form.amount) return Alert.alert('Missing Fields', 'Please fill in the name and amount.');
@@ -120,8 +198,6 @@ export default function RecurringBillsScreen() {
                 amount: parseFloat(form.amount),
                 startDate: form.startDate || undefined,
             });
-            setBills(prev => [bill, ...prev]);
-            await scheduleNotification(bill);
             setModalVisible(false);
             setForm({ name: '', amount: '', category: 'Bills', categoryIcon: 'file-text', categoryColor: '#6b7280', frequency: 'monthly', startDate: '' });
         } catch (e) {
@@ -166,6 +242,41 @@ export default function RecurringBillsScreen() {
     const upcoming = bills.filter(b => getDaysUntilDue(b.nextDueDate) > 0 && getDaysUntilDue(b.nextDueDate) <= 7);
     const rest = bills.filter(b => getDaysUntilDue(b.nextDueDate) > 7);
 
+    const flatData = [];
+    if (overdue.length > 0) {
+        flatData.push({ type: 'header', title: '⚠️ Overdue', color: '#ef4444', id: 'head-overdue' });
+        flatData.push(...overdue.map(b => ({ type: 'bill', item: b, id: b._id })));
+    }
+    if (upcoming.length > 0) {
+        flatData.push({ type: 'header', title: '⏰ Due This Week', color: '#f59e0b', id: 'head-upcoming' });
+        flatData.push(...upcoming.map(b => ({ type: 'bill', item: b, id: b._id })));
+    }
+    if (rest.length > 0) {
+        flatData.push({ type: 'header', title: '📋 Upcoming', color: COLORS.textMuted, id: 'head-rest' });
+        flatData.push(...rest.map(b => ({ type: 'bill', item: b, id: b._id })));
+    }
+
+    const renderRightActions = (progress, dragX, bill) => {
+        const scale = dragX.interpolate({
+            inputRange: [-80, 0],
+            outputRange: [1, 0],
+            extrapolate: 'clamp',
+        });
+
+        return (
+            <TouchableOpacity
+                onPress={() => handleDelete(bill._id)}
+                style={[styles.hiddenDeleteBtn, { backgroundColor: '#ef4444' }]}
+                activeOpacity={0.8}
+            >
+                <RNAnimated.View style={{ transform: [{ scale }] }}>
+                    <Feather name="trash-2" size={24} color="#fff" />
+                    <Text style={{ color: '#fff', fontSize: 10, fontWeight: '800', marginTop: 4 }}>Delete</Text>
+                </RNAnimated.View>
+            </TouchableOpacity>
+        );
+    };
+
     const renderBill = (bill) => {
         const days = getDaysUntilDue(bill.nextDueDate);
         const isOverdue = days <= 0;
@@ -174,27 +285,33 @@ export default function RecurringBillsScreen() {
         const statusLabel = isOverdue ? `${Math.abs(days)}d overdue` : days === 0 ? 'Due today' : `Due in ${days}d`;
 
         return (
-            <View key={bill._id} style={[styles.billCard, { backgroundColor: COLORS.surface, borderLeftColor: statusColor, borderLeftWidth: 3 }]}>
-                <View style={[styles.billIcon, { backgroundColor: (bill.categoryColor || '#6b7280') + '20' }]}>
-                    <Feather name={bill.categoryIcon || 'file-text'} size={18} color={bill.categoryColor || '#6b7280'} />
-                </View>
-                <View style={{ flex: 1 }}>
-                    <Text style={[styles.billName, { color: COLORS.text }]}>{bill.name}</Text>
-                    <Text style={[styles.billMeta, { color: COLORS.textMuted }]}>{FREQ_LABELS[bill.frequency]} · {bill.category}</Text>
-                </View>
-                <View style={styles.billRight}>
-                    <Text style={[styles.billAmount, { color: COLORS.expense }]}>-{formatCurrency(bill.amount)}</Text>
-                    <Text style={[styles.billDue, { color: statusColor }]}>{statusLabel}</Text>
-                </View>
-                <View style={styles.billActions}>
-                    <TouchableOpacity onPress={() => handleMarkPaid(bill._id)} style={[styles.actionBtn, { backgroundColor: COLORS.income + '20' }]}>
-                        <Feather name="check" size={16} color={COLORS.income} />
-                    </TouchableOpacity>
-                    <TouchableOpacity onPress={() => handleDelete(bill._id)} style={[styles.actionBtn, { backgroundColor: '#ef444420' }]}>
-                        <Feather name="trash-2" size={16} color="#ef4444" />
-                    </TouchableOpacity>
-                </View>
-            </View>
+            <Animated.View key={bill._id} entering={ZoomIn.springify().damping(50).mass(0.9)} exiting={ZoomOut.duration(100)}>
+                <Swipeable
+                    renderRightActions={(prog, drag) => renderRightActions(prog, drag, bill)}
+                    friction={1}
+                    overshootRight={false}
+                    containerStyle={{ marginBottom: spacing.xs }}
+                >
+                    <View style={[styles.billCard, { backgroundColor: COLORS.surface, borderLeftColor: statusColor, borderLeftWidth: 3, marginBottom: 0 }]}>
+                        <View style={[styles.billIcon, { backgroundColor: (bill.categoryColor || '#6b7280') + '20' }]}>
+                            <Feather name={bill.categoryIcon || 'file-text'} size={18} color={bill.categoryColor || '#6b7280'} />
+                        </View>
+                        <View style={{ flex: 1 }}>
+                            <Text style={[styles.billName, { color: COLORS.text }]}>{bill.name}</Text>
+                            <Text style={[styles.billMeta, { color: COLORS.textMuted }]}>{FREQ_LABELS[bill.frequency]} · {bill.category}</Text>
+                        </View>
+                        <View style={styles.billRight}>
+                            <Text style={[styles.billAmount, { color: COLORS.expense }]}>-{formatCurrency(bill.amount)}</Text>
+                            <Text style={[styles.billDue, { color: statusColor }]}>{statusLabel}</Text>
+                        </View>
+                        <View style={styles.billActions}>
+                            <TouchableOpacity onPress={() => handleMarkPaid(bill._id)} style={[styles.actionBtn, { backgroundColor: COLORS.income + '20' }]}>
+                                <Feather name="check" size={16} color={COLORS.income} />
+                            </TouchableOpacity>
+                        </View>
+                    </View>
+                </Swipeable>
+            </Animated.View>
         );
     };
 
@@ -229,40 +346,28 @@ export default function RecurringBillsScreen() {
                     ))}
                 </View>
             ) : (
-                <ScrollView
-                    showsVerticalScrollIndicator={false}
-                    refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); load(); }} tintColor={COLORS.primary} />}
-                    contentContainerStyle={styles.content}
-                >
-                    {bills.length === 0 ? (
-                        <View style={styles.empty}>
-                            <Text style={styles.emptyEmoji}>🔁</Text>
-                            <Text style={[styles.emptyTitle, { color: COLORS.text }]}>No Recurring Bills</Text>
-                            <Text style={[styles.emptyText, { color: COLORS.textMuted }]}>Tap + to add a bill and get reminded automatically.</Text>
-                        </View>
-                    ) : (
-                        <>
-                            {overdue.length > 0 && (
-                                <View>
-                                    <Text style={[styles.groupTitle, { color: '#ef4444' }]}>⚠️ Overdue</Text>
-                                    {overdue.map(renderBill)}
-                                </View>
-                            )}
-                            {upcoming.length > 0 && (
-                                <View>
-                                    <Text style={[styles.groupTitle, { color: '#f59e0b' }]}>⏰ Due This Week</Text>
-                                    {upcoming.map(renderBill)}
-                                </View>
-                            )}
-                            {rest.length > 0 && (
-                                <View>
-                                    <Text style={[styles.groupTitle, { color: COLORS.textMuted }]}>📋 Upcoming</Text>
-                                    {rest.map(renderBill)}
-                                </View>
-                            )}
-                        </>
-                    )}
-                </ScrollView>
+                <View style={{ flex: 1, height: '100%' }}>
+                    <FlashList
+                        contentContainerStyle={styles.content}
+                        data={flatData}
+                        keyExtractor={item => item.id}
+                        getItemType={item => item.type}
+                        estimatedItemSize={90}
+                        showsVerticalScrollIndicator={false}
+                        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); load(true); }} tintColor={COLORS.primary} />}
+                        ListEmptyComponent={() => (
+                            <View style={styles.empty}>
+                                <Text style={styles.emptyEmoji}>🔁</Text>
+                                <Text style={[styles.emptyTitle, { color: COLORS.text }]}>No Recurring Bills</Text>
+                                <Text style={[styles.emptyText, { color: COLORS.textMuted }]}>Tap + to add a bill and get reminded automatically.</Text>
+                            </View>
+                        )}
+                        renderItem={({ item }) => {
+                            if (item.type === 'header') return <Text style={[styles.groupTitle, { color: item.color }]}>{item.title}</Text>;
+                            return renderBill(item.item);
+                        }}
+                    />
+                </View>
             )}
 
             {/* Add Bill Modal */}
@@ -352,6 +457,7 @@ const getStyles = (COLORS) => StyleSheet.create({
     billDue: { fontSize: 11, fontWeight: '600', marginTop: 2 },
     billActions: { flexDirection: 'row', gap: 6 },
     actionBtn: { width: 32, height: 32, borderRadius: 16, justifyContent: 'center', alignItems: 'center' },
+    hiddenDeleteBtn: { width: 80, height: '100%', borderRadius: radius.xl, justifyContent: 'center', alignItems: 'center', marginLeft: 12, elevation: 1 },
     // Modal
     overlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
     sheet: { borderTopLeftRadius: radius.xl, borderTopRightRadius: radius.xl, padding: spacing.lg, paddingBottom: 48 },

@@ -1,4 +1,5 @@
 const User = require('../models/userModel');
+const { convertUserFinances } = require('../services/currencyConversionService');
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  GET /api/users/me
@@ -12,6 +13,7 @@ const getProfile = async (req, res) => {
             email: req.user.email,
             currency: req.user.currency,
             avatarUrl: req.user.avatarUrl,
+            isOnboarded: req.user.isOnboarded,
             pushToken: req.user.pushToken,
             createdAt: req.user.createdAt,
         });
@@ -22,17 +24,31 @@ const getProfile = async (req, res) => {
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  PATCH /api/users/me
-//  Body: { name, currency, avatarUrl }
-//  Update profile fields (not password — use dedicated endpoint for that)
-// ─────────────────────────────────────────────────────────────────────────────
 const updateProfile = async (req, res) => {
     try {
-        const { name, currency, avatarUrl } = req.body;
+        const { name, currency, avatarUrl, isOnboarded } = req.body;
         const updates = {};
         if (name) updates.name = name;
-        if (currency) updates.currency = currency;
         if (avatarUrl !== undefined) updates.avatarUrl = avatarUrl;
+        if (isOnboarded !== undefined) updates.isOnboarded = isOnboarded;
+
+        // ── Handle Currency Migration ──────────────────────────────────────────
+        if (currency && currency !== req.user.currency) {
+            try {
+                await convertUserFinances(req.userId, req.user.currency, currency);
+                updates.currency = currency;
+                
+                // Fire a real-time event to the user's active devices to re-sync dashboard
+                const io = req.app.get('io');
+                if (io) {
+                    io.to(`user:${req.userId}`).emit('currency_updated');
+                }
+            } catch (err) {
+                return res.status(503).json({ error: 'Currency conversion service is currently unavailable. Please try again later.' });
+            }
+        } else if (currency) {
+            updates.currency = currency;
+        }
 
         const user = await User.findByIdAndUpdate(
             req.userId,
@@ -68,4 +84,22 @@ const savePushToken = async (req, res) => {
     }
 };
 
-module.exports = { getProfile, updateProfile, savePushToken };
+const completeOnboarding = async (req, res) => {
+    try {
+        const { currency } = req.body;
+        const updates = { isOnboarded: true };
+        if (currency) updates.currency = currency;
+
+        const user = await User.findByIdAndUpdate(
+            req.userId,
+            { $set: updates },
+            { new: true }
+        ).select('-password');
+
+        res.json(user);
+    } catch (err) {
+        res.status(500).json({ error: 'Failed to complete onboarding.' });
+    }
+};
+
+module.exports = { getProfile, updateProfile, savePushToken, completeOnboarding };

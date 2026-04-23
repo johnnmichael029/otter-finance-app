@@ -9,6 +9,8 @@ import { useAuth } from '../../context/AuthContext';
 import { checkoutShopping } from '../../api/api';
 import { spacing, radius } from '../../theme/colors';
 import CustomAlertModal from '../../components/CustomAlertModal';
+import { useFinanceStore } from '../../store/financeStore';
+import { calcNativeDeduct, hasEnoughBalance } from '../../components/WalletSelector';
 
 const formatCurrency = (amount, currency = 'PHP') =>
     new Intl.NumberFormat('en-PH', { style: 'currency', currency }).format(amount || 0);
@@ -20,38 +22,63 @@ const PAYMENT_METHODS = [
     { id: 'other', label: 'Other', icon: 'dots-horizontal', color: '#8b5cf6' },
 ];
 
-const SOURCES = [
-    { id: 'main_balance', label: 'Main Balance', sub: 'Your wallet', icon: 'home', color: '#E91E8C', isMCI: false },
-    { id: 'savings_balance', label: 'Savings Balance', sub: 'Your savings pot', icon: 'piggy-bank-outline', color: '#3b82f6', isMCI: true },
-];
+// Previous hardcoded SOURCES removed in favor of dynamic financeStore wallets
 
 export default function ShoppingCheckoutScreen({ route, navigation }) {
     const { session, items, total, budgetNum, label } = route.params;
     const { COLORS } = useTheme();
     const { userInfo } = useAuth();
+    const wallets = useFinanceStore(state => state.wallets);
+    const cryptoPrices = useFinanceStore(state => state.cryptoPrices);
     const styles = getStyles(COLORS);
 
+    // Track selected wallet as full object for smart conversion
+    const [selectedWallet, setSelectedWallet] = useState(wallets[0] || null);
     const [paymentMethod, setPaymentMethod] = useState('gcash');
-    const [source, setSource] = useState('main_balance');
     const [loading, setLoading] = useState(false);
     const [alertConfig, setAlertConfig] = useState({ visible: false, title: '', message: '', type: 'confirm', onConfirm: () => { } });
+
+    const source = selectedWallet?._id || null;
 
     const pct = budgetNum > 0 ? Math.min((total / budgetNum) * 100, 100) : 0;
     const budgetColor = pct >= 100 ? '#ef4444' : pct >= 80 ? '#f59e0b' : '#22c55e';
 
     const handleConfirm = async () => {
+        // Balance pre-check before checkout
+        if (selectedWallet) {
+            if (!hasEnoughBalance(selectedWallet, total, cryptoPrices)) {
+                setAlertConfig({
+                    visible: true,
+                    title: 'Insufficient Balance',
+                    message: `Your ${selectedWallet.name} wallet doesn't have enough balance for this purchase of ${formatCurrency(total, userInfo?.currency)}.`,
+                    type: 'info',
+                    onConfirm: () => setAlertConfig(p => ({ ...p, visible: false }))
+                });
+                return;
+            }
+        }
+
+        // Calculate native deduct amount for crypto wallets
+        let walletDeductAmount = null;
+        if (selectedWallet) {
+            const deduct = calcNativeDeduct(selectedWallet, total, cryptoPrices);
+            walletDeductAmount = deduct?.nativeAmount ?? null;
+        }
+
         setLoading(true);
         try {
             await checkoutShopping(session._id, {
                 paymentMethod,
                 source,
                 note: `${paymentMethod} payment`,
+                walletDeductAmount,
             });
 
+            const walletName = selectedWallet?.name || 'your wallet';
             setAlertConfig({
                 visible: true,
                 title: '🎉 Shopping Done!',
-                message: `${formatCurrency(total, userInfo?.currency)} has been deducted from your ${source === 'main_balance' ? 'Main Balance' : 'Savings Account'}.`,
+                message: `${formatCurrency(total, userInfo?.currency)} has been deducted from ${walletName}.`,
                 type: 'info',
                 onConfirm: () => {
                     setAlertConfig(p => ({ ...p, visible: false }));
@@ -76,7 +103,10 @@ export default function ShoppingCheckoutScreen({ route, navigation }) {
         <SafeAreaView style={[styles.safe, { backgroundColor: COLORS.background }]}>
             {/* Header */}
             <View style={styles.header}>
-                <TouchableOpacity onPress={() => navigation.goBack()} style={[styles.backBtn, { backgroundColor: COLORS.surface }]}>
+                <TouchableOpacity 
+                    onPress={() => navigation.canGoBack() ? navigation.goBack() : navigation.navigate('ShoppingHome')} 
+                    style={[styles.backBtn, { backgroundColor: COLORS.surface }]}
+                >
                     <Feather name="arrow-left" size={20} color={COLORS.text} />
                 </TouchableOpacity>
                 <Text style={[styles.headerTitle, { color: COLORS.text }]}>Checkout</Text>
@@ -148,36 +178,69 @@ export default function ShoppingCheckoutScreen({ route, navigation }) {
 
                 {/* Deduction Source */}
                 <View style={styles.sectionPad}>
-                    <Text style={[styles.sectionTitle, { color: COLORS.text }]}>Deduct From</Text>
+                    <Text style={[styles.sectionTitle, { color: COLORS.text }]}>Deduct From Wallet</Text>
                     <View style={styles.sourceList}>
-                        {SOURCES.map(s => (
-                            <TouchableOpacity
-                                key={s.id}
-                                style={[styles.sourceCard, {
-                                    backgroundColor: COLORS.surface,
-                                    borderColor: source === s.id ? s.color : COLORS.border,
-                                    borderWidth: source === s.id ? 2 : 1,
-                                }]}
-                                onPress={() => setSource(s.id)}
-                                activeOpacity={0.8}
-                            >
-                                <View style={[styles.sourceIcon, { backgroundColor: s.color + '20' }]}>
-                                    {s.isMCI
-                                        ? <MaterialCommunityIcons name={s.icon} size={22} color={s.color} />
-                                        : <Feather name={s.icon} size={22} color={s.color} />
-                                    }
-                                </View>
-                                <View style={{ flex: 1 }}>
-                                    <Text style={[styles.sourceLabel, { color: COLORS.text }]}>{s.label}</Text>
-                                    <Text style={[styles.sourceSub, { color: COLORS.textMuted }]}>{s.sub}</Text>
-                                </View>
-                                {source === s.id && (
-                                    <View style={[styles.checkDot, { backgroundColor: s.color }]}>
-                                        <Feather name="check" size={10} color="#fff" />
+                        {wallets.map(w => {
+                            const isSelected = selectedWallet?._id === w._id;
+                            const insufficient = !hasEnoughBalance(w, total, cryptoPrices);
+                            // Live conversion hint for crypto
+                            let hint = null;
+                            if (w.type === 'Crypto' && w.coinId) {
+                                const phpPerCoin = cryptoPrices?.[w.coinId];
+                                if (phpPerCoin) {
+                                    const coinAmt = total / phpPerCoin;
+                                    hint = `≈ ${parseFloat(coinAmt.toFixed(8))} ${w.coinSymbol?.toUpperCase() || ''}`;
+                                }
+                            }
+                            return (
+                                <TouchableOpacity
+                                    key={w._id}
+                                    style={[styles.sourceCard, {
+                                        backgroundColor: COLORS.surface,
+                                        borderColor: insufficient ? '#ef4444' : isSelected ? w.color : COLORS.border,
+                                        borderWidth: isSelected || insufficient ? 2 : 1,
+                                        opacity: insufficient ? 0.65 : 1,
+                                    }]}
+                                    onPress={() => setSelectedWallet(w)}
+                                    activeOpacity={0.8}
+                                >
+                                    <View style={[styles.sourceIcon, { backgroundColor: w.color + '20' }]}>
+                                        {w.type === 'Crypto'
+                                            ? <MaterialCommunityIcons name="bitcoin" size={22} color={w.color} />
+                                            : w.type === 'Stocks'
+                                                ? <Feather name="trending-up" size={22} color={w.color} />
+                                                : <Feather name="credit-card" size={22} color={w.color} />
+                                        }
                                     </View>
-                                )}
-                            </TouchableOpacity>
-                        ))}
+                                    <View style={{ flex: 1 }}>
+                                        <Text style={[styles.sourceLabel, { color: COLORS.text }]}>{w.name}</Text>
+                                        <Text style={[styles.sourceSub, { color: COLORS.textMuted }]}>
+                                            {w.type === 'Crypto'
+                                                ? `${parseFloat((w.balance ?? 0).toFixed(8))} ${w.coinSymbol?.toUpperCase() || 'COIN'}`
+                                                : w.type === 'Stocks'
+                                                    ? `${(w.balance ?? 0).toLocaleString()} shr (${w.stockSymbol || ''})`
+                                                    : `₱${(w.balance ?? 0).toLocaleString('en-PH', { minimumFractionDigits: 2 })}`
+                                            }
+                                        </Text>
+                                        {isSelected && hint && (
+                                            <Text style={{ fontSize: 10, fontWeight: '700', color: w.color, marginTop: 2, fontStyle: 'italic' }}>
+                                                {hint} deducted
+                                            </Text>
+                                        )}
+                                        {insufficient && (
+                                            <Text style={{ fontSize: 10, fontWeight: '800', color: '#ef4444', marginTop: 2 }}>
+                                                Insufficient balance
+                                            </Text>
+                                        )}
+                                    </View>
+                                    {isSelected && (
+                                        <View style={[styles.checkDot, { backgroundColor: w.color }]}>
+                                            <Feather name="check" size={10} color="#fff" />
+                                        </View>
+                                    )}
+                                </TouchableOpacity>
+                            );
+                        })}
                     </View>
                 </View>
             </ScrollView>

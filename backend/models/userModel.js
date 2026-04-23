@@ -42,6 +42,10 @@ const userSchema = new mongoose.Schema({
         type: String,
         default: null,
     },
+    isOnboarded: {
+        type: Boolean,
+        default: false,
+    },
 
     // ── Sessions (Refresh Token Store) ────────────────────────────────────────
     // Each login creates a session entry. Used for session management & revocation.

@@ -1,9 +1,10 @@
 import React, { useState, useCallback, useEffect } from 'react';
 import {
-    View, Text, StyleSheet, TouchableOpacity, SectionList,
+    View, Text, StyleSheet, TouchableOpacity,
     ActivityIndicator, RefreshControl, Modal, TouchableWithoutFeedback,
     TextInput
 } from 'react-native';
+import { FlashList } from '@shopify/flash-list';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Feather } from '@expo/vector-icons';
 import { useTheme } from '../../context/ThemeContext';
@@ -107,9 +108,22 @@ export default function SavingsTransferHistoryScreen({ navigation }) {
         if (!groups[key]) groups[key] = { title: key, data: [] };
         groups[key].data.push(t);
     }
-    const sections = Object.values(groups);
+    const flatData = [];
+    Object.values(groups).forEach(g => {
+        flatData.push({ type: 'header', title: g.title, _id: `header-${g.title}` });
+        g.data.forEach(item => flatData.push({ type: 'item', transaction: item, _id: item._id }));
+    });
 
-    const renderItem = ({ item: t }) => {
+    const renderItem = ({ item }) => {
+        if (item.type === 'header') {
+            return (
+                <View style={styles.sectionHeader}>
+                    <Text style={[styles.sectionTitle, { color: COLORS.text }]}>{item.title}</Text>
+                </View>
+            );
+        }
+
+        const t = item.transaction;
         const isDeposit = t.direction === 'to_savings' || t.direction === 'income' || t.direction === 'transfer_goal';
         const isGoal = t.direction === 'transfer_goal';
         const color = isDeposit ? '#22c55e' : '#f59e0b';
@@ -210,18 +224,14 @@ export default function SavingsTransferHistoryScreen({ navigation }) {
                     ))}
                 </View>
             ) : (
-                <SectionList
-                    sections={sections}
+                <FlashList
+                    data={flatData}
                     keyExtractor={item => item._id}
                     renderItem={renderItem}
                     contentContainerStyle={styles.list}
                     showsVerticalScrollIndicator={false}
-                    stickySectionHeadersEnabled={false}
-                    renderSectionHeader={({ section: { title } }) => (
-                        <View style={styles.sectionHeader}>
-                            <Text style={[styles.sectionTitle, { color: COLORS.text }]}>{title}</Text>
-                        </View>
-                    )}
+                    estimatedItemSize={70}
+                    getItemType={item => item.type}
                     refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); load(); }} tintColor={COLORS.primary} />}
                     onEndReached={fetchMore}
                     onEndReachedThreshold={0.5}

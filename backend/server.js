@@ -8,6 +8,8 @@ const express = require('express');
 const { createServer } = require('http');
 const { Server } = require('socket.io');
 const path = require('path');
+const fs = require('fs');
+const uploadRoutes = require('./routes/uploadRoutes');
 
 const app = express();
 const server = createServer(app);
@@ -41,6 +43,9 @@ const budgetRoutes = require('./routes/budgetRoutes');
 const savingsRoutes = require('./routes/savingsRoutes');
 const shoppingRoutes = require('./routes/shoppingRoutes');
 const currencyRoutes = require('./routes/currencyRoutes');
+const notificationRoutes = require('./routes/notificationRoutes');
+const categoryRoutes = require('./routes/categoryRoutes');
+const walletRoutes = require('./routes/walletRoutes');
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  HELMET — Secure HTTP headers
@@ -48,6 +53,13 @@ const currencyRoutes = require('./routes/currencyRoutes');
 app.use(helmet({
     crossOriginResourcePolicy: { policy: 'cross-origin' }
 }));
+
+// Serve uploads statically
+const uploadsDir = path.join(__dirname, 'uploads');
+if (!fs.existsSync(uploadsDir)) {
+    fs.mkdirSync(uploadsDir);
+}
+app.use('/uploads', express.static(uploadsDir));
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  CORS — Must be before rate limiters so OPTIONS passes safely
@@ -254,6 +266,18 @@ app.use('/api/currency', currencyRoutes);
 
 // Shopping sessions
 app.use('/api/shopping', shoppingRoutes);
+
+// File uploads
+app.use('/api/uploads', uploadRoutes);
+
+// In-app Notifications
+app.use('/api/notifications', notificationRoutes);
+
+// Custom Transaction Categories
+app.use('/api/categories', categoryRoutes);
+
+// Wallets
+app.use('/api/wallets', walletRoutes);
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  GLOBAL ERROR HANDLER

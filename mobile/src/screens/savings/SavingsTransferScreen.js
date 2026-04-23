@@ -98,6 +98,10 @@ export default function SavingsTransferScreen({ route, navigation }) {
                             setSourceGoal(goal || master);
                             setTargetGoal(null); // Main Balance
                         }
+                    } else if (initialDirection === 'transfer_goal') {
+                        setDirection('transfer_goal');
+                        setSourceGoal(initialSource || master);
+                        setTargetGoal(goal);
                     } else if (!initialDirection && !initialSource) {
                         // Scenario: Goal-to-Goal transfer selected via Move Money
                         setDirection('transfer_goal');
@@ -115,7 +119,8 @@ export default function SavingsTransferScreen({ route, navigation }) {
     // REAL-TIME SOCKET UPDATES FOR BALANCE
     useEffect(() => {
         if (!userInfo?._id) return;
-        const socket = getSocket() || connectSocket(userInfo._id);
+        connectSocket(userInfo._id);
+        const socket = getSocket();
 
         const refreshBalance = () => {
             getTransactionSummary({ range: 'all' })
@@ -123,14 +128,23 @@ export default function SavingsTransferScreen({ route, navigation }) {
                 .catch(() => { });
         };
 
+        const refreshGoal = (updatedGoal) => {
+            setGoal(prev => prev?._id === updatedGoal._id ? updatedGoal : prev);
+            setSourceGoal(prev => prev?._id === updatedGoal._id ? updatedGoal : prev);
+            setTargetGoal(prev => prev?._id === updatedGoal._id ? updatedGoal : prev);
+            setSavingsPot(prev => prev?._id === updatedGoal._id ? updatedGoal : prev);
+        };
+
         socket.on('new_transaction', refreshBalance);
         socket.on('update_transaction', refreshBalance);
         socket.on('delete_transaction', refreshBalance);
+        socket.on('update_savings_goal', refreshGoal);
 
         return () => {
             socket.off('new_transaction', refreshBalance);
             socket.off('update_transaction', refreshBalance);
             socket.off('delete_transaction', refreshBalance);
+            socket.off('update_savings_goal', refreshGoal);
         };
     }, [userInfo?._id]);
 
@@ -162,8 +176,12 @@ export default function SavingsTransferScreen({ route, navigation }) {
         }
 
         // Self-Transfer Check
-        if (direction === 'transfer_goal' && sourceGoal?._id === (targetGoal?._id || goal?._id)) {
-            return showAlert('warning', 'Invalid Transfer', 'Source and destination goals cannot be the same.');
+        if (direction === 'transfer_goal') {
+            const srcId = String(sourceGoal?._id || '');
+            const destId = String(targetGoal?._id || goal?._id || '');
+            if (srcId && destId && srcId === destId) {
+                return showAlert('warning', 'Invalid Transfer', 'Source and destination goals cannot be the same.');
+            }
         }
 
         // Balance Checks
@@ -262,7 +280,7 @@ export default function SavingsTransferScreen({ route, navigation }) {
         setSelectorModalVisible(false);
     };
 
-    const canSelectSource = !isDirect && direction !== 'from_savings' && direction !== 'income' && !initialSource;
+    const canSelectSource = direction !== 'from_savings' && direction !== 'income' && !initialSource;
     const canSelectTarget = direction === 'from_savings' || (isGoalTransfer && sourceGoal?._id === goal?._id);
 
     return (
@@ -421,7 +439,7 @@ export default function SavingsTransferScreen({ route, navigation }) {
                         <Text style={[styles.modalItemValue, { color: COLORS.textMuted }]}>{selectorMode === 'source' ? formatCurrency(mainBalance) : 'Send to Wallet'}</Text>
                     </TouchableOpacity>
 
-                    {savingsPot && (
+                    {savingsPot && (selectorMode === 'source' ? targetGoal?._id !== savingsPot._id : sourceGoal?._id !== savingsPot._id) && (
                         <TouchableOpacity
                             style={[styles.modalItem, { backgroundColor: COLORS.surface }]}
                             onPress={() => handleSelectOption('savings')}
@@ -430,7 +448,7 @@ export default function SavingsTransferScreen({ route, navigation }) {
                                 <MaterialCommunityIcons name="piggy-bank-outline" size={20} color="#3b82f6" />
                             </View>
                             <Text style={[styles.modalItemLabel, { color: COLORS.text }]}>Savings Balance</Text>
-                            <Text style={[styles.modalItemValue, { color: COLORS.textMuted }]}>{selectorMode === 'source' ? formatCurrency(savingsPot.currentAmount) : 'Move to Pot'}</Text>
+                            <Text style={[styles.modalItemValue, { color: COLORS.textMuted }]}>{selectorMode === 'source' ? formatCurrency(savingsPot.currentAmount, userInfo?.currency) : 'Move to Pot'}</Text>
                         </TouchableOpacity>
                     )}
                 </View>

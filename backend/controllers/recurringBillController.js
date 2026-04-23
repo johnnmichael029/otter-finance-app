@@ -17,8 +17,20 @@ const computeNextDueDate = (fromDate, frequency) => {
 // GET /api/recurring-bills
 const getBills = async (req, res) => {
     try {
-        const bills = await RecurringBill.find({ user: req.userId, isActive: true }).sort({ nextDueDate: 1 });
-        res.json(bills);
+        const { page = 1, limit = 20 } = req.query;
+        const skip = (parseInt(page) - 1) * parseInt(limit);
+
+        const [bills, total] = await Promise.all([
+            RecurringBill.find({ user: req.userId, isActive: true }).sort({ nextDueDate: 1 }).skip(skip).limit(parseInt(limit)).lean(),
+            RecurringBill.countDocuments({ user: req.userId, isActive: true })
+        ]);
+        
+        res.json({
+            data: bills,
+            total,
+            page: parseInt(page),
+            pages: Math.ceil(total / parseInt(limit))
+        });
     } catch (err) {
         res.status(500).json({ error: 'Failed to fetch recurring bills.' });
     }

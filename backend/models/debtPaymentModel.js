@@ -30,6 +30,19 @@ const debtPaymentSchema = new mongoose.Schema({
         type: Date,
         default: Date.now,
     },
+    wallet: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Wallet',
+        default: null,
+    },
+    walletAmount: {
+        type: Number,
+        default: null,
+    },
+    walletCurrency: {
+        type: String,
+        default: null,
+    },
 }, { timestamps: true });
 
 debtPaymentSchema.index({ debt: 1, paidAt: -1 });

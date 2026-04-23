@@ -100,6 +100,7 @@ const register = async (req, res) => {
                 email: user.email,
                 currency: user.currency,
                 avatarUrl: user.avatarUrl,
+                isOnboarded: user.isOnboarded,
             }
         });
     } catch (err) {
@@ -227,6 +228,7 @@ const login = async (req, res) => {
                 currency:  user.currency,
                 avatarUrl: user.avatarUrl,
                 pushToken: user.pushToken,
+                isOnboarded: user.isOnboarded,
             }
         });
 
@@ -409,7 +411,7 @@ async function verify2FA(req, res) {
 
         res.json({
             accessToken, refreshToken,
-            user: { _id: user._id, name: user.name, email: user.email, currency: user.currency, avatarUrl: user.avatarUrl, pushToken: user.pushToken },
+            user: { _id: user._id, name: user.name, email: user.email, currency: user.currency, avatarUrl: user.avatarUrl, pushToken: user.pushToken, isOnboarded: user.isOnboarded },
         });
     } catch (err) {
         console.error('[2FA] Verify error:', err.message);

@@ -23,15 +23,26 @@ export const getSocket = () => {
     return socket;
 };
 
+let currentUserId = null;
+
 export const connectSocket = (userId) => {
     const s = getSocket();
+    currentUserId = userId;
+
+    // Remove any existing connect listeners to avoid duplicates
+    s.off('connect');
+
+    s.on('connect', () => {
+        if (currentUserId) {
+            s.emit('join_user_room', currentUserId);
+            console.log(`[SOCKET] Connected & joined room user:${currentUserId}`);
+        }
+    });
+
     if (!s.connected) {
         s.connect();
-        s.once('connect', () => {
-            s.emit('join_user_room', userId);
-            console.log(`[SOCKET] Connected & joined room user:${userId}`);
-        });
     } else {
+        // Already connected, but maybe room needs joining if the id changed
         s.emit('join_user_room', userId);
     }
 };

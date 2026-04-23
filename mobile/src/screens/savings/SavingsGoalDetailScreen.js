@@ -103,7 +103,8 @@ export default function SavingsGoalDetailScreen({ route, navigation }) {
 
     useEffect(() => {
         if (!userInfo?._id) return;
-        const socket = getSocket() || connectSocket(userInfo._id);
+        connectSocket(userInfo._id);
+        const socket = getSocket();
 
         const handleUpdate = () => { load(); };
 

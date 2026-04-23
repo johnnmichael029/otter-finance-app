@@ -85,6 +85,7 @@ export default function RegisterScreen({ navigation }) {
                                                 value={field.value}
                                                 onChangeText={field.onChange}
                                                 secureTextEntry={!showPassword}
+                                                autoCapitalize="none"
                                                 autoCorrect={false}
                                             />
                                             <TouchableOpacity onPress={() => setShowPassword(!showPassword)} style={styles.eyeIcon}>

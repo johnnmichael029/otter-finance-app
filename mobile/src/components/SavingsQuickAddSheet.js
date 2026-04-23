@@ -64,7 +64,11 @@ const SavingsQuickAddSheet = ({ visible, onClose, navigation, activeGoals = [] }
         } else {
             // If from savings balance, we go directly to picking the TARGET goal
             // We pass the savingsPot as the sourceGoal
-            navigation.navigate('SavingsGoalSelector', { action: 'move_to', sourceGoal: savingsPot });
+            navigation.navigate('SavingsGoalSelector', { 
+                action: 'move_to', 
+                sourceGoal: savingsPot,
+                titleOverride: 'Select Target Goal'
+            });
         }
     };
 

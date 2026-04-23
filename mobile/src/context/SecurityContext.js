@@ -38,6 +38,7 @@ export const SecurityProvider = ({ children }) => {
     const [isHardwareSupported, setIsHardwareSupported] = useState(false);
     const [biometricType, setBiometricType] = useState(null); // 'face' | 'fingerprint'
     const [setupReady, setSetupReady] = useState(false);
+    const [shouldIgnoreLock, setShouldIgnoreLock] = useState(false);
 
     const appState = useRef(AppState.currentState);
     const lockTimer = useRef(null);
@@ -84,7 +85,7 @@ export const SecurityProvider = ({ children }) => {
         const sub = AppState.addEventListener('change', (next) => {
             const isAppLockEnabled = biometricEnabled || pinEnabled;
             
-            if (next !== 'active' && isAppLockEnabled) {
+            if (next !== 'active' && isAppLockEnabled && !shouldIgnoreLock) {
                 // Lock instantly when app goes to background
                 setIsLocked(true);
             }
@@ -92,7 +93,7 @@ export const SecurityProvider = ({ children }) => {
             appState.current = next;
         });
         return () => sub.remove();
-    }, [biometricEnabled, pinEnabled]);
+    }, [biometricEnabled, pinEnabled, shouldIgnoreLock]);
 
     // ─── Biometric auth ───────────────────────────────────────────────────────
     const authenticateBiometric = useCallback(async () => {
@@ -195,6 +196,7 @@ export const SecurityProvider = ({ children }) => {
             toggleBiometric,
             lockNow,
             unlock,
+            setShouldIgnoreLock,
         }}>
             {children}
         </SecurityContext.Provider>

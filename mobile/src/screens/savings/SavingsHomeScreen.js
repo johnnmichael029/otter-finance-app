@@ -8,6 +8,7 @@ import { Feather, Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useTheme } from '../../context/ThemeContext';
 import { useAuth } from '../../context/AuthContext';
+import { useFinanceStore } from '../../store/financeStore';
 import { getSavingsGoals, getSavingsTransfers, bulkSavingsAction } from '../../api/api';
 import { spacing, radius, typography } from '../../theme/colors';
 import { getSocket, connectSocket } from '../../utils/socket';
@@ -36,8 +37,12 @@ const IconRenderer = ({ name, family, size, color }) => {
 
 export default function SavingsHomeScreen({ navigation, route }) {
     const isGoalsTab = route.name === 'SavingsGoals';
-    const { COLORS, toggleTheme, isDarkMode } = useTheme();
-    const { userInfo } = useAuth();
+    const COLORS = useTheme(state => state.COLORS);
+    const toggleTheme = useTheme(state => state.toggleTheme);
+    const isDarkMode = useTheme(state => state.isDarkMode);
+    const userInfo = useAuth(state => state.userInfo);
+    const hideGlobalBalance = useFinanceStore(state => state.hideGlobalBalance);
+    const setHideGlobalBalance = useFinanceStore(state => state.setHideGlobalBalance);
     const styles = getStyles(COLORS);
 
     // Goals State
@@ -190,7 +195,8 @@ export default function SavingsHomeScreen({ navigation, route }) {
 
     useEffect(() => {
         if (!userInfo?._id) return;
-        const socket = getSocket() || connectSocket(userInfo._id);
+        connectSocket(userInfo._id);
+        const socket = getSocket();
         const handleUpdate = () => loadData();
         socket.on('new_savings_transfer', handleUpdate);
         socket.on('new_savings_goal', handleUpdate);
@@ -424,8 +430,13 @@ export default function SavingsHomeScreen({ navigation, route }) {
                                 </View>
                             </View>
                         </View>
-                        <Text style={styles.heroLabel}>CURRENT STASH</Text>
-                        <Text style={styles.heroAmount}>{formatCurrency(masterPot?.currentAmount || 0, userInfo?.currency)}</Text>
+                        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4, paddingRight: 8 }}>
+                            <Text style={[styles.heroLabel, { marginBottom: 0 }]}>CURRENT STASH</Text>
+                            <TouchableOpacity onPress={() => setHideGlobalBalance(!hideGlobalBalance)} hitSlop={{ top: 15, bottom: 15, left: 15, right: 15 }}>
+                                <Feather name={hideGlobalBalance ? 'eye-off' : 'eye'} size={18} color="rgba(255,255,255,0.8)" />
+                            </TouchableOpacity>
+                        </View>
+                        <Text style={styles.heroAmount}>{hideGlobalBalance ? '••••••••' : formatCurrency(masterPot?.currentAmount || 0, userInfo?.currency)}</Text>
                         <View style={styles.heroFooter}>
                             <View style={styles.statChip}>
                                 <View style={styles.statDot} />

@@ -3,7 +3,7 @@ import { View, Text, StyleSheet, ScrollView, TouchableOpacity } from 'react-nati
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Feather, MaterialCommunityIcons, Ionicons } from '@expo/vector-icons';
 import { useTheme } from '../../context/ThemeContext';
-import { useWalletMode } from '../../../App';
+import { useUIStore } from '../../store/uiStore';
 import { spacing, radius } from '../../theme/colors';
 
 const SERVICES = [
@@ -40,7 +40,7 @@ const SERVICES = [
 
 export default function AllServicesScreen({ navigation }) {
     const { COLORS } = useTheme();
-    const { setIsSavingsMode } = useWalletMode();
+    const setIsSavingsMode = useUIStore(state => state.setIsSavingsMode);
 
     const handlePress = (item) => {
         if (item.action === 'savings') {
@@ -51,7 +51,8 @@ export default function AllServicesScreen({ navigation }) {
 
         if (item.screen) {
             if (item.screen === 'Bills' || item.screen === 'Budget') {
-                navigation.navigate('MainTabs', { screen: item.screen });
+                setIsSavingsMode(false);
+                navigation.navigate('HomeRoot', { screen: item.screen });
             } else {
                 navigation.navigate(item.screen);
             }

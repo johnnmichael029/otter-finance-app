@@ -1,14 +1,15 @@
 import React, { useState, useCallback, useEffect } from 'react';
 import {
     View, Text, StyleSheet, TouchableOpacity, ScrollView,
-    TextInput, ActivityIndicator, RefreshControl, Modal, TouchableWithoutFeedback, FlatList, SectionList
+    TextInput, ActivityIndicator, RefreshControl, Modal, TouchableWithoutFeedback, Image
 } from 'react-native';
+import { FlashList } from '@shopify/flash-list';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Feather, MaterialCommunityIcons, Ionicons } from '@expo/vector-icons';
 import { useTheme } from '../../context/ThemeContext';
-import { useAuth } from '../../context/AuthContext';
+import { useAuth, API_BASE } from '../../context/AuthContext';
 import { getTransactions } from '../../api/api';
-import { spacing, radius, typography } from '../../theme/colors';
+import { spacing, radius } from '../../theme/colors';
 import Skeleton from '../../components/Skeleton';
 import { getSocket, connectSocket } from '../../utils/socket';
 import { useDebounce } from '../../utils/debounce';
@@ -39,18 +40,13 @@ const FALLBACK_ICONS = {
 
 const IconRenderer = ({ name, size, color }) => {
     if (!name) return <Feather name="circle" size={size} color={color} />;
-
-    // Support for Material Icons
     if (name.startsWith('material:') || name === 'piggy-bank' || name === 'piggy-bank-outline') {
         const iconName = name.replace('material:', '') || 'piggy-bank';
         return <MaterialCommunityIcons name={iconName} size={size} color={color} />;
     }
-
-    // Support for Ionicons (often used for outlines)
     if (name.includes('-outline') || name.includes('-sharp')) {
         return <Ionicons name={name} size={size} color={color} />;
     }
-
     return <Feather name={name} size={size} color={color} />;
 };
 
@@ -68,7 +64,7 @@ const getIconColor = (tx, COLORS) => {
 
 const TABS = ['All', 'Income', 'Expense', 'Ledger'];
 
-export default function TransactionsScreen() {
+const TransactionsScreen = () => {
     const { COLORS } = useTheme();
     const { userInfo } = useAuth();
     const styles = getStyles(COLORS);
@@ -108,10 +104,10 @@ export default function TransactionsScreen() {
 
     useEffect(() => {
         if (!userInfo?._id) return;
-        const socket = getSocket() || connectSocket(userInfo._id);
+        connectSocket(userInfo._id);
+        const socket = getSocket();
 
         const handleNew = (tx) => {
-            // Only add if it matches current filters or if filters are 'All'
             if (!typeFilter || tx.type === typeFilter) {
                 setTransactions(prev => {
                     const exists = prev.find(t => t._id === tx._id);
@@ -158,8 +154,6 @@ export default function TransactionsScreen() {
         } catch (e) { } finally { setLoadingMore(false); }
     };
 
-    // handleScroll is no longer needed with FlatList/SectionList
-
     const filtered = debouncedSearch.trim()
         ? transactions.filter(tx =>
             tx.category?.toLowerCase().includes(debouncedSearch.toLowerCase()) ||
@@ -168,7 +162,6 @@ export default function TransactionsScreen() {
         )
         : transactions;
 
-    // Ledger: group by date
     const ledgerGroups = {};
     for (const tx of filtered) {
         const key = formatDate(tx.date || tx.createdAt);
@@ -177,16 +170,19 @@ export default function TransactionsScreen() {
         else ledgerGroups[key].debit += tx.amount;
         ledgerGroups[key].entries.push(tx);
     }
-    const ledgerDays = Object.values(ledgerGroups);
+    
+    const flatData = [];
+    Object.values(ledgerGroups).forEach(day => {
+        flatData.push({ type: 'header', date: day.date, credit: day.credit, debit: day.debit, _id: `header-${day.date}` });
+        day.entries.forEach(tx => flatData.push({ type: 'item', transaction: tx, _id: tx._id }));
+    });
 
     return (
         <SafeAreaView style={styles.safe}>
-            {/* Header */}
             <View style={styles.header}>
                 <Text style={styles.headerTitle}>Transactions</Text>
             </View>
 
-            {/* Tabs */}
             <View style={{ height: 48, marginBottom: spacing.sm }}>
                 <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.tabsRow} style={{ flexGrow: 0 }}>
                     {TABS.map(tab => {
@@ -200,7 +196,6 @@ export default function TransactionsScreen() {
                 </ScrollView>
             </View>
 
-            {/* Search */}
             <View style={styles.searchRow}>
                 <Feather name="search" size={16} color={COLORS.textMuted} style={{ marginRight: 8 }} />
                 <TextInput
@@ -234,13 +229,13 @@ export default function TransactionsScreen() {
                     ))}
                 </View>
             ) : (
-                <SectionList
-                    style={{ flex: 1 }}
+                <FlashList
                     contentContainerStyle={styles.listContent}
-                    sections={ledgerDays.map(d => ({ ...d, data: d.entries }))}
+                    data={flatData}
                     keyExtractor={item => item._id}
                     showsVerticalScrollIndicator={false}
-                    stickySectionHeadersEnabled={false}
+                    estimatedItemSize={60}
+                    getItemType={item => item.type}
                     refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); load(); }} tintColor={COLORS.primary} />}
                     onEndReached={() => fetchMore()}
                     onEndReachedThreshold={0.5}
@@ -250,69 +245,57 @@ export default function TransactionsScreen() {
                             <Text style={[styles.emptyText, { color: COLORS.textMuted }]}>No transactions found.</Text>
                         </View>
                     }
-                    renderSectionHeader={({ section: day }) => (
-                        <View style={styles.ledgerDayHeader}>
-                            <Text style={[styles.ledgerDate, { color: COLORS.text }]}>{day.date}</Text>
-                            {activeTab === 'Ledger' && (
-                                <View style={styles.ledgerDaySummary}>
-                                    <Text style={[styles.ledgerCredit, { color: COLORS.income }]}>+{formatCurrency(day.credit, userInfo?.currency)}</Text>
-                                    <Text style={[styles.ledgerDebit, { color: COLORS.expense }]}>-{formatCurrency(day.debit, userInfo?.currency)}</Text>
+                    renderItem={({ item }) => {
+                        if (item.type === 'header') {
+                            return (
+                                <View style={styles.ledgerDayHeader}>
+                                    <Text style={[styles.ledgerDate, { color: COLORS.text }]}>{item.date}</Text>
+                                    {activeTab === 'Ledger' && (
+                                        <View style={styles.ledgerDaySummary}>
+                                            <Text style={[styles.ledgerCredit, { color: COLORS.income }]}>+{formatCurrency(item.credit, userInfo?.currency)}</Text>
+                                            <Text style={[styles.ledgerDebit, { color: COLORS.expense }]}>-{formatCurrency(item.debit, userInfo?.currency)}</Text>
+                                        </View>
+                                    )}
                                 </View>
-                            )}
-                        </View>
-                    )}
-                    renderItem={({ item: tx }) => (
-                        <TouchableOpacity style={[styles.txRow, { backgroundColor: COLORS.surface }]} onPress={() => setSelectedTx(tx)} activeOpacity={0.7}>
-                            <View style={[styles.txIcon, { backgroundColor: getIconColor(tx, COLORS) + '20' }]}>
-                                <IconRenderer name={getIconName(tx)} size={16} color={getIconColor(tx, COLORS)} />
-                            </View>
-                            <View style={{ flex: 1 }}>
-                                <Text style={[styles.txCat, { color: COLORS.text }]}>{tx.category}</Text>
-                                {(() => {
-                                    const cat = (tx.category || '').toLowerCase();
-                                    const desc = (tx.description || '').toLowerCase();
-                                    let label = tx.type === 'income' ? 'Income' : 'Expense';
-                                    
-                                    if (cat === 'savings' || cat.includes('savings')) {
-                                        if (desc.includes('to savings')) label = 'Saved to Pot';
-                                        else if (desc.includes('from savings')) label = 'Withdrawal';
-                                        else if (desc.includes('returned')) label = 'Returned to Wallet';
-                                        else if (cat === 'savings interest') label = 'Savings Income';
-                                        else if (desc.includes('transfer')) label = 'Goal Transfer';
-                                    }
-                                    
-                                    return <Text style={[styles.txLabel, { color: COLORS.textMuted }]}>{label}</Text>;
-                                })()}
-                                <Text style={[styles.txNote, { color: COLORS.textMuted }]} numberOfLines={1}>
-                                    {(tx.description || tx.note) ? `" ${tx.description || tx.note} "` : '—'}
-                                </Text>
-                            </View>
-                            <View style={styles.txRight}>
-                                {activeTab === 'Ledger' ? (
-                                    <Text style={[styles.txType, { color: tx.type === 'income' ? '#22c55e' : '#ef4444', fontSize: 9 }]}>
-                                        {tx.type === 'income' ? '↑ CREDIT' : '↓ DEBIT'}
-                                    </Text>
-                                ) : (
-                                    <Text style={[styles.txDateSimple, { color: COLORS.textMuted }]}>
-                                        {new Intl.DateTimeFormat('en-US', { hour: 'numeric', minute: '2-digit' }).format(new Date(tx.date || tx.createdAt))}
-                                    </Text>
-                                )}
-                                <Text style={[styles.txAmt, { color: tx.type === 'income' ? COLORS.income : COLORS.expense }]}>
-                                    {tx.type === 'income' ? '+' : '-'}{formatCurrency(tx.amount, userInfo?.currency)}
-                                </Text>
-                                {activeTab !== 'Ledger' && tx.runningBalance !== undefined && (
-                                    <Text style={[styles.txBalance, { color: COLORS.textMuted }]}>
-                                        Bal: {formatCurrency(tx.runningBalance, userInfo?.currency)}
-                                    </Text>
-                                )}
-                            </View>
-                        </TouchableOpacity>
-                    )}
+                            );
+                        } else {
+                            const tx = item.transaction;
+                            return (
+                                <TouchableOpacity style={[styles.txRow, { backgroundColor: COLORS.surface }]} onPress={() => setSelectedTx(tx)} activeOpacity={0.7}>
+                                    <View style={[styles.txIcon, { backgroundColor: getIconColor(tx, COLORS) + '20' }]}>
+                                        <IconRenderer name={getIconName(tx)} size={16} color={getIconColor(tx, COLORS)} />
+                                    </View>
+                                    <View style={{ flex: 1 }}>
+                                        <Text style={[styles.txCat, { color: COLORS.text }]}>{tx.category}</Text>
+                                        <Text style={[styles.txNote, { color: COLORS.textMuted }]} numberOfLines={1}>
+                                            {(tx.description || tx.note) ? `" ${tx.description || tx.note} "` : '—'}
+                                        </Text>
+                                    </View>
+                                    <View style={styles.txRight}>
+                                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4, justifyContent: 'flex-end' }}>
+                                            {tx.attachment && <Feather name="camera" size={12} color={COLORS.primary} />}
+                                            {activeTab === 'Ledger' ? (
+                                                <Text style={[styles.txType, { color: tx.type === 'income' ? '#22c55e' : '#ef4444', fontSize: 9 }]}>
+                                                    {tx.type === 'income' ? '↑ CREDIT' : '↓ DEBIT'}
+                                                </Text>
+                                            ) : (
+                                                <Text style={[styles.txDateSimple, { color: COLORS.textMuted }]}>
+                                                    {new Intl.DateTimeFormat('en-US', { hour: 'numeric', minute: '2-digit' }).format(new Date(tx.date || tx.createdAt))}
+                                                </Text>
+                                            )}
+                                        </View>
+                                        <Text style={[styles.txAmt, { color: tx.type === 'income' ? COLORS.income : COLORS.expense }]}>
+                                            {tx.type === 'income' ? '+' : '-'}{formatCurrency(tx.amount, userInfo?.currency)}
+                                        </Text>
+                                    </View>
+                                </TouchableOpacity>
+                            );
+                        }
+                    }}
                     ListFooterComponent={loadingMore && <ActivityIndicator size="small" color={COLORS.primary} style={{ marginVertical: 16 }} />}
                 />
             )}
 
-            {/* Transaction Detail Modal */}
             <Modal visible={!!selectedTx} transparent animationType="fade" onRequestClose={() => setSelectedTx(null)}>
                 <TouchableWithoutFeedback onPress={() => setSelectedTx(null)}>
                     <View style={styles.modalOverlay}>
@@ -326,7 +309,7 @@ export default function TransactionsScreen() {
                                                 <Feather name="x" size={24} color={COLORS.textMuted} />
                                             </TouchableOpacity>
                                         </View>
-                                        <View style={styles.modalBody}>
+                                        <ScrollView contentContainerStyle={styles.modalBody} showsVerticalScrollIndicator={false}>
                                             <View style={[styles.modalIconHero, { backgroundColor: getIconColor(selectedTx, COLORS) + '20' }]}>
                                                 <IconRenderer name={getIconName(selectedTx)} size={32} color={getIconColor(selectedTx, COLORS)} />
                                             </View>
@@ -334,19 +317,32 @@ export default function TransactionsScreen() {
                                                 {selectedTx.type === 'income' ? '+' : '-'}{formatCurrency(selectedTx.amount, userInfo?.currency)}
                                             </Text>
                                             <Text style={[styles.modalCat, { color: COLORS.text }]}>{selectedTx.category}</Text>
+                                            
                                             <View style={[styles.detailBox, { backgroundColor: COLORS.background, borderColor: COLORS.border }]}>
                                                 {[
                                                     ['Type', selectedTx.type],
                                                     ['Date', formatDateTime(selectedTx.date || selectedTx.createdAt)],
+                                                    ['Source', selectedTx.wallet ? `${selectedTx.wallet.name} (${selectedTx.wallet.type})` : 'HAND'],
+                                                    selectedTx.walletAmount !== null && selectedTx.walletAmount !== undefined ? ['Native Cost', `${selectedTx.walletAmount.toLocaleString(undefined, { maximumFractionDigits: 8 })} ${selectedTx.walletCurrency}`] : null,
                                                     selectedTx.description || selectedTx.note ? ['Note', selectedTx.description || selectedTx.note] : null,
                                                 ].filter(Boolean).map(([label, val]) => (
-                                                    <View key={label} style={[styles.detailRow, { borderColor: COLORS.border }]}>
+                                                    <View key={label} style={[styles.detailRow, { borderColor: COLORS.border, borderBottomWidth: label === 'Note' || label === 'Native Cost' ? 0 : StyleSheet.hairlineWidth }]}>
                                                         <Text style={[styles.detailLabel, { color: COLORS.textMuted }]}>{label}</Text>
-                                                        <Text style={[styles.detailVal, { color: COLORS.text, textTransform: label === 'Type' ? 'capitalize' : 'none' }]}>{val}</Text>
+                                                        <Text style={[styles.detailVal, { color: COLORS.text, textTransform: label === 'Type' ? 'capitalize' : 'none', fontWeight: (label === 'Native Cost' || label === 'Source') ? '700' : '500' }]}>{val}</Text>
                                                     </View>
                                                 ))}
                                             </View>
-                                        </View>
+
+                                            {selectedTx.attachment && (
+                                                <View style={styles.receiptSection}>
+                                                    <Text style={[styles.detailLabel, { color: COLORS.textMuted, marginBottom: 8, marginTop: spacing.lg }]}>Receipt Attachment</Text>
+                                                    <Image 
+                                                        source={{ uri: `${API_BASE.replace('/api', '')}${selectedTx.attachment}` }} 
+                                                        style={styles.modalReceipt} 
+                                                    />
+                                                </View>
+                                            )}
+                                        </ScrollView>
                                     </>
                                 )}
                             </View>
@@ -356,7 +352,7 @@ export default function TransactionsScreen() {
             </Modal>
         </SafeAreaView>
     );
-}
+};
 
 const getStyles = (COLORS) => StyleSheet.create({
     safe: { flex: 1, backgroundColor: COLORS.background },
@@ -372,40 +368,36 @@ const getStyles = (COLORS) => StyleSheet.create({
     },
     searchInput: { flex: 1, fontSize: 14 },
     listContent: { paddingHorizontal: spacing.lg, paddingBottom: 120 },
-    center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
     empty: { alignItems: 'center', paddingTop: 80 },
     emptyEmoji: { fontSize: 48, marginBottom: 12 },
     emptyText: { fontSize: 14 },
-    // Transaction row
     txRow: { flexDirection: 'row', alignItems: 'center', borderRadius: radius.md, padding: spacing.md, marginBottom: spacing.xs },
     txIcon: { width: 38, height: 38, borderRadius: 19, justifyContent: 'center', alignItems: 'center', marginRight: spacing.sm },
     txCat: { fontWeight: '700', fontSize: 14 },
-    txLabel: { fontSize: 11, fontWeight: '500', marginTop: 1, marginBottom: 1 },
-    txNote: { fontSize: 12, fontStyle: 'italic' },
+    txNote: { fontSize: 12, fontStyle: 'italic', marginTop: 2 },
     txRight: { alignItems: 'flex-end' },
     txAmt: { fontWeight: '800', fontSize: 15 },
-    txBalance: { fontSize: 9, fontWeight: '700', marginTop: 1, opacity: 0.8 },
-    txDate: { fontSize: 10, fontWeight: '500', marginTop: 2 },
-    txDateSimple: { fontSize: 10, fontWeight: '500', marginBottom: 2 },
+    txDateSimple: { fontSize: 10, fontWeight: '500' },
     txType: { fontWeight: '800', letterSpacing: 0.5 },
-    // Ledger
-    ledgerDay: { marginBottom: spacing.md },
     ledgerDayHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: spacing.xs, paddingHorizontal: 4 },
     ledgerDate: { fontWeight: '700', fontSize: 13 },
     ledgerDaySummary: { flexDirection: 'row', gap: 8 },
     ledgerCredit: { fontSize: 12, fontWeight: '700' },
     ledgerDebit: { fontSize: 12, fontWeight: '700' },
-    // Detail Modal
     modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
-    modalSheet: { borderTopLeftRadius: radius.xl, borderTopRightRadius: radius.xl, padding: spacing.lg, paddingBottom: 40 },
+    modalSheet: { borderTopLeftRadius: radius.xl, borderTopRightRadius: radius.xl, padding: spacing.lg, paddingBottom: 40, maxHeight: '80%' },
     modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: spacing.md },
     modalTitle: { fontSize: 18, fontWeight: '800' },
-    modalBody: { alignItems: 'center' },
-    modalIconHero: { width: 64, height: 64, borderRadius: 32, justifyContent: 'center', alignItems: 'center', marginBottom: spacing.sm },
-    modalAmt: { fontSize: 32, fontWeight: '800', marginBottom: 4 },
-    modalCat: { fontSize: 16, fontWeight: '600', marginBottom: spacing.lg },
+    modalBody: { width: '100%' },
+    modalIconHero: { width: 64, height: 64, borderRadius: 32, justifyContent: 'center', alignItems: 'center', marginBottom: spacing.sm, alignSelf: 'center' },
+    modalAmt: { fontSize: 32, fontWeight: '800', marginBottom: 4, alignSelf: 'center' },
+    modalCat: { fontSize: 16, fontWeight: '600', marginBottom: spacing.lg, alignSelf: 'center' },
     detailBox: { width: '100%', borderWidth: 1, borderRadius: radius.lg, padding: spacing.md },
     detailRow: { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 8, borderBottomWidth: StyleSheet.hairlineWidth },
     detailLabel: { fontSize: 13, fontWeight: '600' },
     detailVal: { fontSize: 14, fontWeight: '500', maxWidth: '60%', textAlign: 'right' },
+    receiptSection: { width: '100%', marginTop: spacing.md },
+    modalReceipt: { width: '100%', height: 300, borderRadius: radius.lg, resizeMode: 'contain', backgroundColor: '#000' },
 });
+
+export default TransactionsScreen;

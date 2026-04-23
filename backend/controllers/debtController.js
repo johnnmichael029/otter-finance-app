@@ -1,8 +1,12 @@
 const Debt = require('../models/debtModel');
 const DebtPayment = require('../models/debtPaymentModel');
+const Notification = require('../models/Notification');
+const Wallet = require('../models/walletModel');
 const Transaction = require('../models/transactionModel');
+const mongoose = require('mongoose');
 const { invalidatePrefixes } = require('../utils/cache');
 const { sendPushNotification } = require('../utils/pushNotification');
+const { encrypt, decryptNote } = require('../utils/encryption');
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  HELPER — Calculate live interest accrued on a debt
@@ -33,12 +37,16 @@ const calcAccruedInterest = (debt) => {
 // ─────────────────────────────────────────────────────────────────────────────
 const getDebts = async (req, res) => {
     try {
-        const { status, direction } = req.query;
+        const { status, direction, page = 1, limit = 20 } = req.query;
         const filter = { user: req.userId };
         if (status) filter.status = status;
         if (direction) filter.direction = direction;
 
-        const debts = await Debt.find(filter).sort({ dueDate: 1, createdAt: -1 }).lean();
+        const skip = (parseInt(page) - 1) * parseInt(limit);
+        const [debts, total] = await Promise.all([
+            Debt.find(filter).sort({ dueDate: 1, createdAt: -1 }).skip(skip).limit(parseInt(limit)).lean(),
+            Debt.countDocuments(filter)
+        ]);
 
         // Attach live interest to each debt
         const enriched = debts.map(debt => {
@@ -61,7 +69,12 @@ const getDebts = async (req, res) => {
             };
         });
 
-        res.json(enriched);
+        res.json({
+            data: enriched,
+            total,
+            page: parseInt(page),
+            pages: Math.ceil(total / parseInt(limit))
+        });
     } catch (err) {
         console.error('[DEBT] getDebts error:', err.message);
         res.status(500).json({ error: 'Failed to fetch debts.' });
@@ -74,7 +87,6 @@ const getDebts = async (req, res) => {
 // ─────────────────────────────────────────────────────────────────────────────
 const createDebt = async (req, res) => {
     try {
-        invalidatePrefixes('debt');
 
         const {
             direction, personName, amount, description, dateBorrowed, dueDate,
@@ -98,6 +110,8 @@ const createDebt = async (req, res) => {
             gracePeriodMonths: gracePeriodMonths || 0,
             penaltyRate: penaltyRate || 0,
         });
+
+        invalidatePrefixes('debt');
         const io = req.app.get('io');
         if (io) io.to(`user:${req.userId}`).emit('new_debt', debt);
 
@@ -113,7 +127,6 @@ const createDebt = async (req, res) => {
 // ─────────────────────────────────────────────────────────────────────────────
 const updateDebt = async (req, res) => {
     try {
-        invalidatePrefixes('debt');
 
         const debt = await Debt.findOne({ _id: req.params.id, user: req.userId });
         if (!debt) return res.status(404).json({ error: 'Debt record not found.' });
@@ -132,6 +145,8 @@ const updateDebt = async (req, res) => {
 
         await debt.save();
 
+        invalidatePrefixes('debt');
+
         const io = req.app.get('io');
         if (io) io.to(`user:${req.userId}`).emit('update_debt', debt);
 
@@ -147,17 +162,54 @@ const updateDebt = async (req, res) => {
 // ─────────────────────────────────────────────────────────────────────────────
 const deleteDebt = async (req, res) => {
     try {
-        invalidatePrefixes('debt');
         const debt = await Debt.findOneAndDelete({ _id: req.params.id, user: req.userId });
         if (!debt) return res.status(404).json({ error: 'Debt record not found.' });
 
         // Also delete associated payment logs
         await DebtPayment.deleteMany({ debt: debt._id });
 
+        // Choice: undoPayments (default) vs keepHistory
+        const keepHistory = req.query.keepTransactions === 'true';
         const io = req.app.get('io');
+
+        if (!keepHistory && debt.amountPaid > 0) {
+            // Create a reversal transaction so it shows in Recent Activity
+            const reverseType = debt.direction === 'owed_by_me' ? 'income' : 'expense';
+            const reverseDesc = `Undo payment for ${debt.personName}`;
+
+            // Calculate current balance for the snapshot
+            const balanceAgg = await Transaction.aggregate([
+                { $match: { user: new mongoose.Types.ObjectId(req.userId) } },
+                { $group: { _id: '$type', total: { $sum: '$amount' } } },
+            ]);
+            let currentBalance = 0;
+            balanceAgg.forEach(r => {
+                if (r._id === 'income') currentBalance += r.total;
+                if (r._id === 'expense') currentBalance -= r.total;
+            });
+
+            const reversalTx = await Transaction.create({
+                user: req.userId,
+                type: reverseType,
+                amount: debt.amountPaid,
+                description: reverseDesc,
+                category: 'Debt Reversal',
+                categoryIcon: 'rotate-ccw',
+                categoryColor: '#ef4444',
+                date: new Date(),
+                note: `Refund from deleted debt record: ${debt.personName}`,
+                runningBalance: reverseType === 'income' ? (currentBalance + debt.amountPaid) : (currentBalance - debt.amountPaid)
+            });
+
+            invalidatePrefixes('transaction');
+            if (io) io.to(`user:${req.userId}`).emit('new_transaction', reversalTx);
+        }
+
+        invalidatePrefixes('debt');
+
         if (io) io.to(`user:${req.userId}`).emit('delete_debt', { _id: debt._id });
 
-        res.json({ message: 'Debt record deleted successfully.' });
+        res.json({ message: 'Debt record and associated logs/transactions deleted.' });
     } catch (err) {
         console.error('[DEBT] deleteDebt error:', err.message);
         res.status(500).json({ error: 'Failed to delete debt record.' });
@@ -170,14 +222,22 @@ const deleteDebt = async (req, res) => {
 // ─────────────────────────────────────────────────────────────────────────────
 const logPayment = async (req, res) => {
     try {
-        invalidatePrefixes('debt');
+        const io = req.app.get('io');
 
         const debt = await Debt.findOne({ _id: req.params.id, user: req.userId });
         if (!debt) return res.status(404).json({ error: 'Debt record not found.' });
         if (debt.status === 'settled') return res.status(400).json({ error: 'This debt is already fully settled.' });
 
-        const { amount, note } = req.body;
+        const { amount, note, walletId, walletDeductAmount } = req.body;
         if (!amount || amount <= 0) return res.status(400).json({ error: 'Payment amount must be greater than 0.' });
+
+        const remaining = debt.amount - debt.amountPaid;
+        // Small epsilon check for floating point precision issues
+        if (amount > (remaining + 0.01)) {
+            return res.status(400).json({ 
+                error: `Payment exceeds remaining debt. You only owe ₱${remaining.toLocaleString()}.` 
+            });
+        }
 
         // Create payment log
         const payment = await DebtPayment.create({
@@ -185,13 +245,25 @@ const logPayment = async (req, res) => {
             user: req.userId,
             amount,
             note: note || '',
+            wallet: walletId || null
         });
 
         // ── Auto-Log to Transactions for Recent Activity updates ──
         const txType = debt.direction === 'owed_by_me' ? 'expense' : 'income';
-        const txDesc = debt.direction === 'owed_by_me' 
-            ? `Paid debt to ${debt.personName}` 
+        const txDesc = debt.direction === 'owed_by_me'
+            ? `Paid debt to ${debt.personName}`
             : `Received debt payment from ${debt.personName}`;
+
+        // Calculate current total balance of "HAND" money (wallet: null)
+        const balanceAgg = await Transaction.aggregate([
+            { $match: { user: new mongoose.Types.ObjectId(req.userId), wallet: null } },
+            { $group: { _id: '$type', total: { $sum: '$amount' } } },
+        ]);
+        let currentBalance = 0;
+        balanceAgg.forEach(r => {
+            if (r._id === 'income') currentBalance += r.total;
+            if (r._id === 'expense') currentBalance -= r.total;
+        });
 
         const newTx = await Transaction.create({
             user: req.userId,
@@ -202,15 +274,77 @@ const logPayment = async (req, res) => {
             categoryIcon: 'check-circle',
             categoryColor: '#8b5cf6', // purple color for debts
             date: new Date(),
-            note: note || ''
+            note: encrypt(note || ''),
+            runningBalance: walletId ? currentBalance : (txType === 'expense' ? (currentBalance - amount) : (currentBalance + amount)),
+            relatedId: debt._id,
+            relatedType: 'Debt',
+            wallet: walletId || null
         });
+
+        // ── Feature: Wallet Balance Sync ──────────────────────────
+        if (walletId) {
+            const wallet = await Wallet.findOne({ _id: walletId, userId: req.userId });
+            if (wallet) {
+                const fiatTypes = ['Debit', 'Credit', 'Cash', 'E-Wallet'];
+                const isFiat = fiatTypes.includes(wallet.type);
+                const isCrypto = wallet.type === 'Crypto';
+                const isStocks = wallet.type === 'Stocks';
+
+                // Use walletDeductAmount (already in native coin units) for crypto/stocks,
+                // fall back to PHP amount for fiat wallets
+                const nativeAmount = (isCrypto || isStocks)
+                    ? (walletDeductAmount != null ? Math.abs(parseFloat(walletDeductAmount)) : amount)
+                    : amount;
+
+                if (isFiat || isCrypto || isStocks) {
+                    const isCredit = wallet.type === 'Credit';
+
+                    if (isCredit) {
+                        // FOR CREDIT WALLETS: Expense (paying debt) increases the owed balance, Income decreases it
+                        if (txType === 'expense') {
+                            wallet.balance += nativeAmount;
+                        } else {
+                            wallet.balance -= nativeAmount;
+                        }
+                    } else {
+                        // NORMAL WALLETS: Income increases balance, Expense decreases it
+                        if (txType === 'income') {
+                            wallet.balance += nativeAmount;
+                        } else {
+                            wallet.balance -= nativeAmount;
+                        }
+                    }
+
+                    // Guard against negative balance for non-credit wallets
+                    if (!isCredit && wallet.balance < 0) wallet.balance = 0;
+                    
+                    await wallet.save();
+
+                    // Attach native info to the transaction (newTx) for history view
+                    newTx.walletAmount = nativeAmount;
+                    newTx.walletCurrency = isCrypto ? wallet.coinSymbol : (isStocks ? (wallet.stockSymbol || wallet.stockTicker) : 'PHP');
+                    await newTx.save();
+
+                    // Attach native info to the payment log record
+                    payment.walletAmount = nativeAmount;
+                    payment.walletCurrency = newTx.walletCurrency;
+                    await payment.save();
+
+                    if (io) {
+                        io.to(`user:${req.userId}`).emit('wallet_updated', wallet.toObject());
+                    }
+                }
+            }
+        }
 
         // Invalidate transaction caches since we inject a new transaction
         invalidatePrefixes('transaction');
 
-        const io = req.app.get('io');
+        const fullTx = await Transaction.findById(newTx._id).populate('wallet', 'name type color').lean();
+        const decryptedTx = decryptNote(fullTx);
+
         if (io) {
-            io.to(`user:${req.userId}`).emit('new_transaction', newTx);
+            io.to(`user:${req.userId}`).emit('new_transaction', decryptedTx);
         }
 
         // Update debt's amountPaid
@@ -222,6 +356,8 @@ const logPayment = async (req, res) => {
         }
 
         await debt.save();
+
+        invalidatePrefixes('debt');
 
         if (io) io.to(`user:${req.userId}`).emit('update_debt', debt);
 
@@ -248,7 +384,10 @@ const getPayments = async (req, res) => {
         const debt = await Debt.findOne({ _id: req.params.id, user: req.userId });
         if (!debt) return res.status(404).json({ error: 'Debt not found.' });
 
-        const payments = await DebtPayment.find({ debt: debt._id }).sort({ paidAt: -1 }).lean();
+        const payments = await DebtPayment.find({ debt: debt._id })
+            .populate('wallet', 'name type color')
+            .sort({ paidAt: -1 })
+            .lean();
         res.json(payments);
     } catch (err) {
         console.error('[DEBT] getPayments error:', err.message);
@@ -274,6 +413,19 @@ const sendDebtReminder = async (req, res) => {
         const body = `₱${balance.toLocaleString()} remaining${debt.description ? ` — ${debt.description}` : ''}`;
 
         await sendPushNotification(user.pushToken, title, body, { debtId: debt._id });
+        
+        // ── In-App Notification ───────────────────────────────────
+        await Notification.create({
+            user: req.userId,
+            type: 'debt_reminder',
+            title,
+            message: body,
+            data: { debtId: debt._id }
+        }).then(n => {
+            const io = req.app.get('io');
+            if (io) io.to(`user:${req.userId}`).emit('new_notification', n);
+        }).catch(() => {});
+
         debt.reminderSent = true;
         await debt.save();
 

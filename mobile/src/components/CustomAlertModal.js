@@ -1,6 +1,6 @@
 import React from 'react';
 import { View, Text, StyleSheet, Modal, TouchableOpacity } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
+import { Ionicons, Feather } from '@expo/vector-icons';
 import { useTheme } from '../context/ThemeContext';
 
 const CustomAlertModal = ({
@@ -9,9 +9,14 @@ const CustomAlertModal = ({
     onConfirm,
     title,
     message,
-    type = 'info', // 'success', 'error', 'warning', 'info', 'confirm'
+    type = 'info',
     confirmText = 'Okay',
-    cancelText = 'Cancel'
+    cancelText = 'Cancel',
+    extraBtnText,
+    onExtra,
+    children,
+    hideButtons = false,
+    extraActions, // Array of { label, icon, onPress, danger }
 }) => {
     const { COLORS } = useTheme();
     const styles = getStyles(COLORS);
@@ -48,27 +53,61 @@ const CustomAlertModal = ({
                     </View>
 
                     <Text style={styles.title}>{title}</Text>
-                    <Text style={styles.message}>{message}</Text>
+                    <Text style={[styles.message, children && { marginBottom: 12 }]}>{message}</Text>
+                    {children}
 
-                    <View style={styles.actions}>
-                        {isConfirm && (
-                            <TouchableOpacity style={styles.cancelBtn} onPress={onClose}>
-                                <Text style={styles.cancelBtnText}>{cancelText}</Text>
+                    {/* Extra action buttons (used for wallet long-press menu) */}
+                    {extraActions && extraActions.length > 0 && (
+                        <View style={styles.extraActionsContainer}>
+                            {extraActions.map((action, i) => (
+                                <TouchableOpacity
+                                    key={i}
+                                    style={[styles.extraActionBtn, { borderColor: action.danger ? '#ef4444' : COLORS.border }, i > 0 && { marginTop: 10 }]}
+                                    onPress={action.onPress}
+                                >
+                                    {action.icon && <Feather name={action.icon} size={18} color={action.danger ? '#ef4444' : COLORS.text} style={{ marginRight: 10 }} />}
+                                    <Text style={[styles.extraActionText, action.danger && { color: '#ef4444' }]}>{action.label}</Text>
+                                </TouchableOpacity>
+                            ))}
+                            <TouchableOpacity style={[styles.extraActionBtn, { borderColor: COLORS.border, marginTop: 10 }]} onPress={onClose}>
+                                <Feather name="x" size={18} color={COLORS.textMuted} style={{ marginRight: 10 }} />
+                                <Text style={[styles.extraActionText, { color: COLORS.textMuted }]}>Cancel</Text>
                             </TouchableOpacity>
-                        )}
-                        <TouchableOpacity
-                            style={[
-                                styles.confirmBtn,
-                                { backgroundColor: isConfirm ? COLORS.primary : icon.color, flex: isConfirm ? 1 : 0, width: isConfirm ? 'auto' : '100%' }
-                            ]}
-                            onPress={() => {
-                                if (onConfirm) onConfirm();
-                                onClose();
-                            }}
-                        >
-                            <Text style={styles.confirmBtnText}>{confirmText}</Text>
-                        </TouchableOpacity>
-                    </View>
+                        </View>
+                    )}
+
+                    {!hideButtons && !extraActions && (
+                        <View style={[styles.actions, extraBtnText && { flexDirection: 'column' }]}>
+                            {isConfirm && (
+                                <TouchableOpacity style={styles.cancelBtn} onPress={onClose}>
+                                    <Text style={styles.cancelBtnText}>{cancelText}</Text>
+                                </TouchableOpacity>
+                            )}
+                            {extraBtnText && (
+                                <TouchableOpacity 
+                                    style={[styles.confirmBtn, { backgroundColor: COLORS.border, width: '100%' }]} 
+                                    onPress={() => {
+                                        if (onExtra) onExtra();
+                                        onClose();
+                                    }}
+                                >
+                                    <Text style={[styles.confirmBtnText, { color: COLORS.text }]}>{extraBtnText}</Text>
+                                </TouchableOpacity>
+                            )}
+                            <TouchableOpacity
+                                style={[
+                                    styles.confirmBtn,
+                                    { backgroundColor: isConfirm ? COLORS.primary : icon.color, flex: (isConfirm && !extraBtnText) ? 1 : 0, width: (isConfirm && !extraBtnText) ? 'auto' : '100%' }
+                                ]}
+                                onPress={() => {
+                                    if (onConfirm) onConfirm();
+                                    onClose();
+                                }}
+                            >
+                                <Text style={styles.confirmBtnText}>{confirmText}</Text>
+                            </TouchableOpacity>
+                        </View>
+                    )}
                 </View>
             </View>
         </Modal>
@@ -85,17 +124,17 @@ const getStyles = (COLORS) => StyleSheet.create({
     },
     alertBox: {
         width: '100%',
-        maxWidth: 320,
-        backgroundColor: COLORS.cardBackground || '#1e293b',
-        borderRadius: 24,
+        maxWidth: 340,
+        backgroundColor: COLORS.surface,
+        borderRadius: 28,
         padding: 24,
         alignItems: 'center',
         borderWidth: 1,
-        borderColor: COLORS.border || '#334155',
+        borderColor: COLORS.border,
         shadowColor: '#000',
-        shadowOffset: { width: 0, height: 10 },
-        shadowOpacity: 0.3,
-        shadowRadius: 20,
+        shadowOffset: { width: 0, height: 12 },
+        shadowOpacity: 0.2,
+        shadowRadius: 24,
         elevation: 20,
     },
     iconWrapper: {
@@ -151,6 +190,23 @@ const getStyles = (COLORS) => StyleSheet.create({
         color: '#fff',
         fontWeight: '700',
         fontSize: 15,
+    },
+    extraActionsContainer: {
+        width: '100%',
+        marginTop: 4,
+    },
+    extraActionBtn: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        paddingVertical: 13,
+        paddingHorizontal: 16,
+        borderRadius: 12,
+        borderWidth: 1,
+    },
+    extraActionText: {
+        fontSize: 15,
+        fontWeight: '700',
+        color: '#1f2937',
     },
 });
 

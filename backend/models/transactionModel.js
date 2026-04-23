@@ -85,7 +85,38 @@ const transactionSchema = new mongoose.Schema({
     runningBalance: {
         type: Number, // Total wallet balance after this transaction
     },
+    
+    // Link to other entities
+    relatedId: {
+        type: mongoose.Schema.Types.ObjectId,
+        refPath: 'relatedType',
+        default: null,
+    },
+    relatedType: {
+        type: String,
+        enum: ['Debt', 'SavingsGoal', null],
+        default: null,
+    },
 
+    attachment: {
+        type: String, // URL/Path to the receipt photo
+        default: null,
+    },
+    wallet: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Wallet',
+        default: null,
+        index: true,
+    },
+    // The actual amount deducted from the wallet in its native unit (e.g. BTC, Shares, USD)
+    walletAmount: {
+        type: Number,
+        default: null,
+    },
+    walletCurrency: {
+        type: String,
+        default: null,
+    },
 }, { timestamps: true });
 
 // ── Index for fast user + date range queries ──────────────────────────────────

@@ -1,4 +1,7 @@
 const Transaction = require('../models/transactionModel');
+const Budget = require('../models/budgetModel');
+const Wallet = require('../models/walletModel');
+const Notification = require('../models/Notification');
 const { invalidatePrefixes } = require('../utils/cache');
 const { encrypt, decryptNote } = require('../utils/encryption');
 const mongoose = require('mongoose');
@@ -27,6 +30,7 @@ const getTransactions = async (req, res) => {
                 .sort({ date: -1 })
                 .skip(skip)
                 .limit(parseInt(limit))
+                .populate('wallet', 'name type color')
                 .lean(),
             Transaction.countDocuments(filter),
         ]);
@@ -83,8 +87,9 @@ const getSummary = async (req, res) => {
         const stats = await Transaction.aggregate([
             {
                 $match: {
-                    user: req.user._id,
+                    user: new mongoose.Types.ObjectId(req.userId),
                     date: { $gte: start, $lte: end },
+                    wallet: null
                 }
             },
             {
@@ -129,9 +134,9 @@ const getSummary = async (req, res) => {
 
         summary.balance = summary.totalIncome - summary.totalExpenses;
 
-        // Calculate Lifetime Net Balance (regardless of range) for the Home Card
+        // Calculate Lifetime Net Balance of "HAND" money (transactions with no wallet)
         const lifetimeAgg = await Transaction.aggregate([
-            { $match: { user: new mongoose.Types.ObjectId(req.user._id) } },
+            { $match: { user: new mongoose.Types.ObjectId(req.userId), wallet: null } },
             { $group: { _id: '$type', total: { $sum: '$amount' } } }
         ]);
         let netBalance = 0;
@@ -162,21 +167,21 @@ const getSummary = async (req, res) => {
 // ─────────────────────────────────────────────────────────────────────────────
 const createTransaction = async (req, res) => {
     try {
-        invalidatePrefixes('transaction');
-
+        const io = req.app.get('io');
         const { 
             type, amount, category, categoryIcon, categoryColor, 
             description, date, note,
-            currency, originalAmount, exchangeRate 
+            currency, originalAmount, exchangeRate, attachment,
+            walletId, walletDeductAmount
         } = req.body;
 
         if (!type || !amount || !category) {
             return res.status(400).json({ error: 'type, amount, and category are required.' });
         }
 
-        // Calculate current total balance to store snapshot
+        // Calculate current total balance of "HAND" money (wallet: null)
         const balanceAgg = await Transaction.aggregate([
-            { $match: { user: new mongoose.Types.ObjectId(req.userId) } },
+            { $match: { user: new mongoose.Types.ObjectId(req.userId), wallet: null } },
             { $group: { _id: '$type', total: { $sum: '$amount' } } },
         ]);
         let currentBalance = 0;
@@ -187,7 +192,10 @@ const createTransaction = async (req, res) => {
         });
 
         const safeAmount = parseFloat(amount) || 0;
-        const runningBalance = type === 'income' ? currentBalance + safeAmount : currentBalance - safeAmount;
+        // Running balance only matters for HAND transactions if this is a HAND transaction
+        const runningBalance = !walletId 
+            ? (type === 'income' ? currentBalance + safeAmount : currentBalance - safeAmount)
+            : currentBalance; // Keep current hand balance if paying from wallet
 
         const transaction = await Transaction.create({
             user: req.userId,
@@ -202,13 +210,72 @@ const createTransaction = async (req, res) => {
             currency: currency || 'PHP',
             originalAmount,
             exchangeRate,
-            runningBalance
+            attachment,
+            runningBalance,
+            wallet: walletId || null
         });
 
-        const decrypted = decryptNote(transaction.toObject());
+        // ── Feature: Wallet Balance Sync ──────────────────────────
+        if (walletId) {
+            const wallet = await Wallet.findOne({ _id: walletId, userId: req.userId });
+            if (wallet) {
+                const fiatTypes = ['Debit', 'Credit', 'Cash', 'E-Wallet'];
+                const isFiat = fiatTypes.includes(wallet.type);
+                const isCrypto = wallet.type === 'Crypto';
+                const isStocks = wallet.type === 'Stocks';
+
+                const isCredit = wallet.type === 'Credit';
+
+                // Determine how much to add/deduct in native units
+                const nativeAmount = (isCrypto || isStocks)
+                    ? (walletDeductAmount != null ? Math.abs(parseFloat(walletDeductAmount)) : safeAmount)
+                    : safeAmount;
+
+                if (isFiat || isCrypto || isStocks) {
+                    if (isCredit) {
+                        // FOR CREDIT WALLETS: Expense increases the owed balance, Income decreases it
+                        if (type === 'expense') {
+                            wallet.balance += nativeAmount;
+                        } else {
+                            wallet.balance -= nativeAmount;
+                        }
+                    } else {
+                        // NORMAL WALLETS: Income increases balance, Expense decreases it
+                        if (type === 'income') {
+                            wallet.balance += nativeAmount;
+                        } else {
+                            wallet.balance -= nativeAmount;
+                        }
+                    }
+
+                    // Guard against negative balance for non-credit wallets (optional, credit can be negative)
+                    if (!isCredit && wallet.balance < 0) wallet.balance = 0;
+                    
+                    await wallet.save();
+                    
+                    // Attach native info to the transaction for history view
+                    transaction.walletAmount = nativeAmount;
+                    transaction.walletCurrency = isCrypto ? wallet.coinSymbol : (isStocks ? (wallet.stockSymbol || wallet.stockTicker) : 'PHP');
+                    await transaction.save();
+
+                    if (io) {
+                        io.to(`user:${req.userId}`).emit('wallet_updated', wallet.toObject());
+                    }
+                }
+            }
+        }
+
+        invalidatePrefixes('transaction');
+
+        // ── Feature #7: Budget Alerter ──────────────────────────────
+        if (type === 'expense') {
+            checkBudgetAlerts(req.userId, category, req.app.get('io'));
+        }
+
+        const fullTransaction = await Transaction.findById(transaction._id).populate('wallet', 'name type color').lean();
+        const decrypted = decryptNote(fullTransaction);
 
         // Emit real-time event so connected mobile clients update instantly
-        const io = req.app.get('io');
         if (io) {
             io.to(`user:${req.userId}`).emit('new_transaction', decrypted);
         }
@@ -226,8 +293,6 @@ const createTransaction = async (req, res) => {
 // ─────────────────────────────────────────────────────────────────────────────
 const updateTransaction = async (req, res) => {
     try {
-        invalidatePrefixes('transaction');
-
         // Encrypt note if it's being updated
         if (req.body.note !== undefined) {
             req.body.note = encrypt(req.body.note);
@@ -242,6 +307,8 @@ const updateTransaction = async (req, res) => {
         if (!transaction) {
             return res.status(404).json({ error: 'Transaction not found.' });
         }
+
+        invalidatePrefixes('transaction');
 
         const decrypted = decryptNote(transaction.toObject());
 
@@ -262,8 +329,6 @@ const updateTransaction = async (req, res) => {
 // ─────────────────────────────────────────────────────────────────────────────
 const deleteTransaction = async (req, res) => {
     try {
-        invalidatePrefixes('transaction');
-
         const transaction = await Transaction.findOneAndDelete({
             _id: req.params.id,
             user: req.userId,
@@ -272,6 +337,42 @@ const deleteTransaction = async (req, res) => {
         if (!transaction) {
             return res.status(404).json({ error: 'Transaction not found.' });
         }
+
+        // ── Feature: Wallet Balance Reversal Sync ──────────────────
+        if (transaction.wallet) {
+            const wallet = await Wallet.findOne({ _id: transaction.wallet, userId: req.userId });
+            if (wallet) {
+                const isCredit = wallet.type === 'Credit';
+                const amount = transaction.amount;
+                
+                // REVERSE the logic
+                if (isCredit) {
+                    // If we delete a Credit expense, the owed balance DECREASES
+                    if (transaction.type === 'expense') {
+                        wallet.balance -= amount;
+                    } else {
+                        wallet.balance += amount;
+                    }
+                } else {
+                    // Normal wallet: deleting an expense adds money back
+                    if (transaction.type === 'expense') {
+                        wallet.balance += amount;
+                    } else {
+                        wallet.balance -= amount;
+                    }
+                }
+
+                if (!isCredit && wallet.balance < 0) wallet.balance = 0;
+                await wallet.save();
+
+                const io = req.app.get('io');
+                if (io) {
+                    io.to(`user:${req.userId}`).emit('wallet_updated', wallet.toObject());
+                }
+            }
+        }
+
+        invalidatePrefixes('transaction');
 
         const io = req.app.get('io');
         if (io) {
@@ -364,8 +465,8 @@ const getAnalytics = async (req, res) => {
         const trendData = {
             labels: monthsLabel,
             datasets: [
-                { data: expenseData }, 
-                { data: incomeData }
+                { data: expenseData, color: (opacity = 1) => `rgba(233, 30, 140, ${opacity})` }, // primary pink
+                { data: incomeData, color: (opacity = 1) => `rgba(37, 99, 235, ${opacity})` }  // blue
             ]
         };
 
@@ -450,6 +551,83 @@ const getAnalytics = async (req, res) => {
     } catch (err) {
         console.error('[TRANSACTION] getAnalytics error:', err.message);
         res.status(500).json({ error: 'Failed to fetch analytics.' });
+    }
+};
+
+/**
+ * Helper: Budget Alert System
+ * Runs in background after a transaction is created
+ */
+const checkBudgetAlerts = async (userId, categoryName, io) => {
+    try {
+        const now = new Date();
+        const monthStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+
+        // 1. Find the budget for this category
+        const budget = await Budget.findOne({ user: userId, month: monthStr, category: categoryName });
+        if (!budget) return; // No budget set for this category
+
+        // 2. Calculate total spent this month for this category
+        const startDate = new Date(now.getFullYear(), now.getMonth(), 1);
+        const endDate = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59);
+
+        const spendingAgg = await Transaction.aggregate([
+            {
+                $match: {
+                    user: new mongoose.Types.ObjectId(userId),
+                    category: categoryName,
+                    type: 'expense',
+                    date: { $gte: startDate, $lte: endDate }
+                }
+            },
+            { $group: { _id: null, total: { $sum: '$amount' } } }
+        ]);
+
+        const totalSpent = spendingAgg.length > 0 ? spendingAgg[0].total : 0;
+        const limit = budget.allocatedAmount;
+        const percentage = (totalSpent / limit) * 100;
+
+        let alertType = null;
+        let alertTitle = '';
+        let alertMessage = '';
+
+        if (percentage >= 100) {
+            alertType = '100_percent';
+            alertTitle = '🚨 Budget Exceeded!';
+            alertMessage = `You've spent ${Math.round(percentage)}% of your "${categoryName}" budget for ${monthStr}.`;
+        } else if (percentage >= 80) {
+            alertType = '80_percent';
+            alertTitle = '⚠️ Budget Warning';
+            alertMessage = `You've reached ${Math.round(percentage)}% of your "${categoryName}" budget. Watch your spending!`;
+        }
+
+        if (alertType) {
+            // Check if we already sent this specific alert type for this category today
+            // (Wait: maybe just check if any exists for this category/month/type combo to avoid spam)
+            const exists = await Notification.findOne({
+                user: userId,
+                type: 'budget_alert',
+                'data.category': categoryName,
+                'data.threshold': alertType,
+                createdAt: { $gte: startDate } // Since it's a monthly budget, maybe once per month per threshold?
+            });
+
+            if (!exists) {
+                const notif = await Notification.create({
+                    user: userId,
+                    type: 'budget_alert',
+                    title: alertTitle,
+                    message: alertMessage,
+                    data: { category: categoryName, threshold: alertType, percentage }
+                });
+
+                if (io) {
+                    io.to(`user:${userId}`).emit('new_notification', notif);
+                }
+            }
+        }
+    } catch (e) {
+        console.error('[BUDGET_ALERT] Error:', e.message);
     }
 };
 

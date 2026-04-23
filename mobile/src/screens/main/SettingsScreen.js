@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import {
     View, Text, StyleSheet, TouchableOpacity,
-    Switch, ScrollView, Alert,
+    Switch, ScrollView, Alert, ActivityIndicator
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -10,14 +10,21 @@ import { useSecurity } from '../../context/SecurityContext';
 import { useTheme } from '../../context/ThemeContext';
 import { useAuth } from '../../context/AuthContext';
 import { spacing, radius } from '../../theme/colors';
-import { get2FAStatus, toggle2FA } from '../../api/api';
+import { get2FAStatus, toggle2FA, getCurrencyList, updateProfile as apiUpdateProfile, getTransactions } from '../../api/api';
+import { triggerHaptic } from '../../utils/haptics';
+import * as FileSystem from 'expo-file-system/legacy';
+import * as Sharing from 'expo-sharing';
+import * as Print from 'expo-print';
+import BottomSheetModal from '../../components/BottomSheetModal';
 import CustomAlertModal from '../../components/CustomAlertModal';
 import VerifyIdentityModal from '../../components/VerifyIdentityModal';
 
 export default function SettingsScreen({ navigation }) {
     const { COLORS, isDarkMode, toggleTheme } = useTheme();
-    const { userInfo } = useAuth();
-    const { logout } = useAuth();
+    const { userInfo, updateLocalUser, logout, hapticsEnabled, toggleHaptics, savingsFabStyle, toggleSavingsFabStyle } = useAuth();
+    const [currencyModalVisible, setCurrencyModalVisible] = useState(false);
+    const [currencyList, setCurrencyList] = useState([]);
+    const [updatingCurrency, setUpdatingCurrency] = useState(false);
     const {
         biometricEnabled, pinEnabled,
         isHardwareSupported, biometricType,
@@ -29,6 +36,10 @@ export default function SettingsScreen({ navigation }) {
     const [togglingBio, setTogglingBio] = useState(false);
     const [twoFAEnabled, setTwoFAEnabled] = useState(false);
     const [loading2FA, setLoading2FA] = useState(false);
+    const [exporting, setExporting] = useState(false);
+    const [exportModalVisible, setExportModalVisible] = useState(false);
+    const [exportFormat, setExportFormat] = useState('csv'); // 'csv' or 'pdf'
+    const [exportRange, setExportRange] = useState('all'); // 'month', 'last_month', 'year', 'all'
 
     // Step-up verification modal
     const [verifyModal, setVerifyModal] = useState({ visible: false, onSuccess: null, subtitle: '' });
@@ -46,8 +57,26 @@ export default function SettingsScreen({ navigation }) {
         try {
             const res = await get2FAStatus();
             setTwoFAEnabled(res.twoFactorEnabled);
+
+            // Also fetch currency list
+            const curRes = await getCurrencyList();
+            if (curRes.currencies) setCurrencyList(curRes.currencies);
         } catch (err) {
-            console.warn('[Settings] 2FA status fetch fail');
+            console.warn('[Settings] Initial fetch fail');
+        }
+    };
+
+    const handleUpdateCurrency = async (currencyCode) => {
+        triggerHaptic(hapticsEnabled, 'notificationSuccess');
+        setUpdatingCurrency(true);
+        try {
+            const res = await apiUpdateProfile({ currency: currencyCode });
+            await updateLocalUser(res);
+            setCurrencyModalVisible(false);
+        } catch (err) {
+            console.error('[Settings] Currency update fail');
+        } finally {
+            setUpdatingCurrency(false);
         }
     };
 
@@ -95,6 +124,16 @@ export default function SettingsScreen({ navigation }) {
         }
     };
 
+    const handleLogout = async () => {
+        setLogoutModal(false);
+        await logout();
+    };
+
+    const onToggleHaptics = async () => {
+        triggerHaptic(hapticsEnabled, 'impactMedium');
+        await toggleHaptics();
+    };
+
     const handleRemovePin = async () => {
         await removePin();
         setRemovePinModal(false);
@@ -114,6 +153,133 @@ export default function SettingsScreen({ navigation }) {
             closeVerify();
             setRemovePinModal(true);
         }, 'Confirm your identity to remove PIN protection');
+    };
+
+    const handleExportData = async () => {
+        setExporting(true);
+        setExportModalVisible(false); // close the parameters modal
+        try {
+            let qs = { limit: 100000 };
+            if (exportRange !== 'all') {
+                const now = new Date();
+                let start, end;
+                if (exportRange === 'month') {
+                    start = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
+                    end = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59).toISOString();
+                } else if (exportRange === 'last_month') {
+                    start = new Date(now.getFullYear(), now.getMonth() - 1, 1).toISOString();
+                    end = new Date(now.getFullYear(), now.getMonth(), 0, 23, 59, 59).toISOString();
+                } else if (exportRange === 'year') {
+                    start = new Date(now.getFullYear(), 0, 1).toISOString();
+                    end = new Date(now.getFullYear(), 11, 31, 23, 59, 59).toISOString();
+                }
+                if (start && end) {
+                    qs.startDate = start;
+                    qs.endDate = end;
+                }
+            }
+
+            const response = await getTransactions(qs);
+            if (!response?.transactions || response.transactions.length === 0) {
+                setTwoFAModal({ visible: true, title: 'No Data', message: 'You have no transactions to export for this range.', type: 'info' });
+                return;
+            }
+
+            const txs = response.transactions;
+
+            if (exportFormat === 'csv') {
+                const csvHeader = 'Date,Type,Category,Amount,Currency,Note,Description,ReceiptURL\n';
+                const csvRows = txs.map(tx => {
+                    const date = new Date(tx.date).toISOString().split('T')[0];
+                    const note = tx.note ? `"${tx.note.replace(/"/g, '""')}"` : '';
+                    const desc = tx.description ? `"${tx.description.replace(/"/g, '""')}"` : '';
+                    const attach = tx.attachment ? `"${tx.attachment}"` : '';
+                    return `${date},${tx.type},${tx.category},${tx.amount},${tx.currency || 'PHP'},${note},${desc},${attach}`;
+                }).join('\n');
+                const fileUri = FileSystem.documentDirectory + `Otter_Export_${exportRange}.csv`;
+                await FileSystem.writeAsStringAsync(fileUri, csvHeader + csvRows);
+                if (await Sharing.isAvailableAsync()) {
+                    await Sharing.shareAsync(fileUri, { dialogTitle: 'Export Otter Finance Data' });
+                } else {
+                    setTwoFAModal({ visible: true, title: 'Export Failed', message: 'Sharing is not available on this device.', type: 'error' });
+                }
+            } else {
+                // PDF Export
+                const totals = txs.reduce((acc, curr) => {
+                    if (curr.type === 'income') acc.income += parseFloat(curr.amount);
+                    else acc.expense += parseFloat(curr.amount);
+                    return acc;
+                }, { income: 0, expense: 0 });
+
+                const txRowsHtml = txs.map(tx => `
+                    <tr>
+                        <td>${new Date(tx.date).toLocaleDateString()}</td>
+                        <td><span style="color: ${tx.type === 'income' ? '#22c55e' : '#ef4444'}; font-weight: bold;">${tx.type.toUpperCase()}</span></td>
+                        <td>${tx.category}</td>
+                        <td>${tx.description || '-'}</td>
+                        <td><b>${tx.currency || 'PHP'} ${parseFloat(tx.amount).toFixed(2)}</b></td>
+                        <td>${tx.attachment ? `<a href="${tx.attachment}">View Receipt</a>` : '-'}</td>
+                    </tr>
+                `).join('');
+
+                const html = `
+                <html>
+                    <head>
+                        <style>
+                            body { font-family: 'Helvetica', sans-serif; padding: 20px; color: #333; }
+                            h1 { color: #E91E8C; text-align: center; margin-bottom: 5px; }
+                            h3 { margin: 0; color: #555; font-size: 14px; text-transform: uppercase; }
+                            p { margin: 5px 0; }
+                            .user-info { text-align: center; margin-bottom: 20px; color: #666; }
+                            .summary { display: flex; justify-content: space-around; background: #fdf2f8; padding: 15px; border-radius: 10px; margin-bottom: 20px; border: 1px solid #fbcfe8; text-align: center; }
+                            .income { color: #22c55e; font-size: 20px; font-weight: bold; }
+                            .expense { color: #ef4444; font-size: 20px; font-weight: bold; }
+                            .net { color: #333; font-size: 20px; font-weight: bold; }
+                            table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+                            th, td { padding: 12px; border-bottom: 1px solid #ddd; text-align: left; font-size: 14px; }
+                            th { background-color: #f1f5f9; font-weight: bold; color: #333; text-transform: uppercase; font-size: 12px; }
+                            a { color: #3b82f6; text-decoration: none; }
+                            tr:nth-child(even) { background-color: #fafafa; }
+                        </style>
+                    </head>
+                    <body>
+                        <h1>Otter Finance Report</h1>
+                        <div class="user-info">
+                            <p>Generated for: <b>${userInfo?.name || 'User'}</b> (${userInfo?.email || ''})</p>
+                            <p>Range: ${exportRange.replace('_', ' ').toUpperCase()}</p>
+                        </div>
+                        <div class="summary">
+                            <div><h3>Total Income</h3><p class="income">+ ${totals.income.toLocaleString(undefined, {minimumFractionDigits: 2})}</p></div>
+                            <div><h3>Total Expense</h3><p class="expense">- ${totals.expense.toLocaleString(undefined, {minimumFractionDigits: 2})}</p></div>
+                            <div><h3>Net Flow</h3><p class="net">${(totals.income - totals.expense).toLocaleString(undefined, {minimumFractionDigits: 2})}</p></div>
+                        </div>
+                        <table>
+                            <tr>
+                                <th>Date</th>
+                                <th>Type</th>
+                                <th>Category</th>
+                                <th>Description</th>
+                                <th>Amount</th>
+                                <th>Receipt</th>
+                            </tr>
+                            ${txRowsHtml}
+                        </table>
+                    </body>
+                </html>`;
+                const { uri } = await Print.printToFileAsync({ html });
+                if (await Sharing.isAvailableAsync()) {
+                    await Sharing.shareAsync(uri, { dialogTitle: 'Export Otter Finance Report', UTI: 'com.adobe.pdf' });
+                } else {
+                    setTwoFAModal({ visible: true, title: 'Export Failed', message: 'Sharing is not available on this device.', type: 'error' });
+                }
+            }
+
+        } catch (err) {
+            console.error('Export error:', err);
+            setTwoFAModal({ visible: true, title: 'Export Failed', message: 'An error occurred while exporting your data.', type: 'error' });
+        } finally {
+            setExporting(false);
+        }
     };
 
     // ─── Section / Row helpers ────────────────────────────────────────────────
@@ -167,8 +333,35 @@ export default function SettingsScreen({ navigation }) {
                     </View>
                 </LinearGradient>
 
-                {/* ── Security ─────────────────────────────────────────────── */}
+                {/* ── General Settings ─────────────────────────────────────── */}
                 <View style={[styles.card, { backgroundColor: COLORS.surface }]}>
+                    <SectionHeader title="GENERAL" icon="tune" />
+                    <SettingRow
+                        icon="currency-php"
+                        label="Primary Currency"
+                        sublabel={`Current default: ${userInfo?.currency || 'PHP'}`}
+                        onPress={() => setCurrencyModalVisible(true)}
+                        right={<Feather name="chevron-right" size={18} color={COLORS.textMuted} />}
+                    />
+                    <SettingRow
+                        icon="vibrate"
+                        label="Haptic Feedback"
+                        sublabel={hapticsEnabled ? 'Enabled — sensory vibrations' : 'Disabled'}
+                        noBorder
+                        right={
+                            <Switch
+                                value={hapticsEnabled}
+                                onValueChange={onToggleHaptics}
+                                trackColor={{ false: COLORS.border, true: COLORS.primary + '60' }}
+                                thumbColor={hapticsEnabled ? COLORS.primary : '#888'}
+                            />
+                        }
+                    />
+                </View>
+
+
+                {/* ── Security ─────────────────────────────────────────────── */}
+                <View style={[styles.card, { backgroundColor: COLORS.surface, marginTop: 12 }]}>
                     <SectionHeader title="SECURITY" icon="shield-lock" />
 
                     {/* Face ID / Fingerprint toggle */}
@@ -273,7 +466,51 @@ export default function SettingsScreen({ navigation }) {
                             thumbColor={isDarkMode ? COLORS.primary : '#888'}
                         />}
                     />
+                    <SettingRow
+                        icon="gesture-tap"
+                        label="FAB Style"
+                        sublabel={savingsFabStyle === 'modal' ? 'Opens a sliding bottom menu' : 'Expands into quick actions'}
+                        noBorder
+                        right={
+                            <Switch
+                                value={savingsFabStyle === 'modal'}
+                                onValueChange={toggleSavingsFabStyle}
+                                trackColor={{ false: COLORS.border, true: COLORS.primary + '60' }}
+                                thumbColor={savingsFabStyle === 'modal' ? COLORS.primary : '#888'}
+                            />
+                        }
+                    />
                 </View>
+
+                {/* ── Customization ─────────────────────────────────────────────── */}
+                <View style={[styles.card, { backgroundColor: COLORS.surface, marginTop: 12 }]}>
+                    <SectionHeader title="CUSTOMIZATION" icon="view-grid-plus" />
+                    <SettingRow
+                        icon="tag-multiple"
+                        label="Manage Categories"
+                        sublabel="Customize transaction categories and icons"
+                        right={<Feather name="chevron-right" size={18} color={COLORS.textMuted} />}
+                        onPress={() => navigation.navigate('ManageCategories')}
+                        noBorder
+                    />
+                </View>
+
+                {/* ── Data Management ───────────────────────────────────────── */}
+                <View style={[styles.card, { backgroundColor: COLORS.surface, marginTop: 12 }]}>
+                    <SectionHeader title="DATA MANAGEMENT" icon="database-export" />
+                    <SettingRow
+                        icon="file-download-outline"
+                        iconColor={COLORS.primary}
+                        label="Export Data"
+                        sublabel="Generate a CSV or PDF report"
+                        right={exporting ? <ActivityIndicator color={COLORS.primary} /> : <Feather name="download" size={18} color={COLORS.textMuted} />}
+                        onPress={() => {
+                            if (!exporting) setExportModalVisible(true);
+                        }}
+                        noBorder
+                    />
+                </View>
+
 
                 {/* ── Account ──────────────────────────────────────────────── */}
                 <View style={[styles.card, { backgroundColor: COLORS.surface, marginTop: 12 }]}>
@@ -332,6 +569,87 @@ export default function SettingsScreen({ navigation }) {
                 onSuccess={verifyModal.onSuccess}
                 onCancel={closeVerify}
             />
+
+            {/* Export Settings Modal */}
+            <BottomSheetModal visible={exportModalVisible} onClose={() => setExportModalVisible(false)}>
+                <View>
+                    <Text style={{ fontSize: 20, fontWeight: '900', color: COLORS.text, marginBottom: 8 }}>Export Data</Text>
+                    <Text style={{ fontSize: 14, color: COLORS.textMuted, marginBottom: 24, fontWeight: '500' }}>Generate a detailed report of your transactions.</Text>
+
+                    <Text style={{ fontSize: 12, fontWeight: '800', color: COLORS.textMuted, marginBottom: 12, marginTop: 4, letterSpacing: 0.5 }}>FORMAT</Text>
+                    <View style={{ flexDirection: 'row', gap: 12, marginBottom: 24 }}>
+                        <TouchableOpacity onPress={() => setExportFormat('csv')} style={[{ flex: 1, padding: 16, borderRadius: 16, borderWidth: 1.5, borderColor: COLORS.border, alignItems: 'center' }, exportFormat === 'csv' && { borderColor: COLORS.primary, backgroundColor: COLORS.primary + '10' }]}>
+                            <MaterialCommunityIcons name="file-excel" size={28} color={exportFormat === 'csv' ? COLORS.primary : COLORS.textMuted} />
+                            <Text style={[{ marginTop: 8, fontWeight: '800', color: COLORS.textMuted }, exportFormat === 'csv' && { color: COLORS.primary }]}>CSV (Data)</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity onPress={() => setExportFormat('pdf')} style={[{ flex: 1, padding: 16, borderRadius: 16, borderWidth: 1.5, borderColor: COLORS.border, alignItems: 'center' }, exportFormat === 'pdf' && { borderColor: COLORS.primary, backgroundColor: COLORS.primary + '10' }]}>
+                            <MaterialCommunityIcons name="file-pdf-box" size={28} color={exportFormat === 'pdf' ? COLORS.primary : COLORS.textMuted} />
+                            <Text style={[{ marginTop: 8, fontWeight: '800', color: COLORS.textMuted }, exportFormat === 'pdf' && { color: COLORS.primary }]}>PDF (Print)</Text>
+                        </TouchableOpacity>
+                    </View>
+
+                    <Text style={{ fontSize: 12, fontWeight: '800', color: COLORS.textMuted, marginBottom: 12, letterSpacing: 0.5 }}>TIME RANGE</Text>
+                    <View style={{ gap: 10, marginBottom: 30 }}>
+                        <TouchableOpacity onPress={() => setExportRange('month')} style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', padding: 16, borderRadius: 16, backgroundColor: COLORS.surface, borderWidth: 1.5, borderColor: exportRange === 'month' ? COLORS.primary : COLORS.border }}>
+                            <Text style={{ fontWeight: '700', fontSize: 15, color: exportRange === 'month' ? COLORS.primary : COLORS.text }}>This Month</Text>
+                            {exportRange === 'month' && <View style={{width: 24, height: 24, borderRadius: 12, backgroundColor: COLORS.primary, justifyContent: 'center', alignItems: 'center'}}><Feather name="check" size={14} color="#fff" /></View>}
+                        </TouchableOpacity>
+                        <TouchableOpacity onPress={() => setExportRange('last_month')} style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', padding: 16, borderRadius: 16, backgroundColor: COLORS.surface, borderWidth: 1.5, borderColor: exportRange === 'last_month' ? COLORS.primary : COLORS.border }}>
+                            <Text style={{ fontWeight: '700', fontSize: 15, color: exportRange === 'last_month' ? COLORS.primary : COLORS.text }}>Last Month</Text>
+                            {exportRange === 'last_month' && <View style={{width: 24, height: 24, borderRadius: 12, backgroundColor: COLORS.primary, justifyContent: 'center', alignItems: 'center'}}><Feather name="check" size={14} color="#fff" /></View>}
+                        </TouchableOpacity>
+                        <TouchableOpacity onPress={() => setExportRange('year')} style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', padding: 16, borderRadius: 16, backgroundColor: COLORS.surface, borderWidth: 1.5, borderColor: exportRange === 'year' ? COLORS.primary : COLORS.border }}>
+                            <Text style={{ fontWeight: '700', fontSize: 15, color: exportRange === 'year' ? COLORS.primary : COLORS.text }}>This Year</Text>
+                            {exportRange === 'year' && <View style={{width: 24, height: 24, borderRadius: 12, backgroundColor: COLORS.primary, justifyContent: 'center', alignItems: 'center'}}><Feather name="check" size={14} color="#fff" /></View>}
+                        </TouchableOpacity>
+                        <TouchableOpacity onPress={() => setExportRange('all')} style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', padding: 16, borderRadius: 16, backgroundColor: COLORS.surface, borderWidth: 1.5, borderColor: exportRange === 'all' ? COLORS.primary : COLORS.border }}>
+                            <Text style={{ fontWeight: '700', fontSize: 15, color: exportRange === 'all' ? COLORS.primary : COLORS.text }}>All Time</Text>
+                            {exportRange === 'all' && <View style={{width: 24, height: 24, borderRadius: 12, backgroundColor: COLORS.primary, justifyContent: 'center', alignItems: 'center'}}><Feather name="check" size={14} color="#fff" /></View>}
+                        </TouchableOpacity>
+                    </View>
+
+                    <TouchableOpacity onPress={handleExportData} style={{ backgroundColor: COLORS.primary, padding: 18, borderRadius: 16, alignItems: 'center', shadowColor: COLORS.primary, shadowOffset: {width: 0, height: 4}, shadowOpacity: 0.3, shadowRadius: 8, elevation: 4 }}>
+                        <Text style={{ color: '#fff', fontSize: 16, fontWeight: '900' }}>{exporting ? 'Generating...' : `Export ${exportFormat.toUpperCase()}`}</Text>
+                    </TouchableOpacity>
+                </View>
+            </BottomSheetModal>
+
+            {/* Currency Selection Modal */}
+            <CustomAlertModal
+                visible={currencyModalVisible}
+                onClose={() => setCurrencyModalVisible(false)}
+                title="Change Currency"
+                message="Choose your primary currency for all transactions."
+                type="info"
+                hideButtons={true}
+            >
+                <ScrollView style={{ width: '100%', maxHeight: 300 }} contentContainerStyle={{ paddingHorizontal: 10 }} showsVerticalScrollIndicator={false}>
+                    <View style={{ gap: 8, paddingBottom: 10, width: '100%' }}>
+                        {currencyList.map(curr => {
+                            const isSelected = userInfo?.currency === curr.code;
+                            return (
+                                <TouchableOpacity
+                                    key={curr.code}
+                                    onPress={() => handleUpdateCurrency(curr.code)}
+                                    style={[
+                                        styles.currencyListBtn,
+                                        { backgroundColor: isSelected ? COLORS.primary + '15' : COLORS.background, borderColor: isSelected ? COLORS.primary : COLORS.border }
+                                    ]}
+                                    disabled={updatingCurrency}
+                                >
+                                    <Text style={{ fontSize: 20 }}>{curr.flag}</Text>
+                                    <View style={{ flex: 1 }}>
+                                        <Text style={[styles.currencyListCode, { color: COLORS.text }]}>{curr.code}</Text>
+                                        <Text style={[styles.currencyListName, { color: COLORS.textMuted }]}>{curr.name}</Text>
+                                    </View>
+                                    {isSelected && <Feather name="check" size={18} color={COLORS.primary} />}
+                                    {updatingCurrency && isSelected && <ActivityIndicator size="small" color={COLORS.primary} />}
+                                </TouchableOpacity>
+                            );
+                        })}
+                    </View>
+                </ScrollView>
+            </CustomAlertModal>
         </SafeAreaView>
     );
 }
@@ -387,4 +705,11 @@ const styles = StyleSheet.create({
     },
     infoText: { fontSize: 13, lineHeight: 19, flex: 1 },
     version: { textAlign: 'center', marginTop: 32, fontSize: 12 },
+    currencyListBtn: {
+        flexDirection: 'row', alignItems: 'center', gap: 16, padding: 16,
+        borderRadius: radius.lg, borderWidth: 1, marginBottom: 12,
+        width: '100%',
+    },
+    currencyListCode: { fontSize: 18, fontWeight: '900' },
+    currencyListName: { fontSize: 13, fontWeight: '600' },
 });

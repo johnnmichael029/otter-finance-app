@@ -1,6 +1,13 @@
 import axios from 'axios';
 import { API_BASE } from '../context/AuthContext';
 
+// ─── Core / Utils ─────────────────────────────────────────────────────────────
+
+export const uploadReceipt = (formData) =>
+    axios.post(`${API_BASE}/uploads/receipt`, formData, {
+        headers: { 'Content-Type': 'multipart/form-data' }
+    }).then(r => r.data);
+
 // ─── Transactions ─────────────────────────────────────────────────────────────
 
 export const getTransactions = (params = {}) =>
@@ -32,8 +39,8 @@ export const createDebt = (data) =>
 export const updateDebt = (id, data) =>
     axios.patch(`${API_BASE}/debts/${id}`, data).then(r => r.data);
 
-export const deleteDebt = (id) =>
-    axios.delete(`${API_BASE}/debts/${id}`).then(r => r.data);
+export const deleteDebt = (id, params = {}) =>
+    axios.delete(`${API_BASE}/debts/${id}`, { params }).then(r => r.data);
 
 export const sendDebtReminder = (id) =>
     axios.post(`${API_BASE}/debts/${id}/remind`).then(r => r.data);
@@ -52,6 +59,9 @@ export const updateProfile = (data) =>
 
 export const savePushToken = (pushToken) =>
     axios.post(`${API_BASE}/users/push-token`, { pushToken }).then(r => r.data);
+
+export const completeOnboarding = (data) =>
+    axios.post(`${API_BASE}/users/complete-onboarding`, data).then(r => r.data);
 
 // ─── Sessions (Auth) ─────────────────────────────────────────────────────────
 
@@ -89,8 +99,8 @@ export const deleteBarcodePrice = (barcode) =>
 
 // ─── Recurring Bills ──────────────────────────────────────────────────────────
 
-export const getRecurringBills = () =>
-    axios.get(`${API_BASE}/recurring-bills`).then(r => r.data);
+export const getRecurringBills = (params = {}) =>
+    axios.get(`${API_BASE}/recurring-bills`, { params }).then(r => r.data);
 
 export const createRecurringBill = (data) =>
     axios.post(`${API_BASE}/recurring-bills`, data).then(r => r.data);
@@ -140,6 +150,20 @@ export const completeSavingsGoal = (id, data) =>
 
 export const bulkSavingsAction = (data) =>
     axios.post(`${API_BASE}/savings/bulk-action`, data).then(r => r.data);
+
+// ─── Wallets ──────────────────────────────────────────────────────────────────
+
+export const getWallets = () =>
+    axios.get(`${API_BASE}/wallets`).then(r => r.data);
+
+export const createWallet = (data) =>
+    axios.post(`${API_BASE}/wallets`, data).then(r => r.data);
+
+export const updateWallet = (id, data) =>
+    axios.put(`${API_BASE}/wallets/${id}`, data).then(r => r.data);
+
+export const deleteWallet = (id) =>
+    axios.delete(`${API_BASE}/wallets/${id}`).then(r => r.data);
 
 // ─── Shopping ─────────────────────────────────────────────────────────────────
 
@@ -197,4 +221,32 @@ export const getExchangeRates = (base = 'PHP') =>
 
 export const convertCurrency = (from, to, amount) =>
     axios.get(`${API_BASE}/currency/convert`, { params: { from, to, amount } }).then(r => r.data);
+
+// ── Notifications ─────────────────────────────────────────────────────────────
+
+export const getNotifications = () =>
+    axios.get(`${API_BASE}/notifications`).then(r => r.data);
+
+export const markNotificationRead = (id) =>
+    axios.patch(`${API_BASE}/notifications/${id}/read`).then(r => r.data);
+
+export const markAllNotificationsRead = () =>
+    axios.patch(`${API_BASE}/notifications/mark-all-read`).then(r => r.data);
+
+export const deleteNotification = (id) =>
+    axios.delete(`${API_BASE}/notifications/${id}`).then(r => r.data);
+
+// ── Categories ────────────────────────────────────────────────────────────────
+
+export const getCategories = () =>
+    axios.get(`${API_BASE}/categories`).then(r => r.data);
+
+export const createCategory = (data) =>
+    axios.post(`${API_BASE}/categories`, data).then(r => r.data);
+
+export const updateCategory = (id, data) =>
+    axios.put(`${API_BASE}/categories/${id}`, data).then(r => r.data);
+
+export const deleteCategory = (id) =>
+    axios.delete(`${API_BASE}/categories/${id}`).then(r => r.data);
 

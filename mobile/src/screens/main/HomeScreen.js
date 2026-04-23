@@ -9,17 +9,31 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useAuth } from '../../context/AuthContext';
 import { useTheme } from '../../context/ThemeContext';
 import { Feather, MaterialCommunityIcons, Ionicons } from '@expo/vector-icons';
-import { getTransactionSummary, getTransactions, getSavingsGoals, getDebts } from '../../api/api';
+import { getTransactionSummary, getTransactions, getSavingsGoals, getDebts, getNotifications } from '../../api/api';
 import { spacing, radius, typography, shadow, colors } from '../../theme/colors';
 import CustomAlertModal from '../../components/CustomAlertModal';
 import Skeleton from '../../components/Skeleton';
 import { connectSocket, disconnectSocket, getSocket } from '../../utils/socket';
-import { useWalletMode } from '../../../App';
+import { useUIStore } from '../../store/uiStore';
+import { useFinanceStore } from '../../store/financeStore';
+import { updateWidgetBalance } from '../../utils/widget';
 
 const otterIcon = require('../../../assets/icon/welcomeOtter.png');
 
-const formatCurrency = (amount, currency = 'PHP') =>
-    new Intl.NumberFormat('en-PH', { style: 'currency', currency }).format(amount);
+const formatCurrency = (amount, currency = 'PHP') => {
+    try {
+        return new Intl.NumberFormat('en-US', {
+            style: 'currency',
+            currency: currency || 'PHP',
+            minimumFractionDigits: 2,
+            maximumFractionDigits: 2
+        }).format(amount || 0);
+    } catch (e) {
+        // Fallback for environments with limited Intl support
+        const symbol = currency === 'PHP' ? '₱' : '$';
+        return `${symbol}${Number(amount).toFixed(2)}`;
+    }
+};
 
 const formatDateTime = (dateString) => {
     if (!dateString) return '';
@@ -65,9 +79,24 @@ const getIconColor = (tx, COLORS) => {
 };
 
 export default function HomeScreen({ navigation }) {
-    const { userInfo, userToken, logout } = useAuth();
-    const { COLORS, toggleTheme, isDarkMode } = useTheme();
-    const { setIsSavingsMode } = useWalletMode();
+    const userInfo = useAuth(state => state.userInfo);
+    const userToken = useAuth(state => state.userToken);
+    const logout = useAuth(state => state.logout);
+    const COLORS = useTheme(state => state.COLORS);
+    const toggleTheme = useTheme(state => state.toggleTheme);
+    const isDarkMode = useTheme(state => state.isDarkMode);
+    const setIsSavingsMode = useUIStore(state => state.setIsSavingsMode);
+
+    // Warm the financeStore background cache
+    const refreshAll = useFinanceStore(state => state.refreshAll);
+    const wallets = useFinanceStore(state => state.wallets);
+    const cryptoPrices = useFinanceStore(state => state.cryptoPrices);
+    const hideGlobalBalance = useFinanceStore(state => state.hideGlobalBalance);
+    const setHideGlobalBalance = useFinanceStore(state => state.setHideGlobalBalance);
+
+    React.useEffect(() => {
+        if (userToken) refreshAll();
+    }, [userToken, refreshAll]);
     // Security context is used by Settings screen — lock state managed globally
     const [savingsTotalSaved, setSavingsTotalSaved] = React.useState(0);
     const [debtStats, setDebtStats] = React.useState({ iOwe: 0, owedToMe: 0 });
@@ -80,6 +109,7 @@ export default function HomeScreen({ navigation }) {
     const [loadingMore, setLoadingMore] = useState(false);
     const [logoutModalVisible, setLogoutModalVisible] = useState(false);
     const [dateRange, setDateRange] = useState('Week');
+    const [unreadNotifCount, setUnreadNotifCount] = useState(0);
 
     // Transaction Details Modal State
     const [selectedTx, setSelectedTx] = useState(null);
@@ -126,12 +156,14 @@ export default function HomeScreen({ navigation }) {
         // Guard: don't attempt authenticated requests without a valid token
         if (!userToken) return;
         try {
-            const [s, t, savRes, debtsRes] = await Promise.all([
+            const [s, t, savRes, debtsRes, notifRes] = await Promise.all([
                 getTransactionSummary({ range: dateRange.toLowerCase() }),
                 getTransactions({ limit: 10, page: 1 }),
                 getSavingsGoals().catch(() => ({ totalSaved: 0 })),
                 getDebts().catch(() => ([])),
+                getNotifications().catch(() => ({ unreadCount: 0 })),
             ]);
+            setUnreadNotifCount(notifRes?.unreadCount || 0);
             setSavingsTotalSaved(savRes?.totalSaved || 0);
 
             // Calculate debt totals for real net worth
@@ -148,6 +180,7 @@ export default function HomeScreen({ navigation }) {
             setDebtStats({ iOwe, owedToMe });
 
             setSummary(s);
+            updateWidgetBalance(s.balance);
             const txs = t.transactions || [];
             setRecent(txs);
             setPage(2);
@@ -214,7 +247,10 @@ export default function HomeScreen({ navigation }) {
 
         const refreshSummary = () => {
             getTransactionSummary({ range: dateRange.toLowerCase() })
-                .then(s => setSummary(s))
+                .then(s => {
+                    setSummary(s);
+                    updateWidgetBalance(s.balance);
+                })
                 .catch(() => { });
         };
 
@@ -262,6 +298,13 @@ export default function HomeScreen({ navigation }) {
             }).catch(() => { });
         };
 
+        const handleCurrencyUpdate = () => {
+            // Slight delay to ensure DB and Cache are fully settled before refetch
+            setTimeout(() => {
+                load();
+            }, 600);
+        };
+
         socket.on('new_transaction', handleNewTransaction);
         socket.on('update_transaction', handleUpdateTransaction);
         socket.on('delete_transaction', handleDeleteTransaction);
@@ -269,10 +312,21 @@ export default function HomeScreen({ navigation }) {
         socket.on('update_savings_goal', handleSavingsChange);
         socket.on('delete_savings_goal', handleSavingsChange);
         socket.on('new_savings_transfer', handleSavingsChange);
-        
+
         socket.on('new_debt', handleDebtChange);
         socket.on('update_debt', handleDebtChange);
         socket.on('delete_debt', handleDebtChange);
+        socket.on('currency_updated', handleCurrencyUpdate);
+
+        socket.on('new_notification', () => {
+            setUnreadNotifCount(prev => prev + 1);
+        });
+        socket.on('notification_read', () => {
+            setUnreadNotifCount(prev => Math.max(0, prev - 1));
+        });
+        socket.on('all_notifications_read', () => {
+            setUnreadNotifCount(0);
+        });
 
         return () => {
             socket.off('new_transaction', handleNewTransaction);
@@ -285,6 +339,10 @@ export default function HomeScreen({ navigation }) {
             socket.off('new_debt', handleDebtChange);
             socket.off('update_debt', handleDebtChange);
             socket.off('delete_debt', handleDebtChange);
+            socket.off('currency_updated', handleCurrencyUpdate);
+            socket.off('new_notification');
+            socket.off('notification_read');
+            socket.off('all_notifications_read');
         };
     }, [userInfo?._id, dateRange]);
 
@@ -294,7 +352,20 @@ export default function HomeScreen({ navigation }) {
     const walletBal = summary.netBalance ?? summary.balance ?? 0;
     const savingBal = savingsTotalSaved ?? 0;
     const netDebt = debtStats.owedToMe - debtStats.iOwe;
-    const netWorth = walletBal + savingBal + netDebt;
+
+    // Calculate total accounts/wallets worth (Banks, GCash, Crypto, etc.)
+    const walletsWorth = (wallets || []).reduce((acc, w) => {
+        if (w.type === 'Crypto' && w.coinId) {
+            const price = cryptoPrices?.[w.coinId] || 0;
+            return acc + (w.balance * price);
+        }
+        if (w.type === 'Credit') {
+            return acc - (w.balance || 0); // Credit is a liability
+        }
+        return acc + (w.balance || 0);
+    }, 0);
+
+    const netWorth = walletBal + savingBal + netDebt + walletsWorth;
 
     // Otter mood based on net worth
     const otterMood = () => {
@@ -386,11 +457,25 @@ export default function HomeScreen({ navigation }) {
                     </View>
                     <View style={{ flexDirection: 'row', alignItems: 'center' }}>
                         <TouchableOpacity
-                            onPress={() => setIsSavingsMode(true)}
+                            onPress={() => {
+                                setIsSavingsMode(true);
+                                // No need for popToTop here as we are on the Home screen already
+                            }}
                             style={[{ marginRight: spacing.sm, padding: 8, backgroundColor: COLORS.primary + '20', borderRadius: 12 }]}
                         >
-
                             <MaterialCommunityIcons name="piggy-bank-outline" size={20} color={COLORS.primary} />
+                        </TouchableOpacity>
+
+                        <TouchableOpacity
+                            onPress={() => navigation.navigate('Notifications')}
+                            style={[{ marginRight: spacing.sm, padding: 8, backgroundColor: COLORS.surface, borderRadius: 12 }]}
+                        >
+                            <Feather name="bell" size={20} color={COLORS.textMuted} />
+                            {unreadNotifCount > 0 && (
+                                <View style={[styles.badge, { backgroundColor: COLORS.primary }]}>
+                                    <Text style={styles.badgeText}>{unreadNotifCount > 9 ? '9+' : unreadNotifCount}</Text>
+                                </View>
+                            )}
                         </TouchableOpacity>
                         {/* <TouchableOpacity onPress={toggleTheme} style={{ marginRight: spacing.sm, padding: 8, backgroundColor: COLORS.surface, borderRadius: 12 }}>
                             <Feather name={isDarkMode ? 'sun' : 'moon'} size={22} color={COLORS.textMuted} />
@@ -418,24 +503,31 @@ export default function HomeScreen({ navigation }) {
                         </View>
                     </View>
 
-                    <Text style={styles.balanceLabel}>TOTAL NET WORTH</Text>
-                    <Text style={styles.balanceAmount}>{formatCurrency(netWorth, userInfo?.currency)}</Text>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+                        <Text style={styles.balanceLabel}>HAND</Text>
+                        <TouchableOpacity onPress={() => setHideGlobalBalance(!hideGlobalBalance)} hitSlop={{ top: 15, bottom: 15, left: 15, right: 15 }}>
+                            <Feather name={hideGlobalBalance ? 'eye-off' : 'eye'} size={18} color="rgba(255,255,255,0.8)" style={{ marginRight: 4 }} />
+                        </TouchableOpacity>
+                    </View>
+                    <Text style={styles.balanceAmount}>{hideGlobalBalance ? '••••••••' : formatCurrency(walletBal, userInfo?.currency)}</Text>
+
 
                     {/* Net Worth Breakdown */}
                     <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 16, paddingTop: 16, borderTopWidth: 1, borderTopColor: 'rgba(255,255,255,0.2)' }}>
                         <View>
-                            <Text style={{ color: 'rgba(255,255,255,0.7)', fontSize: 10, fontWeight: '700' }}>WALLET</Text>
-                            <Text style={{ color: '#fff', fontSize: 13, fontWeight: '800' }}>{formatCurrency(walletBal, userInfo?.currency)}</Text>
+
+                            <Text style={{ color: 'rgba(255,255,255,0.7)', fontSize: 10, fontWeight: '700' }}>SAVINGS</Text>
+                            <Text style={{ color: '#fff', fontSize: 13, fontWeight: '800' }}>{hideGlobalBalance ? '••••' : `+${formatCurrency(savingBal, userInfo?.currency)}`}</Text>
                         </View>
                         <View style={{ alignItems: 'flex-start', paddingLeft: 12 }}>
-                            <Text style={{ color: 'rgba(255,255,255,0.7)', fontSize: 10, fontWeight: '700' }}>SAVINGS</Text>
-                            <Text style={{ color: '#fff', fontSize: 13, fontWeight: '800' }}>+{formatCurrency(savingBal, userInfo?.currency)}</Text>
+                            <Text style={{ color: 'rgba(255,255,255,0.7)', fontSize: 10, fontWeight: '700' }}>WALLETS</Text>
+                            <Text style={{ color: '#fff', fontSize: 13, fontWeight: '800' }}>
+                                {hideGlobalBalance ? '••••' : formatCurrency(walletsWorth, userInfo?.currency)}
+                            </Text>
                         </View>
                         <View style={{ alignItems: 'flex-end', marginLeft: 'auto' }}>
-                            <Text style={{ color: 'rgba(255,255,255,0.7)', fontSize: 10, fontWeight: '700' }}>NET DEBT</Text>
-                            <Text style={{ color: netDebt < 0 ? '#fca5a5' : (netDebt > 0 ? '#86efac' : '#fff'), fontSize: 13, fontWeight: '800' }}>
-                                {netDebt > 0 ? '+' : ''}{formatCurrency(netDebt, userInfo?.currency)}
-                            </Text>
+                            <Text style={{ color: 'rgba(255,255,255,0.7)', fontSize: 10, fontWeight: '700' }}>TOTAL NET WORTH</Text>
+                            <Text style={{ color: '#fff', fontSize: 13, fontWeight: '800' }}>{hideGlobalBalance ? '••••••••' : formatCurrency(netWorth, userInfo?.currency)}</Text>
                         </View>
                     </View>
                 </LinearGradient>
@@ -501,8 +593,8 @@ export default function HomeScreen({ navigation }) {
                 {/* Quick Actions — GCash Style */}
                 <View style={[styles.quickActionsCard, { backgroundColor: COLORS.surface }]}>
                     <Text style={[styles.quickActionsTitle, { color: COLORS.textMuted }]}>QUICK ACTIONS</Text>
-                    <ScrollView 
-                        horizontal 
+                    <ScrollView
+                        horizontal
                         showsHorizontalScrollIndicator={false}
                         contentContainerStyle={styles.quickActionsRow}
                     >
@@ -655,6 +747,22 @@ export default function HomeScreen({ navigation }) {
                                                         <Text style={[styles.modalDetailValue, { color: COLORS.text }]}>{selectedTx.description || selectedTx.note}</Text>
                                                     </View>
                                                 ) : null}
+                                                <View style={[styles.modalDetailRow]}>
+                                                    <Text style={[styles.modalDetailLabel, { color: COLORS.textMuted }]}>Payment Source</Text>
+                                                    <View style={[styles.walletBadge, { backgroundColor: (selectedTx.wallet?.color || COLORS.primary) + '20' }]}>
+                                                        <Text style={[styles.walletBadgeText, { color: selectedTx.wallet?.color || COLORS.primary }]}>
+                                                            {selectedTx.wallet ? `${selectedTx.wallet.name} (${selectedTx.wallet.type})` : 'HAND'}
+                                                        </Text>
+                                                    </View>
+                                                </View>
+                                                {selectedTx.walletAmount !== null && selectedTx.walletAmount !== undefined && (
+                                                    <View style={[styles.modalDetailRow, { borderBottomWidth: 0 }]}>
+                                                        <Text style={[styles.modalDetailLabel, { color: COLORS.textMuted }]}>Native Cost</Text>
+                                                        <Text style={[styles.modalDetailValue, { color: COLORS.text, fontWeight: '700' }]}>
+                                                            {selectedTx.walletAmount.toLocaleString(undefined, { maximumFractionDigits: 8 })} {selectedTx.walletCurrency}
+                                                        </Text>
+                                                    </View>
+                                                )}
                                             </View>
                                         </View>
                                     </>
@@ -771,5 +879,25 @@ const styles = StyleSheet.create({
     modalDetailBox: { width: '100%', borderWidth: 1, borderRadius: radius.lg, padding: spacing.md },
     modalDetailRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: 'rgba(0,0,0,0.05)' },
     modalDetailLabel: { fontSize: 13, fontWeight: '600' },
-    modalDetailValue: { fontSize: 14, fontWeight: '500' },
+    modalDetailValue: { fontSize: 13, fontWeight: '700', textAlign: 'right' },
+    walletBadge: { paddingHorizontal: 8, paddingVertical: 4, borderRadius: 8 },
+    walletBadgeText: { fontSize: 11, fontWeight: '800' },
+    badge: {
+        position: 'absolute',
+        top: 4,
+        right: 4,
+        minWidth: 16,
+        paddingHorizontal: 2,
+        height: 16,
+        borderRadius: 8,
+        justifyContent: 'center',
+        alignItems: 'center',
+        borderWidth: 1.5,
+        borderColor: 'white'
+    },
+    badgeText: {
+        color: 'white',
+        fontSize: 8,
+        fontWeight: '900'
+    }
 });
