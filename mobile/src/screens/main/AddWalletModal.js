@@ -44,6 +44,8 @@ export default function AddWalletModal({ visible, onClose }) {
     const [name, setName] = useState('');
     const [color, setColor] = useState('#374151');
     const [balance, setBalance] = useState('');
+    const [currency, setCurrency] = useState({ code: 'PHP', symbol: '₱', flag: '🇵🇭' });
+    const [exchangeRate, setExchangeRate] = useState(1);
 
     // crypto state
     const [cryptoQuery, setCryptoQuery] = useState('');
@@ -150,6 +152,21 @@ export default function AddWalletModal({ visible, onClose }) {
         setStep(3);
     };
 
+    // ── Conversion logic ──────────────────────────────────────────────────────
+    useEffect(() => {
+        if (currency.code === 'PHP' || step !== 3) {
+            setExchangeRate(1);
+            return;
+        }
+        const fetchRate = async () => {
+            try {
+                const res = await api.convertCurrency(currency.code, 'PHP', 1);
+                setExchangeRate(res.rate);
+            } catch (e) { console.warn('Rate fetch failed', e.message); }
+        };
+        fetchRate();
+    }, [currency, step]);
+
     const handleSave = async () => {
         if (!name.trim()) return;
         setLoading(true);
@@ -157,6 +174,7 @@ export default function AddWalletModal({ visible, onClose }) {
             await api.createWallet({
                 name, type, templateId, color,
                 balance: parseFloat(balance) || 0,
+                currency: currency.code,
                 ...(selectedCoin && {
                     coinId: selectedCoin.id,
                     coinSymbol: selectedCoin.symbol?.toUpperCase(),
@@ -369,16 +387,40 @@ export default function AddWalletModal({ visible, onClose }) {
 
             <View style={styles.inputGroup}>
                 <Text style={[styles.label, { color: COLORS.textMuted }]}>
-                    {selectedCoin ? `BALANCE (${selectedCoin.symbol?.toUpperCase()})` : 'CURRENT BALANCE (₱)'}
+                    {selectedCoin ? `BALANCE (${selectedCoin.symbol?.toUpperCase()})` : `CURRENT BALANCE (${currency.symbol})`}
                 </Text>
-                <TextInput
-                    style={[styles.input, styles.balanceInput, { backgroundColor: COLORS.inputBackground, color: COLORS.text, borderColor: COLORS.inputBorder }]}
-                    value={balance}
-                    onChangeText={setBalance}
-                    placeholder="0.00"
-                    placeholderTextColor={COLORS.textMuted}
-                    keyboardType="numeric"
-                />
+                <View style={styles.balanceContainer}>
+                    {!selectedCoin && !selectedStock && (
+                        <TouchableOpacity 
+                            style={[styles.currencyBtn, { backgroundColor: COLORS.surface, borderColor: COLORS.border }]}
+                            onPress={() => useFinanceStore.getState().setCurrencyModalVisible(true)}
+                        >
+                            <Text style={styles.currencyFlag}>{currency.flag}</Text>
+                            <Text style={[styles.currencyCode, { color: COLORS.text }]}>{currency.code}</Text>
+                            <Feather name="chevron-down" size={14} color={COLORS.textMuted} />
+                        </TouchableOpacity>
+                    )}
+                    <TextInput
+                        style={[styles.input, styles.balanceInput, { flex: 1, backgroundColor: COLORS.inputBackground, color: COLORS.text, borderColor: COLORS.inputBorder }]}
+                        value={balance}
+                        onChangeText={setBalance}
+                        placeholder="0.00"
+                        placeholderTextColor={COLORS.textMuted}
+                        keyboardType="numeric"
+                    />
+                </View>
+                
+                {/* Exchange Rate Hint */}
+                {currency.code !== 'PHP' && !selectedCoin && !selectedStock && (
+                    <View style={styles.conversionInfo}>
+                        <Text style={[styles.conversionText, { color: COLORS.textMuted }]}>
+                            ≈ ₱{(parseFloat(balance || 0) * exchangeRate).toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                        </Text>
+                        <View style={[styles.rateTag, { backgroundColor: COLORS.primary + '15' }]}>
+                            <Text style={[styles.rateText, { color: COLORS.primary }]}>1 {currency.code} is = to ₱{exchangeRate.toFixed(2)}</Text>
+                        </View>
+                    </View>
+                )}
             </View>
 
             <TouchableOpacity
@@ -431,6 +473,52 @@ export default function AddWalletModal({ visible, onClose }) {
                     {step === 3 && renderStep3()}
                 </Animated.View>
             </KeyboardAvoidingView>
+
+            {/* Currency Selector Modal */}
+            <Modal
+                visible={useFinanceStore(state => state.currencyModalVisible)}
+                transparent
+                animationType="slide"
+            >
+                <View style={styles.currencyModalOverlay}>
+                    <View style={[styles.currencyModalContent, { backgroundColor: COLORS.surface }]}>
+                        <View style={styles.currencyModalHeader}>
+                            <Text style={[styles.currencyModalTitle, { color: COLORS.text }]}>Select Currency</Text>
+                            <TouchableOpacity onPress={() => useFinanceStore.getState().setCurrencyModalVisible(false)}>
+                                <Feather name="x" size={24} color={COLORS.textMuted} />
+                            </TouchableOpacity>
+                        </View>
+                        <FlatList
+                            data={[
+                                { code: 'PHP', symbol: '₱', flag: '🇵🇭' },
+                                { code: 'USD', symbol: '$', flag: '🇺🇸' },
+                                { code: 'EUR', symbol: '€', flag: '🇪🇺' },
+                                { code: 'GBP', symbol: '£', flag: '🇬🇧' },
+                                { code: 'JPY', symbol: '¥', flag: '🇯🇵' },
+                                { code: 'KRW', symbol: '₩', flag: '🇰🇷' },
+                                { code: 'CAD', symbol: '$', flag: '🇨🇦' },
+                                { code: 'AUD', symbol: '$', flag: '🇦🇺' },
+                            ]}
+                            keyExtractor={i => i.code}
+                            renderItem={({ item }) => (
+                                <TouchableOpacity 
+                                    style={styles.currencyRow} 
+                                    onPress={() => {
+                                        setCurrency(item);
+                                        useFinanceStore.getState().setCurrencyModalVisible(false);
+                                    }}
+                                >
+                                    <Text style={styles.currencyFlagLarge}>{item.flag}</Text>
+                                    <View>
+                                        <Text style={[styles.currencyNameLarge, { color: COLORS.text }]}>{item.code}</Text>
+                                        <Text style={{ color: COLORS.textMuted, fontSize: 12 }}>{item.symbol}</Text>
+                                    </View>
+                                </TouchableOpacity>
+                            )}
+                        />
+                    </View>
+                </View>
+            </Modal>
         </Modal>
     );
 }
@@ -479,4 +567,23 @@ const styles = StyleSheet.create({
     // Stock badge
     stockBadge: { width: 48, height: 48, borderRadius: 12, justifyContent: 'center', alignItems: 'center' },
     stockBadgeText: { fontWeight: '900', fontSize: 12, letterSpacing: -0.5 },
+
+    // Conversion UI (Matching AddTransactionScreen)
+    balanceContainer: { flexDirection: 'row', gap: 10, alignItems: 'center' },
+    currencyBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 12, height: 60, borderRadius: 16, borderWidth: 1 },
+    currencyFlag: { fontSize: 20 },
+    currencyCode: { fontWeight: '800', fontSize: 14 },
+    conversionInfo: { marginTop: 12, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+    conversionText: { fontSize: 16, fontWeight: '700' },
+    rateTag: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 8 },
+    rateText: { fontSize: 11, fontWeight: '800' },
+
+    // Currency Modal
+    currencyModalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
+    currencyModalContent: { borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 20, maxHeight: '70%' },
+    currencyModalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 },
+    currencyModalTitle: { fontSize: 18, fontWeight: '800' },
+    currencyRow: { flexDirection: 'row', alignItems: 'center', gap: 16, paddingVertical: 12, borderBottomWidth: 0.5, borderBottomColor: 'rgba(0,0,0,0.05)' },
+    currencyFlagLarge: { fontSize: 32 },
+    currencyNameLarge: { fontSize: 16, fontWeight: '700' },
 });

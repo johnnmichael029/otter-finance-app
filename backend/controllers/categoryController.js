@@ -54,7 +54,7 @@ const updateCategory = async (req, res) => {
         const updated = await Category.findOneAndUpdate(
             { _id: req.params.id, user: req.user._id },
             req.body,
-            { new: true }
+            { returnDocument: 'after', runValidators: true }
         );
         if (!updated) return res.status(404).json({ error: 'Category not found' });
         res.json(updated);

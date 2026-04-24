@@ -72,7 +72,7 @@ const updateBill = async (req, res) => {
         const bill = await RecurringBill.findOneAndUpdate(
             { _id: req.params.id, user: req.userId },
             { $set: req.body },
-            { new: true, runValidators: true }
+            { returnDocument: 'after', runValidators: true }
         );
         if (!bill) return res.status(404).json({ error: 'Bill not found.' });
 

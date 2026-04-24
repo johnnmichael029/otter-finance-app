@@ -7,19 +7,44 @@ import {
 import Animated, { ZoomIn, ZoomOut } from 'react-native-reanimated';
 import { Swipeable } from 'react-native-gesture-handler';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { Feather } from '@expo/vector-icons';
+import { Feather, MaterialCommunityIcons } from '@expo/vector-icons';
 import BottomSheetModal from '../../components/BottomSheetModal';
 import { useTheme } from '../../context/ThemeContext';
 import { useAuth } from '../../context/AuthContext';
-import { getBudgets, upsertBudget, deleteBudget, getCategories } from '../../api/api';
+import { getBudgets, upsertBudget, deleteBudget, getCategories, createCategory } from '../../api/api';
 import { spacing, radius } from '../../theme/colors';
 import Skeleton from '../../components/Skeleton';
 import CustomAlertModal from '../../components/CustomAlertModal';
+import { useFinanceStore } from '../../store/financeStore';
+
+const DynamicIcon = ({ name, size, color, style }) => {
+    const MCI_ICONS = ['piggy-bank-outline', 'account-cash'];
+    if (MCI_ICONS && MCI_ICONS.includes(name)) {
+        return <MaterialCommunityIcons name={name} size={size} color={color} style={style} />;
+    }
+    return <Feather name={name} size={size} color={color} style={style} />;
+};
 
 const formatCurrency = (amount, currency = 'PHP') =>
     new Intl.NumberFormat('en-PH', { style: 'currency', currency }).format(amount);
 
 const MONTH_LABELS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+const ICONS = Array.from(new Set([
+    'briefcase', 'trending-up', 'gift', 'plus-circle', 'coffee', 'truck', 'shopping-bag', 'file-text',
+    'heart', 'tv', 'wifi', 'home', 'monitor', 'smartphone', 'headphones', 'book', 'pen-tool',
+    'aperture', 'camera', 'music', 'map', 'navigation', 'compass', 'award', 'star', 'sun', 'moon', 'zap',
+    'tag', 'speaker', 'watch', 'anchor', 'box', 'cloud', 'cpu', 'database', 'droplet', 'feather',
+    'flag', 'globe', 'image', 'key', 'layers', 'mic', 'package', 'paperclip',
+    'phone', 'printer', 'radio', 'scissors', 'shield', 'tool', 'trash', 'umbrella', 'unlock', 'user', 'video',
+    'smile', 'piggy-bank-outline', 'account-cash'
+]));
+
+const COLORS_PALETTE = [
+    '#ef4444', '#f97316', '#f59e0b', '#84cc16', '#22c55e', '#10b981', '#14b8a6', '#06b6d4',
+    '#0ea5e9', '#3b82f6', '#6366f1', '#8b5cf6', '#a855f7', '#d946ef', '#ec4899', '#f43f5e',
+    '#64748b', '#78716c'
+];
 
 const PRESET_CATEGORIES = [
     { label: 'Overall', icon: 'pie-chart', color: '#E91E8C' },
@@ -29,7 +54,6 @@ const PRESET_CATEGORIES = [
     { label: 'Bills', icon: 'file-text', color: '#ef4444' },
     { label: 'Health', icon: 'heart', color: '#22c55e' },
     { label: 'Entertainment', icon: 'tv', color: '#8b5cf6' },
-    { label: 'Subscriptions', icon: 'wifi', color: '#06b6d4' },
 ];
 
 export default function BudgetScreen() {
@@ -46,7 +70,18 @@ export default function BudgetScreen() {
     const [refreshing, setRefreshing] = useState(false);
     const [modalVisible, setModalVisible] = useState(false);
     const [saving, setSaving] = useState(false);
-    const [form, setForm] = useState({ category: 'Overall', categoryIcon: 'pie-chart', categoryColor: '#E91E8C', allocatedAmount: '', customCategory: '' });
+    const [showAllCats, setShowAllCats] = useState(false);
+    const [showAllIcons, setShowAllIcons] = useState(false);
+    const [form, setForm] = useState({
+        category: 'Overall',
+        categoryIcon: 'pie-chart',
+        categoryColor: '#E91E8C',
+        allocatedAmount: '',
+        reminderAmount: '',
+        customCategory: '',
+        customIcon: 'tag',
+        customColor: '#6b7280'
+    });
     const [useCustom, setUseCustom] = useState(false);
     const [alertConfig, setAlertConfig] = useState({ visible: false, title: '', message: '', type: 'info', onConfirm: null });
 
@@ -71,29 +106,98 @@ export default function BudgetScreen() {
         }
     }, [selectedMonth]);
 
-    useEffect(() => { load(); }, [load]);
+    // Merge budgets (No longer using offline sync)
+    const processedBudgets = budgets.map(b => ({
+        ...b,
+        spent: b.spent || 0
+    }));
+
+    useEffect(() => { load(); }, [load, selectedMonth]);
 
     const handleSave = async () => {
         const cat = useCustom ? form.customCategory.trim() : form.category;
-        if (!cat) return Alert.alert('Missing', 'Please select or type a category.');
-        if (!form.allocatedAmount || isNaN(parseFloat(form.allocatedAmount))) {
-            return Alert.alert('Missing', 'Please enter a valid amount.');
+        if (!cat) {
+            return setAlertConfig({
+                visible: true,
+                title: 'Missing Category',
+                message: 'Please select a category or enter a custom name.',
+                type: 'warning'
+            });
         }
+
+        if (!form.allocatedAmount || isNaN(parseFloat(form.allocatedAmount))) {
+            return setAlertConfig({
+                visible: true,
+                title: 'Missing Amount',
+                message: 'Please enter a valid monthly budget amount.',
+                type: 'warning'
+            });
+        }
+
+        const limit = parseFloat(form.allocatedAmount);
+        const reminder = form.reminderAmount ? parseFloat(form.reminderAmount) : 0;
+
+        if (reminder > limit) {
+            return setAlertConfig({
+                visible: true,
+                title: 'Invalid Reminder',
+                message: 'Reminder amount cannot be higher than your total budget limit!',
+                type: 'warning'
+            });
+        }
+
+        const budgetData = {
+            month: selectedMonth,
+            category: cat,
+            categoryIcon: useCustom ? form.customIcon : form.categoryIcon,
+            categoryColor: useCustom ? form.customColor : form.categoryColor,
+            allocatedAmount: limit,
+            reminderAmount: reminder,
+        };
+
         setSaving(true);
         try {
-            await upsertBudget({
-                month: selectedMonth,
-                category: cat,
-                categoryIcon: useCustom ? 'tag' : form.categoryIcon,
-                categoryColor: useCustom ? '#6b7280' : form.categoryColor,
-                allocatedAmount: parseFloat(form.allocatedAmount),
-            });
+            // If custom, check if we need to create the category globally first
+            if (useCustom) {
+                const catName = form.customCategory.trim();
+                const exists = remoteCats.find(c => c.label.toLowerCase() === catName.toLowerCase());
+                
+                if (!exists) {
+                    try {
+                        await createCategory({
+                            name: catName,
+                            icon: form.customIcon,
+                            color: form.customColor,
+                            type: 'expense'
+                        });
+                    } catch (catErr) {
+                        console.error('[Budget] Auto-category creation failed:', catErr);
+                        // We continue anyway so the budget still gets created
+                    }
+                }
+            }
+
+            await upsertBudget(budgetData);
             setModalVisible(false);
-            setForm({ category: 'Overall', categoryIcon: 'pie-chart', categoryColor: '#E91E8C', allocatedAmount: '', customCategory: '' });
+            setForm({
+                category: 'Overall',
+                categoryIcon: 'pie-chart',
+                categoryColor: '#E91E8C',
+                allocatedAmount: '',
+                reminderAmount: '',
+                customCategory: '',
+                customIcon: 'tag',
+                customColor: '#6b7280'
+            });
             setUseCustom(false);
             load();
         } catch (e) {
-            Alert.alert('Error', 'Could not save budget.');
+            setAlertConfig({
+                visible: true,
+                title: 'Error',
+                message: 'Failed to save budget limit. Please check your connection.',
+                type: 'error'
+            });
         } finally {
             setSaving(false);
         }
@@ -108,8 +212,17 @@ export default function BudgetScreen() {
             confirmText: 'Delete',
             onConfirm: async () => {
                 setAlertConfig(p => ({ ...p, visible: false }));
-                await deleteBudget(id);
-                setBudgets(prev => prev.filter(b => b._id !== id));
+                try {
+                    await deleteBudget(id);
+                    setBudgets(prev => prev.filter(b => b._id !== id));
+                } catch (err) {
+                    setAlertConfig({
+                        visible: true,
+                        title: 'Error',
+                        message: 'Failed to delete budget limit.',
+                        type: 'error'
+                    });
+                }
             }
         });
     };
@@ -129,8 +242,8 @@ export default function BudgetScreen() {
         ...(remoteCats.length > 0 ? remoteCats : PRESET_CATEGORIES.slice(1))
     ];
 
-    const overallBudget = budgets.find(b => b.category === 'Overall');
-    const categoryBudgets = budgets.filter(b => b.category !== 'Overall');
+    const overallBudget = processedBudgets.find(b => b.category === 'Overall');
+    const categoryBudgets = processedBudgets.filter(b => b.category !== 'Overall');
 
     const renderRightActions = (progress, dragX, id) => {
         const scale = dragX.interpolate({
@@ -171,7 +284,7 @@ export default function BudgetScreen() {
                     <View style={[styles.budgetCard, { backgroundColor: COLORS.surface, marginBottom: 0 }]}>
                         <View style={styles.budgetCardTop}>
                             <View style={[styles.budgetIcon, { backgroundColor: (budget.categoryColor || '#E91E8C') + '20' }]}>
-                                <Feather name={budget.categoryIcon || 'pie-chart'} size={18} color={budget.categoryColor || '#E91E8C'} />
+                                <DynamicIcon name={budget.categoryIcon || 'pie-chart'} size={18} color={budget.categoryColor || '#E91E8C'} />
                             </View>
                             <View style={{ flex: 1 }}>
                                 <Text style={[styles.budgetCat, { color: COLORS.text }]}>{budget.category}</Text>
@@ -180,20 +293,23 @@ export default function BudgetScreen() {
                                 </Text>
                             </View>
                             <View style={{ alignItems: 'flex-end' }}>
-                                <Text style={[styles.budgetAmt, { color: COLORS.text }]}>{formatCurrency(budget.allocatedAmount, userInfo?.currency)}</Text>
+                                <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 2 }}>
+                                    {budget.isPending && <Feather name="clock" size={10} color={COLORS.primary} style={{ marginRight: 4 }} />}
+                                    <Text style={[styles.budgetAmt, { color: COLORS.text }]}>{formatCurrency(budget.allocatedAmount, userInfo?.currency)}</Text>
+                                </View>
                                 <Text style={[styles.budgetSpent, { color: COLORS.textMuted }]}>Spent: {formatCurrency(budget.spent, userInfo?.currency)}</Text>
                             </View>
                         </View>
 
-                {/* Progress Bar */}
-                <View style={styles.barBg}>
-                    <View style={[styles.barFill, { width: `${pct}%`, backgroundColor: barColor }]} />
-                </View>
-                <View style={styles.barLabels}>
-                    <Text style={[styles.barPct, { color: barColor }]}>{Math.round(pct)}%</Text>
-                    {over && <Text style={[styles.overTag, { color: '#ef4444', backgroundColor: '#ef444415' }]}>Over Budget</Text>}
-                    {warn && <Text style={[styles.overTag, { color: '#f59e0b', backgroundColor: '#f59e0b15' }]}>Almost Full</Text>}
-                </View>
+                        {/* Progress Bar */}
+                        <View style={styles.barBg}>
+                            <View style={[styles.barFill, { width: `${pct}%`, backgroundColor: barColor }]} />
+                        </View>
+                        <View style={styles.barLabels}>
+                            <Text style={[styles.barPct, { color: barColor }]}>{Math.round(pct)}%</Text>
+                            {over && <Text style={[styles.overTag, { color: '#ef4444', backgroundColor: '#ef444415' }]}>Over Budget</Text>}
+                            {warn && <Text style={[styles.overTag, { color: '#f59e0b', backgroundColor: '#f59e0b15' }]}>Almost Full</Text>}
+                        </View>
                     </View>
                 </Swipeable>
             </Animated.View>
@@ -252,7 +368,7 @@ export default function BudgetScreen() {
                     refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); load(); }} tintColor={COLORS.primary} />}
                     contentContainerStyle={styles.content}
                 >
-                    {budgets.length === 0 ? (
+                    {processedBudgets.length === 0 ? (
                         <View style={styles.empty}>
                             <Text style={styles.emptyEmoji}>📊</Text>
                             <Text style={[styles.emptyTitle, { color: COLORS.text }]}>No Budgets Set</Text>
@@ -281,47 +397,133 @@ export default function BudgetScreen() {
             )}
 
             {/* Add Budget Modal */}
+            {/* Add Budget Modal */}
             <BottomSheetModal visible={modalVisible} onClose={() => setModalVisible(false)}>
-                <View style={styles.sheetHandle} />
-                <Text style={[styles.sheetTitle, { color: COLORS.text }]}>Set Budget</Text>
+                <ScrollView showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
+                    <Text style={[styles.sheetTitle, { color: COLORS.text }]}>Set Budget</Text>
 
-                {/* Category Selection */}
-                <Text style={[styles.label, { color: COLORS.textMuted }]}>CATEGORY</Text>
-                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8, paddingBottom: spacing.sm }}>
-                    {PRESET_CATS.map(cat => {
-                        const selected = !useCustom && form.category === cat.label;
-                        return (
-                            <TouchableOpacity key={cat.label} onPress={() => { setUseCustom(false); setForm(f => ({ ...f, category: cat.label, categoryIcon: cat.icon, categoryColor: cat.color })); }}
-                                style={[styles.catChip, { backgroundColor: selected ? cat.color : COLORS.background, borderColor: selected ? cat.color : COLORS.border }]}>
-                                <Feather name={cat.icon} size={14} color={selected ? '#fff' : cat.color} />
-                                <Text style={{ color: selected ? '#fff' : COLORS.text, fontSize: 12, fontWeight: '600' }}>{cat.label}</Text>
+                    {/* Category Selection */}
+                    <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                        <Text style={[styles.label, { color: COLORS.textMuted, marginBottom: 0 }]}>CATEGORY</Text>
+                        {PRESET_CATS.length > 4 && (
+                            <TouchableOpacity onPress={() => setShowAllCats(!showAllCats)}>
+                                <Text style={{ fontSize: 12, fontWeight: '700', color: COLORS.primary }}>
+                                    {showAllCats ? 'Show Less' : 'See All'}
+                                </Text>
                             </TouchableOpacity>
-                        );
-                    })}
-                    <TouchableOpacity onPress={() => setUseCustom(true)}
-                        style={[styles.catChip, { backgroundColor: useCustom ? COLORS.primary : COLORS.background, borderColor: useCustom ? COLORS.primary : COLORS.border }]}>
-                        <Feather name="edit-2" size={14} color={useCustom ? '#fff' : COLORS.textMuted} />
-                        <Text style={{ color: useCustom ? '#fff' : COLORS.text, fontSize: 12, fontWeight: '600' }}>Custom</Text>
+                        )}
+                    </View>
+
+                    {showAllCats ? (
+                        <View style={styles.catGrid}>
+                            {PRESET_CATS.map(cat => {
+                                const selected = !useCustom && form.category === cat.label;
+                                return (
+                                    <TouchableOpacity key={cat.label} onPress={() => { setUseCustom(false); setForm(f => ({ ...f, category: cat.label, categoryIcon: cat.icon, categoryColor: cat.color })); }}
+                                        style={[styles.catChipGrid, { backgroundColor: selected ? cat.color : COLORS.background, borderColor: selected ? cat.color : COLORS.border }]}>
+                                        <DynamicIcon name={cat.icon} size={14} color={selected ? '#fff' : cat.color} />
+                                        <Text style={{ color: selected ? '#fff' : COLORS.text, fontSize: 12, fontWeight: '600' }} numberOfLines={1}>{cat.label}</Text>
+                                    </TouchableOpacity>
+                                );
+                            })}
+                            <TouchableOpacity onPress={() => setUseCustom(true)}
+                                style={[styles.catChipGrid, { backgroundColor: useCustom ? COLORS.primary : COLORS.background, borderColor: useCustom ? COLORS.primary : COLORS.border }]}>
+                                <Feather name="edit-2" size={14} color={useCustom ? '#fff' : COLORS.textMuted} />
+                                <Text style={{ color: useCustom ? '#fff' : COLORS.text, fontSize: 12, fontWeight: '600' }}>Custom</Text>
+                            </TouchableOpacity>
+                        </View>
+                    ) : (
+                        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8, paddingBottom: spacing.sm }}>
+                            {PRESET_CATS.map(cat => {
+                                const selected = !useCustom && form.category === cat.label;
+                                return (
+                                    <TouchableOpacity key={cat.label} onPress={() => { setUseCustom(false); setForm(f => ({ ...f, category: cat.label, categoryIcon: cat.icon, categoryColor: cat.color })); }}
+                                        style={[styles.catChip, { backgroundColor: selected ? cat.color : COLORS.background, borderColor: selected ? cat.color : COLORS.border }]}>
+                                        <DynamicIcon name={cat.icon} size={14} color={selected ? '#fff' : cat.color} />
+                                        <Text style={{ color: selected ? '#fff' : COLORS.text, fontSize: 12, fontWeight: '600' }}>{cat.label}</Text>
+                                    </TouchableOpacity>
+                                );
+                            })}
+                            <TouchableOpacity onPress={() => setUseCustom(true)}
+                                style={[styles.catChip, { backgroundColor: useCustom ? COLORS.primary : COLORS.background, borderColor: useCustom ? COLORS.primary : COLORS.border }]}>
+                                <Feather name="edit-2" size={14} color={useCustom ? '#fff' : COLORS.textMuted} />
+                                <Text style={{ color: useCustom ? '#fff' : COLORS.text, fontSize: 12, fontWeight: '600' }}>Custom</Text>
+                            </TouchableOpacity>
+                        </ScrollView>
+                    )}
+
+                    {/* Custom Category Input */}
+                    {useCustom && (
+                        <View style={{ marginTop: spacing.sm }}>
+                            <TextInput style={[styles.input, { backgroundColor: COLORS.background, color: COLORS.text, borderColor: COLORS.border }]}
+                                placeholder="Category name..." placeholderTextColor={COLORS.textMuted}
+                                value={form.customCategory} onChangeText={v => setForm(f => ({ ...f, customCategory: v }))} />
+
+                            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: spacing.md, marginBottom: 6 }}>
+                                <Text style={[styles.label, { color: COLORS.textMuted, marginBottom: 0 }]}>PICK ICON</Text>
+                                <TouchableOpacity onPress={() => setShowAllIcons(!showAllIcons)}>
+                                    <Text style={{ fontSize: 12, fontWeight: '700', color: COLORS.primary }}>
+                                        {showAllIcons ? 'Show Less' : 'See All'}
+                                    </Text>
+                                </TouchableOpacity>
+                            </View>
+
+                            {showAllIcons ? (
+                                <View style={styles.iconGrid}>
+                                    {ICONS.map(ix => (
+                                        <TouchableOpacity key={ix} onPress={() => setForm(f => ({ ...f, customIcon: ix }))}
+                                            style={[styles.iconBoxSmall, {
+                                                backgroundColor: form.customIcon === ix ? COLORS.primary + '20' : COLORS.background,
+                                                borderColor: form.customIcon === ix ? COLORS.primary : COLORS.border,
+                                                width: '18%'
+                                            }]}>
+                                            <DynamicIcon name={ix} size={18} color={form.customIcon === ix ? COLORS.primary : COLORS.textMuted} />
+                                        </TouchableOpacity>
+                                    ))}
+                                </View>
+                            ) : (
+                                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8, paddingBottom: spacing.sm }}>
+                                    {ICONS.slice(0, 15).map(ix => (
+                                        <TouchableOpacity key={ix} onPress={() => setForm(f => ({ ...f, customIcon: ix }))}
+                                            style={[styles.iconBoxSmall, {
+                                                backgroundColor: form.customIcon === ix ? COLORS.primary + '20' : COLORS.background,
+                                                borderColor: form.customIcon === ix ? COLORS.primary : COLORS.border
+                                            }]}>
+                                            <DynamicIcon name={ix} size={18} color={form.customIcon === ix ? COLORS.primary : COLORS.textMuted} />
+                                        </TouchableOpacity>
+                                    ))}
+                                </ScrollView>
+                            )}
+
+                            <Text style={[styles.label, { color: COLORS.textMuted, marginTop: spacing.sm }]}>PICK COLOR</Text>
+                            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 10, paddingBottom: spacing.sm }}>
+                                {COLORS_PALETTE.map(cx => (
+                                    <TouchableOpacity key={cx} onPress={() => setForm(f => ({ ...f, customColor: cx }))}
+                                        style={[styles.colorCircleSmall, { backgroundColor: cx }, form.customColor === cx && { borderWidth: 3, borderColor: COLORS.text }]}
+                                    />
+                                ))}
+                            </ScrollView>
+                        </View>
+                    )}
+
+                    {/* Budget Amount */}
+                    <Text style={[styles.label, { color: COLORS.textMuted }]}>MONTHLY LIMIT (₱)</Text>
+                    <TextInput style={[styles.input, { backgroundColor: COLORS.background, color: COLORS.text, borderColor: COLORS.border }]}
+                        placeholder="e.g. 5000" placeholderTextColor={COLORS.textMuted} keyboardType="decimal-pad"
+                        value={form.allocatedAmount} onChangeText={v => setForm(f => ({ ...f, allocatedAmount: v }))} />
+
+                    {/* Reminder Amount */}
+                    <Text style={[styles.label, { color: COLORS.textMuted, marginTop: spacing.sm }]}>SET REMINDER AT (₱)</Text>
+                    <TextInput style={[styles.input, { backgroundColor: COLORS.background, color: COLORS.text, borderColor: COLORS.border }]}
+                        placeholder="e.g. 4000 (Optional)" placeholderTextColor={COLORS.textMuted} keyboardType="decimal-pad"
+                        value={form.reminderAmount} onChangeText={v => setForm(f => ({ ...f, reminderAmount: v }))} />
+                    <Text style={{ fontSize: 10, color: COLORS.textMuted, marginTop: -2 }}>We'll notify you when you hit this amount.</Text>
+
+                    <TouchableOpacity onPress={handleSave} disabled={saving}
+                        style={[styles.saveBtn, { backgroundColor: COLORS.primary }]}>
+                        {saving ? <ActivityIndicator color="#fff" /> : <Text style={styles.saveBtnText}>Save Budget</Text>}
                     </TouchableOpacity>
                 </ScrollView>
-
-                {/* Custom Category Input */}
-                {useCustom && (
-                    <TextInput style={[styles.input, { backgroundColor: COLORS.background, color: COLORS.text, borderColor: COLORS.border }]}
-                        placeholder="Category name..." placeholderTextColor={COLORS.textMuted}
-                        value={form.customCategory} onChangeText={v => setForm(f => ({ ...f, customCategory: v }))} />
-                )}
-
-                {/* Budget Amount */}
-                <Text style={[styles.label, { color: COLORS.textMuted }]}>MONTHLY LIMIT (₱)</Text>
-                <TextInput style={[styles.input, { backgroundColor: COLORS.background, color: COLORS.text, borderColor: COLORS.border }]}
-                    placeholder="e.g. 5000" placeholderTextColor={COLORS.textMuted} keyboardType="decimal-pad"
-                    value={form.allocatedAmount} onChangeText={v => setForm(f => ({ ...f, allocatedAmount: v }))} />
-
-                <TouchableOpacity onPress={handleSave} disabled={saving}
-                    style={[styles.saveBtn, { backgroundColor: COLORS.primary }]}>
-                    {saving ? <ActivityIndicator color="#fff" /> : <Text style={styles.saveBtnText}>Save Budget</Text>}
-                </TouchableOpacity>
             </BottomSheetModal>
 
             <CustomAlertModal
@@ -377,4 +579,9 @@ const getStyles = (COLORS) => StyleSheet.create({
     catChip: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 12, paddingVertical: 8, borderRadius: 20, borderWidth: 1.5 },
     saveBtn: { paddingVertical: 16, borderRadius: radius.xl, alignItems: 'center', marginTop: spacing.md },
     saveBtnText: { color: '#fff', fontSize: 16, fontWeight: '800' },
+    iconBoxSmall: { width: 42, height: 42, borderRadius: 12, justifyContent: 'center', alignItems: 'center', borderWidth: 1.5 },
+    colorCircleSmall: { width: 34, height: 34, borderRadius: 17 },
+    catGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: spacing.sm },
+    catChipGrid: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 10, paddingVertical: 8, borderRadius: 20, borderWidth: 1.5, width: '31%' },
+    iconGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: spacing.sm },
 });

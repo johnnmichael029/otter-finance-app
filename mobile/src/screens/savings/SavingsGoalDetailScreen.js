@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
     View, Text, StyleSheet, TouchableOpacity,
-    ActivityIndicator, RefreshControl, Alert, FlatList
+    ActivityIndicator, RefreshControl, Alert, FlatList,
+    Modal, TouchableWithoutFeedback
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Feather, Ionicons } from '@expo/vector-icons';
@@ -50,6 +51,10 @@ export default function SavingsGoalDetailScreen({ route, navigation }) {
     const [finishing, setFinishing] = useState(false);
     const [alertConfig, setAlertConfig] = useState({ visible: false, title: '', message: '', type: 'info', onConfirm: null });
 
+    // Modal State
+    const [selectedTransfer, setSelectedTransfer] = useState(null);
+    const [modalVisible, setModalVisible] = useState(false);
+
     // Infinite Scroll State
     const [page, setPage] = useState(1);
     const [hasMore, setHasMore] = useState(true);
@@ -64,7 +69,7 @@ export default function SavingsGoalDetailScreen({ route, navigation }) {
             ]);
             const updated = (goalsRes.goals || []).find(g => g._id === initialGoal._id);
             if (updated) setGoal(updated);
-            
+
             setTransfers(transfersRes.transfers || []);
             setPage(2);
             setHasMore((transfersRes.transfers || []).length >= 15);
@@ -159,7 +164,7 @@ export default function SavingsGoalDetailScreen({ route, navigation }) {
         setAlertConfig({
             visible: true,
             title: hasFunds ? 'Delete & Refund?' : 'Delete Goal?',
-            message: hasFunds 
+            message: hasFunds
                 ? `This goal has a remaining balance of ${formatCurrency(goal.currentAmount, userInfo?.currency)}. It will be automatically returned to your Savings Balance upon deletion.`
                 : 'This goal and all its transfer history will be deleted. Are you sure?',
             type: hasFunds ? 'info' : 'confirm',
@@ -280,13 +285,22 @@ export default function SavingsGoalDetailScreen({ route, navigation }) {
                     const isDeposit = t.direction === 'to_savings' || t.direction === 'income' || t.direction === 'transfer_goal';
                     const color = isDeposit ? '#22c55e' : '#f59e0b';
                     return (
-                        <View style={{ marginHorizontal: spacing.lg }}>
+                        <TouchableOpacity
+                            style={{ marginHorizontal: spacing.lg }}
+                            activeOpacity={0.7}
+                            onPress={() => {
+                                setSelectedTransfer(t);
+                                setModalVisible(true);
+                            }}
+                        >
                             <View style={[styles.txRow, { backgroundColor: COLORS.surface }]}>
                                 <View style={[styles.txIcon, { backgroundColor: color + '20' }]}>
                                     <Feather name={isDeposit ? 'arrow-down-circle' : 'arrow-up-circle'} size={16} color={color} />
                                 </View>
                                 <View style={{ flex: 1 }}>
-                                    <Text style={[styles.txLabel, { color: COLORS.text }]}>{isDeposit ? 'Deposited' : 'Withdrawn'}</Text>
+                                    <Text style={[styles.txLabel, { color: COLORS.text }]}>
+                                        {t.direction === 'to_savings' ? 'Saved to Pot' : (t.direction === 'transfer_goal' ? 'Goal Transfer' : (t.direction === 'income' ? 'Savings Income' : 'Withdrawn'))}
+                                    </Text>
                                     <Text style={[styles.txDate, { color: COLORS.textMuted }]}>
                                         {new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }).format(new Date(t.createdAt))}
                                     </Text>
@@ -300,15 +314,15 @@ export default function SavingsGoalDetailScreen({ route, navigation }) {
                                     )}
                                 </View>
                             </View>
-                        </View>
+                        </TouchableOpacity>
                     );
                 }}
                 keyExtractor={(item, index) => `${item._id}-${index}`}
                 ListHeaderComponent={renderHeader}
                 ListFooterComponent={
-                    loadingMore ? <ActivityIndicator color={COLORS.primary} style={{ padding: 20 }} /> : 
-                    transfers.length === 0 && !loading ? <Text style={[styles.noTx, { color: COLORS.textMuted }]}>No transfers yet</Text> : 
-                    <View style={{ height: 100 }} />
+                    loadingMore ? <ActivityIndicator color={COLORS.primary} style={{ padding: 20 }} /> :
+                        transfers.length === 0 && !loading ? <Text style={[styles.noTx, { color: COLORS.textMuted }]}>No transfers yet</Text> :
+                            <View style={{ height: 100 }} />
                 }
                 onEndReached={fetchMore}
                 onEndReachedThreshold={0.5}
@@ -340,6 +354,97 @@ export default function SavingsGoalDetailScreen({ route, navigation }) {
                     </TouchableOpacity>
                 </View>
             </BottomSheetModal>
+
+            {/* Transfer Detail Modal */}
+            <Modal
+                visible={modalVisible}
+                transparent
+                animationType="fade"
+                onRequestClose={() => setModalVisible(false)}
+            >
+                <TouchableWithoutFeedback onPress={() => setModalVisible(false)}>
+                    <View style={styles.modalOverlay}>
+                        <TouchableWithoutFeedback>
+                            <View style={[styles.modalSheet, { backgroundColor: COLORS.surface }]}>
+                                {selectedTransfer && (() => {
+                                    const isDeposit = selectedTransfer.direction === 'to_savings' || selectedTransfer.direction === 'income' || selectedTransfer.direction === 'transfer_goal';
+                                    const isGoal = selectedTransfer.direction === 'transfer_goal';
+                                    const color = isDeposit ? '#22c55e' : '#f59e0b';
+                                    const icon = isDeposit ? 'plus-circle' : 'minus-circle';
+                                    const label = selectedTransfer.direction === 'to_savings' ? 'Saved to Pot' : (isGoal ? 'Goal Transfer' : (selectedTransfer.direction === 'income' ? 'Savings Income' : 'Withdrawal'));
+
+                                    return (
+                                        <>
+                                            <View style={styles.modalHeaderRow}>
+                                                <Text style={[styles.modalTitle, { color: COLORS.text }]}>Transfer Details</Text>
+                                                <TouchableOpacity onPress={() => setModalVisible(false)}>
+                                                    <Feather name="x" size={24} color={COLORS.textMuted} />
+                                                </TouchableOpacity>
+                                            </View>
+
+                                            <View style={styles.modalContent}>
+                                                <View style={[styles.modalIconHero, { backgroundColor: color + '15' }]}>
+                                                    <Feather name={icon} size={32} color={color} />
+                                                </View>
+
+                                                <Text style={[styles.modalAmount, { color }]}>
+                                                    {isDeposit ? '+' : '-'}{formatCurrency(selectedTransfer.amount, userInfo?.currency)}
+                                                </Text>
+                                                <Text style={[styles.modalCatName, { color: COLORS.text }]}>{selectedTransfer.goalName}</Text>
+
+                                                <View style={[styles.modalDetailBox, { backgroundColor: COLORS.background, borderColor: COLORS.border }]}>
+                                                    <View style={styles.modalDetailRow}>
+                                                        <Text style={[styles.modalDetailLabel, { color: COLORS.textMuted }]}>Action</Text>
+                                                        <Text style={[styles.modalDetailValue, { color: COLORS.text }]}>{label}</Text>
+                                                    </View>
+                                                    <View style={styles.modalDetailRow}>
+                                                        <Text style={[styles.modalDetailLabel, { color: COLORS.textMuted }]}>Date</Text>
+                                                        <Text style={[styles.modalDetailValue, { color: COLORS.text }]}>
+                                                            {new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' }).format(new Date(selectedTransfer.createdAt))}
+                                                        </Text>
+                                                    </View>
+
+                                                    {/* Payment Source — shown for deposits AND wallet withdrawals */}
+                                                    {(isDeposit || selectedTransfer.direction === 'from_savings') && (
+                                                        <View style={styles.modalDetailRow}>
+                                                            <Text style={[styles.modalDetailLabel, { color: COLORS.textMuted }]}>
+                                                                {isDeposit ? 'Payment Source' : 'Destination Wallet'}
+                                                            </Text>
+                                                            <View style={[styles.walletBadge, { backgroundColor: (selectedTransfer.wallet?.color || COLORS.primary) + '20' }]}>
+                                                                <Text style={[styles.walletBadgeText, { color: selectedTransfer.wallet?.color || COLORS.primary }]}>
+                                                                    {selectedTransfer.wallet
+                                                                        ? `${selectedTransfer.wallet.name} (${selectedTransfer.wallet.type})`
+                                                                        : (isGoal ? 'Internal Transfer' : 'Main Balance')}
+                                                                </Text>
+                                                            </View>
+                                                        </View>
+                                                    )}
+
+                                                    {selectedTransfer.walletAmount !== null && selectedTransfer.walletAmount !== undefined && (
+                                                        <View style={[styles.modalDetailRow, { borderBottomWidth: 0 }]}>
+                                                            <Text style={[styles.modalDetailLabel, { color: COLORS.textMuted }]}>Native Cost</Text>
+                                                            <Text style={[styles.modalDetailValue, { color: COLORS.text, fontWeight: '700' }]}>
+                                                                {selectedTransfer.walletAmount.toLocaleString(undefined, { maximumFractionDigits: 8 })} {selectedTransfer.walletCurrency}
+                                                            </Text>
+                                                        </View>
+                                                    )}
+
+                                                    {selectedTransfer.note ? (
+                                                        <View style={[styles.modalDetailRow, { borderBottomWidth: 0, paddingBottom: 0, marginTop: 4, alignItems: 'flex-start' }]}>
+                                                            <Text style={[styles.modalDetailLabel, { color: COLORS.textMuted, marginBottom: 4 }]}>Note</Text>
+                                                            <Text style={[styles.modalDetailValue, { color: COLORS.text }]}>{selectedTransfer.note}</Text>
+                                                        </View>
+                                                    ) : null}
+                                                </View>
+                                            </View>
+                                        </>
+                                    );
+                                })()}
+                            </View>
+                        </TouchableWithoutFeedback>
+                    </View>
+                </TouchableWithoutFeedback>
+            </Modal>
 
             <CustomAlertModal
                 visible={alertConfig.visible} title={alertConfig.title} message={alertConfig.message} type={alertConfig.type} confirmText={alertConfig.confirmText}
@@ -393,5 +498,21 @@ const getStyles = (COLORS) => StyleSheet.create({
     archivedBanner: { flexDirection: 'row', alignItems: 'center', padding: spacing.lg, borderRadius: radius.xl, borderWidth: 1, marginTop: spacing.sm, marginBottom: spacing.lg },
     archivedIconBg: { width: 48, height: 48, borderRadius: 24, backgroundColor: COLORS.primary + '15', justifyContent: 'center', alignItems: 'center', marginRight: spacing.md },
     archivedTitle: { fontSize: 16, fontWeight: '800', marginBottom: 2 },
-    archivedSub: { fontSize: 13, lineHeight: 18 }
+    archivedSub: { fontSize: 13, lineHeight: 18 },
+
+    // Modal Styles
+    modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
+    modalSheet: { borderTopLeftRadius: radius.xl, borderTopRightRadius: radius.xl, padding: spacing.lg, paddingBottom: 40 },
+    modalHeaderRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+    modalTitle: { fontSize: 18, fontWeight: '800' },
+    modalContent: { alignItems: 'center', marginTop: spacing.md },
+    modalIconHero: { width: 64, height: 64, borderRadius: 32, justifyContent: 'center', alignItems: 'center', marginBottom: spacing.md },
+    modalAmount: { fontSize: 32, fontWeight: '800', marginBottom: 4 },
+    modalCatName: { fontSize: 16, fontWeight: '600', marginBottom: spacing.lg },
+    modalDetailBox: { width: '100%', borderWidth: 1, borderRadius: radius.lg, padding: spacing.md },
+    modalDetailRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: 'rgba(0,0,0,0.05)' },
+    modalDetailLabel: { fontSize: 13, fontWeight: '600' },
+    modalDetailValue: { fontSize: 13, fontWeight: '700' },
+    walletBadge: { paddingHorizontal: 8, paddingVertical: 4, borderRadius: 8 },
+    walletBadgeText: { fontSize: 11, fontWeight: '800' },
 });

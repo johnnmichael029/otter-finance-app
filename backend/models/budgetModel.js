@@ -26,6 +26,11 @@ const budgetSchema = new mongoose.Schema({
         required: true,
         min: [0, 'Budget cannot be negative.'],
     },
+    reminderAmount: {
+        type: Number,
+        default: 0,
+        min: [0, 'Reminder cannot be negative.'],
+    },
 }, { timestamps: true });
 
 // Each user can only have one budget per category per month

@@ -28,20 +28,30 @@ export function getBalanceLabel(wallet) {
  * Calculate how much native amount will be deducted from a wallet given a PHP amount.
  * Returns { nativeAmount, symbol, hasPrice }
  */
-export function calcNativeDeduct(wallet, amountPHP, cryptoPrices) {
+export function calcNativeDeduct(wallet, amountPHP, cryptoPrices, fiatExchangeRate = null) {
     if (!amountPHP || amountPHP <= 0) return null;
-    
+
+    // 1. Crypto Handling
     if (wallet.type === 'Crypto' && wallet.coinId) {
         const phpPerCoin = cryptoPrices?.[wallet.coinId];
         if (!phpPerCoin) return { nativeAmount: null, symbol: wallet.coinSymbol?.toUpperCase() || 'COIN', hasPrice: false };
         const nativeAmount = amountPHP / phpPerCoin;
         return { nativeAmount, symbol: wallet.coinSymbol?.toUpperCase() || 'COIN', hasPrice: true };
     }
-    if (wallet.type === 'Stocks') {
-        // Stocks aren't natively converted — treat balance as PHP value
-        return { nativeAmount: amountPHP, symbol: '₱', hasPrice: true };
+
+    // 2. Foreign Fiat Handling
+    const walletCurrency = wallet.currency || 'PHP';
+    if (walletCurrency !== 'PHP' && wallet.type !== 'Stocks') {
+        // If we have a provided exchange rate (e.g. from a live API call in the parent)
+        if (fiatExchangeRate && fiatExchangeRate > 0) {
+            const nativeAmount = amountPHP / fiatExchangeRate;
+            return { nativeAmount, symbol: walletCurrency, hasPrice: true };
+        }
+        // Fallback: if no rate provided, we can't accurately convert
+        return { nativeAmount: null, symbol: walletCurrency, hasPrice: false };
     }
-    // Fiat
+
+    // 3. Stocks or Default PHP Fiat
     return { nativeAmount: amountPHP, symbol: '₱', hasPrice: true };
 }
 
@@ -55,7 +65,7 @@ export function hasEnoughBalance(wallet, amountPHP, cryptoPrices) {
 
     const deduct = calcNativeDeduct(wallet, amountPHP, cryptoPrices);
     if (!deduct || !deduct.hasPrice) return true; // can't validate without price, allow through
-    
+
     const bal = wallet.balance ?? 0;
     if (wallet.type === 'Crypto') {
         return bal >= deduct.nativeAmount;
@@ -72,16 +82,22 @@ const WalletSelector = ({
     COLORS,
     amountPHP = 0,   // Pass the transaction amount (in PHP) for conversion hints & validation
     isExpense = false, // Set true for expense/debt/shopping to show insufficient warning
+    excludeId = null,  // ID of a wallet to hide from the list
 }) => {
     const wallets = useFinanceStore(state => state.wallets);
     const cryptoPrices = useFinanceStore(state => state.cryptoPrices);
 
     if (!wallets || wallets.length === 0) return null;
 
+    // Filter out the excluded wallet if provided
+    const filteredWallets = excludeId
+        ? wallets.filter(w => w._id !== excludeId)
+        : wallets;
+
     return (
         <View style={styles.container}>
             <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.scroll}>
-                {wallets.map((wallet) => {
+                {filteredWallets.map((wallet) => {
                     const isSelected = selectedWalletId === wallet._id;
                     const color = wallet.color || COLORS.primary;
 

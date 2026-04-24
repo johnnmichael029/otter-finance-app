@@ -104,4 +104,16 @@ const send2FAOTP = async (toEmail, toName, otp) => {
   await transporter.sendMail(mailOptions);
 };
 
-module.exports = { send2FAOTP };
+// ── Generic Send Email ────────────────────────────────────────────────────────
+const sendEmail = async ({ to, subject, html, attachments = [] }) => {
+    const mailOptions = {
+        from: `"OTTER Finance" <${process.env.EMAIL_USER}>`,
+        to,
+        subject,
+        html,
+        attachments
+    };
+    await transporter.sendMail(mailOptions);
+};
+
+module.exports = { send2FAOTP, sendEmail };

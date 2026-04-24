@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { NavigationContainer, DarkTheme, DefaultTheme } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
@@ -11,7 +11,7 @@ import SavingsQuickAddSheet from './src/components/SavingsQuickAddSheet';
 import AnimatedFAB from './src/components/AnimatedFAB';
 import * as Sentry from '@sentry/react-native';
 import ErrorBoundary from './src/components/ErrorBoundary';
-
+import SocketManager from './src/components/SocketManager';
 // Initialize Sentry
 Sentry.init({
     dsn: 'https://1bf9c89d4d85c2cbbe9f46a366662602@o4511268540776448.ingest.us.sentry.io/4511268551393280',
@@ -31,6 +31,7 @@ import TwoFAScreen from './src/screens/auth/TwoFAScreen';
 import AppLockScreen from './src/screens/auth/AppLockScreen';
 import PinSetupScreen from './src/screens/auth/PinSetupScreen';
 import OnboardingScreen from './src/screens/auth/OnboardingScreen';
+import ForgotPasswordScreen from './src/screens/auth/ForgotPasswordScreen';
 
 // Settings
 import SettingsScreen from './src/screens/main/SettingsScreen';
@@ -89,6 +90,7 @@ const AuthStack = () => (
         <Stack.Screen name="Login" component={LoginScreen} />
         <Stack.Screen name="Register" component={RegisterScreen} />
         <Stack.Screen name="TwoFA" component={TwoFAScreen} />
+        <Stack.Screen name="ForgotPassword" component={ForgotPasswordScreen} />
     </Stack.Navigator>
 );
 
@@ -289,6 +291,7 @@ function App() {
                         <ErrorBoundary>
                             <GlobalStatusBar />
                             <AppNavigator />
+                            <SocketManager />
                             <AppLockOverlay />
                             <Toast />
                         </ErrorBoundary>

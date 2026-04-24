@@ -209,7 +209,11 @@ const checkoutSession = async (req, res) => {
                         $inc: { count: 1 },
                         $push: { priceHistory: { price: item.price, recordedAt: new Date() } }
                     },
-                    { upsert: true, new: true }
+                    { 
+                        upsert: true, 
+                        returnDocument: 'after', 
+                        runValidators: true 
+                    }
                 );
             }
         }

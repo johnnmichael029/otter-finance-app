@@ -2,6 +2,7 @@ const SavingsGoal = require('../models/savingsGoalModel');
 const SavingsTransfer = require('../models/savingsTransferModel');
 const Transaction = require('../models/transactionModel');
 const Notification = require('../models/Notification');
+const Wallet = require('../models/walletModel');
 const { invalidatePrefixes } = require('../utils/cache');
 const mongoose = require('mongoose');
 
@@ -166,7 +167,7 @@ const updateGoal = async (req, res) => {
         const goal = await SavingsGoal.findOneAndUpdate(
             { _id: req.params.id, user: req.userId },
             { $set: req.body },
-            { new: true, runValidators: true }
+            { returnDocument: 'after', runValidators: true }
         );
         if (!goal) return res.status(404).json({ error: 'Goal not found.' });
 
@@ -246,9 +247,9 @@ const deleteGoal = async (req, res) => {
 // body: { goalId, amount, direction: 'to_savings' | 'from_savings' | 'income' | 'transfer_goal', sourceGoalId, note }
 const transfer = async (req, res) => {
     try {
-        const { goalId, amount, direction, note, sourceGoalId } = req.body;
+        const { goalId, amount, direction, note, sourceGoalId, sourceWalletId } = req.body;
         if (!goalId || !amount || !direction) return res.status(400).json({ error: 'goalId, amount, and direction are required.' });
-        if (goalId === sourceGoalId) return res.status(400).json({ error: 'Cannot transfer to the same goal.' });
+        if (direction === 'transfer_goal' && goalId === sourceGoalId) return res.status(400).json({ error: 'Cannot transfer to the same goal.' });
 
         const goal = await SavingsGoal.findOne({ _id: goalId, user: req.userId });
         if (!goal) return res.status(404).json({ error: 'Savings goal not found.' });
@@ -260,49 +261,144 @@ const transfer = async (req, res) => {
 
         if (direction === 'to_savings') {
             if (goal.isCompleted) return res.status(400).json({ error: 'Goal is already completed.' });
-            // Check main balance
-            const balanceAgg = await Transaction.aggregate([
-                { $match: { user: new mongoose.Types.ObjectId(req.userId) } },
-                { $group: { _id: '$type', total: { $sum: '$amount' } } },
-            ]);
-            let mainBalance = 0;
-            balanceAgg.forEach(r => {
-                if (r._id === 'income') mainBalance += r.total;
-                if (r._id === 'expense') mainBalance -= r.total;
-            });
-            if (amt > mainBalance) return res.status(400).json({ error: `Insufficient balance (₱${mainBalance.toFixed(2)})` });
+            
+            let walletId = sourceWalletId || null;
+            let currentHandBalance = 0;
+            let targetWallet = null;
+
+            // 1. Calculate and Validate Balance
+            if (walletId) {
+                targetWallet = await Wallet.findOne({ _id: walletId, userId: req.userId });
+                if (!targetWallet) return res.status(404).json({ error: 'Source wallet not found.' });
+
+                const isCrypto = targetWallet.type === 'Crypto';
+                const isStocks = targetWallet.type === 'Stocks';
+                const isCredit = targetWallet.type === 'Credit';
+
+                // Calculate native units needed (if crypto/stocks)
+                // For simplified deposit: we use the PHP amount, and deduct matching native units
+                // If it's crypto/stocks, the 'amount' from frontend is PHP, we need to know the 'walletDeductAmount' (units)
+                // OR we can calculate here if we have the rate. For now, let's look for 'walletDeductAmount' in body
+                const nativeAmount = (isCrypto || isStocks)
+                    ? (req.body.walletDeductAmount != null ? Math.abs(parseFloat(req.body.walletDeductAmount)) : amt) 
+                    : amt;
+
+                if (isCredit) {
+                    // Credit wallets can 'transfer', but they increase their owed balance
+                    targetWallet.balance += nativeAmount;
+                } else {
+                    if (targetWallet.balance < nativeAmount) {
+                        return res.status(400).json({ error: `Insufficient funds in ${targetWallet.name} (${targetWallet.type}).` });
+                    }
+                    targetWallet.balance -= nativeAmount;
+                }
+
+                await targetWallet.save();
+                if (io) io.to(`user:${req.userId}`).emit('wallet_updated', targetWallet.toObject());
+
+                // Prepare native info for transaction
+                req.body.nativeAmount = nativeAmount;
+                req.body.nativeCurrency = isCrypto ? targetWallet.coinSymbol : (isStocks ? (targetWallet.stockSymbol || targetWallet.stockTicker) : null);
+            } else {
+                // Deduct from Hand Money
+                const balanceAgg = await Transaction.aggregate([
+                    { $match: { user: new mongoose.Types.ObjectId(req.userId), wallet: null } },
+                    { $group: { _id: '$type', total: { $sum: '$amount' } } },
+                ]);
+                balanceAgg.forEach(r => {
+                    if (r._id === 'income') currentHandBalance += r.total;
+                    if (r._id === 'expense') currentHandBalance -= r.total;
+                });
+                if (amt > currentHandBalance) return res.status(400).json({ error: `Insufficient balance (₱${currentHandBalance.toFixed(2)})` });
+            }
 
             goal.currentAmount += amt;
-            // Record as expense in main ledger
+
+            // 2. Create Ledger Transaction (Expense: Savings)
             const ledgerTx = await Transaction.create({
-                user: req.userId, type: 'expense', amount: amt, category: 'Savings',
-                categoryIcon: goal.icon, categoryColor: goal.color, description: `To Savings: ${goal.name}`, note, date: new Date(),
-                runningBalance: mainBalance - amt
+                user: req.userId, 
+                type: 'expense', 
+                amount: amt, 
+                category: 'Savings',
+                categoryIcon: goal.icon, 
+                categoryColor: goal.color, 
+                description: `To Savings: ${goal.name}`, 
+                note: note || '', 
+                date: new Date(),
+                runningBalance: walletId ? currentHandBalance : (currentHandBalance - amt),
+                wallet: walletId,
+                walletAmount: req.body.nativeAmount || null,
+                walletCurrency: req.body.nativeCurrency || null
             });
-            if (io) io.to(`user:${req.userId}`).emit('new_transaction', ledgerTx);
+
+            if (io) {
+                io.to(`user:${req.userId}`).emit('new_transaction', ledgerTx);
+                if (!walletId) {
+                    io.to(`user:${req.userId}`).emit('wallet_updated', { _id: 'main', balance: currentHandBalance - amt });
+                }
+            }
 
         } else if (direction === 'from_savings') {
             if (amt > goal.currentAmount) return res.status(400).json({ error: 'Insufficient savings.' });
             
-            // Calculate current total balance for running balance snapshot
-            const balanceAgg = await Transaction.aggregate([
-                { $match: { user: new mongoose.Types.ObjectId(req.userId) } },
-                { $group: { _id: '$type', total: { $sum: '$amount' } } },
-            ]);
-            let mainVarBalance = 0;
-            balanceAgg.forEach(r => {
-                if (r._id === 'income') mainVarBalance += r.total;
-                if (r._id === 'expense') mainVarBalance -= r.total;
-            });
+            let walletId = sourceWalletId || null;
+            let currentHandBalance = 0;
+            let targetWallet = null;
+
+            if (walletId) {
+                targetWallet = await Wallet.findOne({ _id: walletId, userId: req.userId });
+                if (!targetWallet) return res.status(404).json({ error: 'Destination wallet not found.' });
+
+                const isCrypto = targetWallet.type === 'Crypto';
+                const isStocks = targetWallet.type === 'Stocks';
+                const isCredit = targetWallet.type === 'Credit';
+
+                const nativeAmount = (isCrypto || isStocks)
+                    ? (req.body.walletDeductAmount != null ? Math.abs(parseFloat(req.body.walletDeductAmount)) : amt)
+                    : amt;
+
+                if (isCredit) {
+                    // Withdrawing to credit wallet REDUCES debt
+                    targetWallet.balance = Math.max(0, targetWallet.balance - nativeAmount);
+                } else {
+                    targetWallet.balance += nativeAmount;
+                }
+
+                await targetWallet.save();
+                if (io) io.to(`user:${req.userId}`).emit('wallet_updated', targetWallet.toObject());
+
+                req.body.nativeAmount = nativeAmount;
+                req.body.nativeCurrency = isCrypto ? targetWallet.coinSymbol : (isStocks ? (targetWallet.stockSymbol || targetWallet.stockTicker) : null);
+            } else {
+                // Calculate current total balance for running balance snapshot
+                const balanceAgg = await Transaction.aggregate([
+                    { $match: { user: new mongoose.Types.ObjectId(req.userId), wallet: null } },
+                    { $group: { _id: '$type', total: { $sum: '$amount' } } },
+                ]);
+                balanceAgg.forEach(r => {
+                    if (r._id === 'income') currentHandBalance += r.total;
+                    if (r._id === 'expense') currentHandBalance -= r.total;
+                });
+            }
 
             goal.currentAmount -= amt;
             // Record as income in main ledger
             const ledgerTx = await Transaction.create({
                 user: req.userId, type: 'income', amount: amt, category: 'Savings',
-                categoryIcon: goal.icon, categoryColor: goal.color, description: `From Savings: ${goal.name}`, note, date: new Date(),
-                runningBalance: mainVarBalance + amt
+                categoryIcon: goal.icon, categoryColor: goal.color, description: `From Savings: ${goal.name}`, 
+                note: note || '', 
+                date: new Date(),
+                runningBalance: walletId ? currentHandBalance : (currentHandBalance + amt),
+                wallet: walletId,
+                walletAmount: req.body.nativeAmount || null,
+                walletCurrency: req.body.nativeCurrency || null
             });
-            if (io) io.to(`user:${req.userId}`).emit('new_transaction', ledgerTx);
+            if (io) {
+                io.to(`user:${req.userId}`).emit('new_transaction', ledgerTx);
+                if (!walletId) {
+                    io.to(`user:${req.userId}`).emit('wallet_updated', { _id: 'main', balance: currentHandBalance + amt });
+                }
+            }
 
         } else if (direction === 'income') {
             // Direct Savings Income (Interest/Gift)
@@ -381,7 +477,10 @@ const transfer = async (req, res) => {
                 goal: goal._id, 
                 goalName: goal.name, 
                 note: note || '',
-                runningBalance: goal.currentAmount
+                runningBalance: goal.currentAmount,
+                wallet: sourceWalletId || null,
+                walletAmount: req.body.nativeAmount || null,
+                walletCurrency: req.body.nativeCurrency || null
             });
         }
 
@@ -435,7 +534,7 @@ const getTransfers = async (req, res) => {
 
         const skip = (parseInt(page) - 1) * parseInt(limit);
         const [transfers, total] = await Promise.all([
-            SavingsTransfer.find(filter).sort({ createdAt: -1 }).skip(skip).limit(parseInt(limit)).lean(),
+            SavingsTransfer.find(filter).sort({ createdAt: -1 }).skip(skip).limit(parseInt(limit)).populate('wallet').lean(),
             SavingsTransfer.countDocuments(filter),
         ]);
         res.json({ transfers, total });

@@ -8,6 +8,8 @@ const {
     logout, logoutAll,
     getSessions, revokeSession,
     verify2FA, resend2FA, toggle2FA, verifyPassword,
+    googleLogin,
+    forgotPassword, verifyResetCode, resetPassword,
 } = require('../controllers/authController');
 
 // ── Rate Limiters ──────────────────────────────────────────────────────────────
@@ -60,6 +62,14 @@ router.post('/login',    authLimiter, loginValidators, login);
 
 // Token refresh (no auth required, validated by refresh token)
 router.post('/refresh',  refreshLimiter, refresh);
+
+// Social Login
+router.post('/google',   authLimiter, googleLogin);
+
+// Forgot Password flow
+router.post('/forgot-password',      authLimiter, forgotPassword);
+router.post('/verify-reset-code',   authLimiter, verifyResetCode);
+router.post('/reset-password',      authLimiter, resetPassword);
 
 // Logout (no auth required — refresh token in body)
 router.post('/logout', logout);

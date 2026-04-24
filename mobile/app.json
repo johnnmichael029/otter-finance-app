@@ -3,6 +3,7 @@
     "name": "OTTER",
     "slug": "otter",
     "version": "1.0.0",
+    "scheme": "otter",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "dark",
@@ -28,7 +29,8 @@
         "ACCESS_NETWORK_STATE",
         "RECEIVE_BOOT_COMPLETED",
         "VIBRATE",
-        "android.permission.CAMERA"
+        "android.permission.CAMERA",
+        "android.permission.RECORD_AUDIO"
       ]
     },
     "web": {
@@ -48,13 +50,14 @@
       "expo-camera",
       "@react-native-community/datetimepicker",
       "expo-secure-store",
-      "./plugins/withAndroidWidget"
+      "./plugins/withAndroidWidget",
+      "expo-web-browser"
     ],
     "extra": {
       "eas": {
-        "projectId": "59a1de66-41ad-4342-b959-b672b5cddd96"
+        "projectId": "8cd0c75c-bb96-45dd-a056-e4ca09fed34f"
       }
     },
-    "owner": "yamashiis-organization"
+    "owner": "yamashiis029-organization"
   }
 }

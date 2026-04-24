@@ -13,9 +13,21 @@ const mongoose = require('mongoose');
 // ─────────────────────────────────────────────────────────────────────────────
 const getTransactions = async (req, res) => {
     try {
-        const { type, category, startDate, endDate, page = 1, limit = 20 } = req.query;
+        const { type, category, startDate, endDate, page = 1, limit = 20, isArchived } = req.query;
 
         const filter = { user: req.userId };
+        
+        // Handle Archive filtering (default to only non-archived in main feed)
+        if (isArchived !== undefined) {
+            if (isArchived === 'true') {
+                filter.isArchived = true;
+            } else {
+                filter.isArchived = { $ne: true };
+            }
+        } else {
+            filter.isArchived = { $ne: true };
+        }
+
         if (type) filter.type = type;
         if (category) filter.category = category;
         if (startDate || endDate) {
@@ -31,6 +43,7 @@ const getTransactions = async (req, res) => {
                 .skip(skip)
                 .limit(parseInt(limit))
                 .populate('wallet', 'name type color')
+                .populate('sourceWallet', 'name type color')
                 .lean(),
             Transaction.countDocuments(filter),
         ]);
@@ -89,7 +102,8 @@ const getSummary = async (req, res) => {
                 $match: {
                     user: new mongoose.Types.ObjectId(req.userId),
                     date: { $gte: start, $lte: end },
-                    wallet: null
+                    wallet: null,
+                    isArchived: { $ne: true }
                 }
             },
             {
@@ -136,7 +150,7 @@ const getSummary = async (req, res) => {
 
         // Calculate Lifetime Net Balance of "HAND" money (transactions with no wallet)
         const lifetimeAgg = await Transaction.aggregate([
-            { $match: { user: new mongoose.Types.ObjectId(req.userId), wallet: null } },
+            { $match: { user: new mongoose.Types.ObjectId(req.userId), wallet: null, isArchived: { $ne: true } } },
             { $group: { _id: '$type', total: { $sum: '$amount' } } }
         ]);
         let netBalance = 0;
@@ -172,7 +186,8 @@ const createTransaction = async (req, res) => {
             type, amount, category, categoryIcon, categoryColor, 
             description, date, note,
             currency, originalAmount, exchangeRate, attachment,
-            walletId, walletDeductAmount
+            walletId, walletDeductAmount,
+            sourceWalletId, sourceWalletDeductAmount
         } = req.body;
 
         if (!type || !amount || !category) {
@@ -181,7 +196,7 @@ const createTransaction = async (req, res) => {
 
         // Calculate current total balance of "HAND" money (wallet: null)
         const balanceAgg = await Transaction.aggregate([
-            { $match: { user: new mongoose.Types.ObjectId(req.userId), wallet: null } },
+            { $match: { user: req.userId ? new mongoose.Types.ObjectId(req.userId) : null, wallet: null } },
             { $group: { _id: '$type', total: { $sum: '$amount' } } },
         ]);
         let currentBalance = 0;
@@ -212,10 +227,37 @@ const createTransaction = async (req, res) => {
             exchangeRate,
             attachment,
             runningBalance,
-            wallet: walletId || null
+            wallet: walletId || null,
+            sourceWallet: sourceWalletId || null,
+            sourceWalletAmount: null,
+            sourceWalletCurrency: null
         });
 
-        // ── Feature: Wallet Balance Sync ──────────────────────────
+        // ── Feature: SOURCE WALLET Deduction (for Income/Transfer logic) ──
+        if (sourceWalletId) {
+            const sWallet = await Wallet.findOne({ _id: sourceWalletId, userId: req.userId });
+            if (sWallet) {
+                // If it's crypto/stocks or foreign fiat, use the native amount provided
+                const isForeign = sWallet.currency && sWallet.currency !== 'PHP';
+                const srcNativeAmount = (sWallet.type === 'Crypto' || sWallet.type === 'Stocks' || isForeign)
+                    ? (sourceWalletDeductAmount != null ? Math.abs(parseFloat(sourceWalletDeductAmount)) : (walletDeductAmount != null ? Math.abs(parseFloat(walletDeductAmount)) : safeAmount))
+                    : safeAmount;
+
+                // We ALWAYS deduct from source wallet
+                sWallet.balance -= srcNativeAmount;
+                if (sWallet.type !== 'Credit' && sWallet.balance < 0) sWallet.balance = 0;
+                await sWallet.save();
+
+                // Save native info to transaction
+                transaction.sourceWalletAmount = srcNativeAmount;
+                transaction.sourceWalletCurrency = sWallet.coinSymbol || sWallet.stockSymbol || sWallet.currency || 'PHP';
+                await transaction.save();
+
+                if (io) io.to(`user:${req.userId}`).emit('wallet_updated', sWallet.toObject());
+            }
+        }
+
+        // ── Feature: Wallet Balance Sync (Destination) ──────────────────────────
         if (walletId) {
             const wallet = await Wallet.findOne({ _id: walletId, userId: req.userId });
             if (wallet) {
@@ -227,7 +269,8 @@ const createTransaction = async (req, res) => {
                 const isCredit = wallet.type === 'Credit';
 
                 // Determine how much to add/deduct in native units
-                const nativeAmount = (isCrypto || isStocks)
+                const isForeign = wallet.currency && wallet.currency !== 'PHP';
+                const nativeAmount = (isCrypto || isStocks || isForeign)
                     ? (walletDeductAmount != null ? Math.abs(parseFloat(walletDeductAmount)) : safeAmount)
                     : safeAmount;
 
@@ -272,7 +315,10 @@ const createTransaction = async (req, res) => {
             checkBudgetAlerts(req.userId, category, req.app.get('io'));
         }
 
-        const fullTransaction = await Transaction.findById(transaction._id).populate('wallet', 'name type color').lean();
+        const fullTransaction = await Transaction.findById(transaction._id)
+            .populate('wallet', 'name type color')
+            .populate('sourceWallet', 'name type color')
+            .lean();
         const decrypted = decryptNote(fullTransaction);
 
         // Emit real-time event so connected mobile clients update instantly
@@ -301,7 +347,7 @@ const updateTransaction = async (req, res) => {
         const transaction = await Transaction.findOneAndUpdate(
             { _id: req.params.id, user: req.userId },
             { $set: req.body },
-            { new: true, runValidators: true }
+            { returnDocument: 'after', runValidators: true }
         );
 
         if (!transaction) {
@@ -403,7 +449,8 @@ const getAnalytics = async (req, res) => {
                 $match: {
                     user: new mongoose.Types.ObjectId(req.userId),
                     type: 'expense',
-                    date: { $gte: firstDayThisMonth }
+                    date: { $gte: firstDayThisMonth },
+                    isArchived: { $ne: true }
                 }
             },
             {
@@ -429,7 +476,8 @@ const getAnalytics = async (req, res) => {
             {
                 $match: {
                     user: new mongoose.Types.ObjectId(req.userId),
-                    date: { $gte: firstDay6MonthsAgo }
+                    date: { $gte: firstDay6MonthsAgo },
+                    isArchived: { $ne: true }
                 }
             },
             {
@@ -476,7 +524,8 @@ const getAnalytics = async (req, res) => {
                 $match: {
                     user: new mongoose.Types.ObjectId(req.userId),
                     type: 'expense',
-                    date: { $gte: firstDayLastMonth, $lt: firstDayThisMonth }
+                    date: { $gte: firstDayLastMonth, $lt: firstDayThisMonth },
+                    isArchived: { $ne: true }
                 }
             },
             {
@@ -599,6 +648,10 @@ const checkBudgetAlerts = async (userId, categoryName, io) => {
             alertType = '80_percent';
             alertTitle = '⚠️ Budget Warning';
             alertMessage = `You've reached ${Math.round(percentage)}% of your "${categoryName}" budget. Watch your spending!`;
+        } else if (budget.reminderAmount > 0 && totalSpent >= budget.reminderAmount) {
+            alertType = 'reminder';
+            alertTitle = '🔔 Budget Reminder';
+            alertMessage = `You hit the reminder for your "${categoryName}" spend! Current: ₱${totalSpent.toLocaleString()} (Limit: ₱${limit.toLocaleString()})`;
         }
 
         if (alertType) {
@@ -631,4 +684,44 @@ const checkBudgetAlerts = async (userId, categoryName, io) => {
     }
 };
 
-module.exports = { getTransactions, getSummary, createTransaction, updateTransaction, deleteTransaction, getAnalytics };
+// ─────────────────────────────────────────────────────────────────────────────
+//  PATCH /api/transactions/:id/archive
+//  Toggle isArchived status
+// ─────────────────────────────────────────────────────────────────────────────
+const archiveTransaction = async (req, res) => {
+    try {
+        const transaction = await Transaction.findOne({ _id: req.params.id, user: req.userId });
+
+        if (!transaction) {
+            return res.status(404).json({ error: 'Transaction not found.' });
+        }
+
+        transaction.isArchived = !transaction.isArchived;
+        await transaction.save();
+
+        invalidatePrefixes('transaction');
+
+        const io = req.app.get('io');
+        if (io) {
+            io.to(`user:${req.userId}`).emit('transaction_archived', { 
+                _id: transaction._id, 
+                isArchived: transaction.isArchived 
+            });
+        }
+
+        res.json({ message: transaction.isArchived ? 'Archived' : 'Restored', isArchived: transaction.isArchived });
+    } catch (err) {
+        console.error('[TRANSACTION] archiveTransaction error:', err.message);
+        res.status(500).json({ error: 'Failed to archive transaction.' });
+    }
+};
+
+module.exports = { 
+    getTransactions, 
+    getSummary, 
+    createTransaction, 
+    updateTransaction, 
+    deleteTransaction, 
+    getAnalytics,
+    archiveTransaction 
+};

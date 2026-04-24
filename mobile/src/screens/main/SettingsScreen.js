@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import {
     View, Text, StyleSheet, TouchableOpacity,
-    Switch, ScrollView, Alert, ActivityIndicator
+    Switch, ScrollView, Alert, ActivityIndicator,
+    TextInput
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -9,8 +10,15 @@ import { Feather, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useSecurity } from '../../context/SecurityContext';
 import { useTheme } from '../../context/ThemeContext';
 import { useAuth } from '../../context/AuthContext';
+import { useFinanceStore } from '../../store/financeStore';
 import { spacing, radius } from '../../theme/colors';
-import { get2FAStatus, toggle2FA, getCurrencyList, updateProfile as apiUpdateProfile, getTransactions } from '../../api/api';
+import {
+    get2FAStatus, toggle2FA, getCurrencyList,
+    updateProfile as apiUpdateProfile, getTransactions,
+    changePassword as apiChangePassword,
+    wipeData as apiWipeData,
+    deleteAccount as apiDeleteAccount
+} from '../../api/api';
 import { triggerHaptic } from '../../utils/haptics';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as Sharing from 'expo-sharing';
@@ -22,9 +30,12 @@ import VerifyIdentityModal from '../../components/VerifyIdentityModal';
 export default function SettingsScreen({ navigation }) {
     const { COLORS, isDarkMode, toggleTheme } = useTheme();
     const { userInfo, updateLocalUser, logout, hapticsEnabled, toggleHaptics, savingsFabStyle, toggleSavingsFabStyle } = useAuth();
+    
+
     const [currencyModalVisible, setCurrencyModalVisible] = useState(false);
     const [currencyList, setCurrencyList] = useState([]);
     const [updatingCurrency, setUpdatingCurrency] = useState(false);
+
     const {
         biometricEnabled, pinEnabled,
         isHardwareSupported, biometricType,
@@ -40,6 +51,15 @@ export default function SettingsScreen({ navigation }) {
     const [exportModalVisible, setExportModalVisible] = useState(false);
     const [exportFormat, setExportFormat] = useState('csv'); // 'csv' or 'pdf'
     const [exportRange, setExportRange] = useState('all'); // 'month', 'last_month', 'year', 'all'
+
+    // Security States
+    const [changePasswordModal, setChangePasswordModal] = useState(false);
+    const [passwords, setPasswords] = useState({ current: '', next: '', confirm: '' });
+    const [wipeDataModal, setWipeDataModal] = useState(false);
+    const [deleteAccountModal, setDeleteAccountModal] = useState(false);
+    const [verifyPassword, setVerifyPassword] = useState('');
+    const [confirmText, setConfirmText] = useState('');
+    const [isActionLoading, setIsActionLoading] = useState(false);
 
     // Step-up verification modal
     const [verifyModal, setVerifyModal] = useState({ visible: false, onSuccess: null, subtitle: '' });
@@ -249,9 +269,9 @@ export default function SettingsScreen({ navigation }) {
                             <p>Range: ${exportRange.replace('_', ' ').toUpperCase()}</p>
                         </div>
                         <div class="summary">
-                            <div><h3>Total Income</h3><p class="income">+ ${totals.income.toLocaleString(undefined, {minimumFractionDigits: 2})}</p></div>
-                            <div><h3>Total Expense</h3><p class="expense">- ${totals.expense.toLocaleString(undefined, {minimumFractionDigits: 2})}</p></div>
-                            <div><h3>Net Flow</h3><p class="net">${(totals.income - totals.expense).toLocaleString(undefined, {minimumFractionDigits: 2})}</p></div>
+                            <div><h3>Total Income</h3><p class="income">+ ${totals.income.toLocaleString(undefined, { minimumFractionDigits: 2 })}</p></div>
+                            <div><h3>Total Expense</h3><p class="expense">- ${totals.expense.toLocaleString(undefined, { minimumFractionDigits: 2 })}</p></div>
+                            <div><h3>Net Flow</h3><p class="net">${(totals.income - totals.expense).toLocaleString(undefined, { minimumFractionDigits: 2 })}</p></div>
                         </div>
                         <table>
                             <tr>
@@ -279,6 +299,82 @@ export default function SettingsScreen({ navigation }) {
             setTwoFAModal({ visible: true, title: 'Export Failed', message: 'An error occurred while exporting your data.', type: 'error' });
         } finally {
             setExporting(false);
+        }
+    };
+
+    // ─── Security Handlers ──────────────────────────────────────────────────
+
+    const handleChangePassword = async () => {
+        if (passwords.next !== passwords.confirm) {
+            return setTwoFAModal({ visible: true, title: 'Error', message: 'New passwords do not match.', type: 'error' });
+        }
+        if (passwords.next.length < 8) {
+            return setTwoFAModal({ visible: true, title: 'Error', message: 'Password must be at least 8 characters.', type: 'error' });
+        }
+
+        setIsActionLoading(true);
+        try {
+            await apiChangePassword({
+                currentPassword: passwords.current,
+                newPassword: passwords.next
+            });
+            setChangePasswordModal(false);
+            setPasswords({ current: '', next: '', confirm: '' });
+            setTwoFAModal({ visible: true, title: 'Success', message: 'Your password has been updated.', type: 'success' });
+        } catch (err) {
+            setTwoFAModal({
+                visible: true,
+                title: 'Update Failed',
+                message: err.response?.data?.error || 'Failed to update password. Please check your current password.',
+                type: 'error'
+            });
+        } finally {
+            setIsActionLoading(false);
+        }
+    };
+
+    const handleWipeData = async () => {
+        if (confirmText !== 'RESET') {
+            return setTwoFAModal({ visible: true, title: 'Verification Failed', message: "Please type 'RESET' exactly to proceed.", type: 'error' });
+        }
+
+        setIsActionLoading(true);
+        try {
+            await apiWipeData(verifyPassword);
+            setWipeDataModal(false);
+            setVerifyPassword('');
+            setConfirmText('');
+            // The dashboard will refresh automatically via Socket.io now!
+            setTwoFAModal({ visible: true, title: 'Data Wiped', message: 'All your financial records have been deleted successfully.', type: 'success' });
+        } catch (err) {
+            setTwoFAModal({
+                visible: true,
+                title: 'Wipe Failed',
+                message: err.response?.data?.error || 'Incorrect password verification failed.',
+                type: 'error'
+            });
+        } finally {
+            setIsActionLoading(false);
+        }
+    };
+
+    const handleDeleteAccount = async () => {
+        setIsActionLoading(true);
+        try {
+            await apiDeleteAccount(verifyPassword);
+            setDeleteAccountModal(false);
+            // Show success briefly before logging out
+            setTwoFAModal({ visible: true, title: 'Account Deleted', message: 'Your profile and data have been removed. Goodbye!', type: 'success' });
+            setTimeout(logout, 2000);
+        } catch (err) {
+            setTwoFAModal({
+                visible: true,
+                title: 'Deletion Failed',
+                message: err.response?.data?.error || 'Incorrect password verification failed.',
+                type: 'error'
+            });
+        } finally {
+            setIsActionLoading(false);
         }
     };
 
@@ -511,8 +607,52 @@ export default function SettingsScreen({ navigation }) {
                     />
                 </View>
 
+                {/* ── Privacy & Data ─────────────────────────────────────────── */}
+                <View style={[styles.card, { backgroundColor: COLORS.surface, marginTop: 12 }]}>
+                    <SectionHeader title="PRIVACY & DATA" icon="shield-account" />
 
-                {/* ── Account ──────────────────────────────────────────────── */}
+                    <SettingRow
+                        icon="key-change"
+                        label="Change Password"
+                        sublabel="Update your account login credentials"
+                        right={<Feather name="chevron-right" size={18} color={COLORS.textMuted} />}
+                        onPress={() => setChangePasswordModal(true)}
+                    />
+
+                    <SettingRow
+                        icon="database-remove"
+                        iconColor={COLORS.warning}
+                        label="Clear All Financial Data"
+                        sublabel="Delete all transactions but keep account"
+                        right={<Feather name="chevron-right" size={18} color={COLORS.warning} />}
+                        onPress={() => {
+                            if (pinEnabled || biometricEnabled) {
+                                openVerify(() => { closeVerify(); setWipeDataModal(true); }, 'Verify identity to wipe all data');
+                            } else {
+                                setWipeDataModal(true);
+                            }
+                        }}
+                    />
+
+                    <SettingRow
+                        icon="account-remove"
+                        iconColor={COLORS.danger}
+                        label="Delete OTTER Account"
+                        sublabel="Permanently delete your profile and all data"
+                        danger
+                        noBorder
+                        right={<Feather name="chevron-right" size={18} color={COLORS.danger} />}
+                        onPress={() => {
+                            if (pinEnabled || biometricEnabled) {
+                                openVerify(() => { closeVerify(); setDeleteAccountModal(true); }, 'Verify identity to delete account');
+                            } else {
+                                setDeleteAccountModal(true);
+                            }
+                        }}
+                    />
+                </View>
+
+                {/* ── Sign Out ─────────────────────────────────────────────── */}
                 <View style={[styles.card, { backgroundColor: COLORS.surface, marginTop: 12 }]}>
                     <SectionHeader title="ACCOUNT" icon="account-circle" />
                     <SettingRow
@@ -526,6 +666,7 @@ export default function SettingsScreen({ navigation }) {
                         onPress={() => setLogoutModal(true)}
                     />
                 </View>
+
 
                 {/* Version */}
                 <Text style={[styles.version, { color: COLORS.textMuted }]}>OTTER Finance v1.0.0</Text>
@@ -592,23 +733,23 @@ export default function SettingsScreen({ navigation }) {
                     <View style={{ gap: 10, marginBottom: 30 }}>
                         <TouchableOpacity onPress={() => setExportRange('month')} style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', padding: 16, borderRadius: 16, backgroundColor: COLORS.surface, borderWidth: 1.5, borderColor: exportRange === 'month' ? COLORS.primary : COLORS.border }}>
                             <Text style={{ fontWeight: '700', fontSize: 15, color: exportRange === 'month' ? COLORS.primary : COLORS.text }}>This Month</Text>
-                            {exportRange === 'month' && <View style={{width: 24, height: 24, borderRadius: 12, backgroundColor: COLORS.primary, justifyContent: 'center', alignItems: 'center'}}><Feather name="check" size={14} color="#fff" /></View>}
+                            {exportRange === 'month' && <View style={{ width: 24, height: 24, borderRadius: 12, backgroundColor: COLORS.primary, justifyContent: 'center', alignItems: 'center' }}><Feather name="check" size={14} color="#fff" /></View>}
                         </TouchableOpacity>
                         <TouchableOpacity onPress={() => setExportRange('last_month')} style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', padding: 16, borderRadius: 16, backgroundColor: COLORS.surface, borderWidth: 1.5, borderColor: exportRange === 'last_month' ? COLORS.primary : COLORS.border }}>
                             <Text style={{ fontWeight: '700', fontSize: 15, color: exportRange === 'last_month' ? COLORS.primary : COLORS.text }}>Last Month</Text>
-                            {exportRange === 'last_month' && <View style={{width: 24, height: 24, borderRadius: 12, backgroundColor: COLORS.primary, justifyContent: 'center', alignItems: 'center'}}><Feather name="check" size={14} color="#fff" /></View>}
+                            {exportRange === 'last_month' && <View style={{ width: 24, height: 24, borderRadius: 12, backgroundColor: COLORS.primary, justifyContent: 'center', alignItems: 'center' }}><Feather name="check" size={14} color="#fff" /></View>}
                         </TouchableOpacity>
                         <TouchableOpacity onPress={() => setExportRange('year')} style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', padding: 16, borderRadius: 16, backgroundColor: COLORS.surface, borderWidth: 1.5, borderColor: exportRange === 'year' ? COLORS.primary : COLORS.border }}>
                             <Text style={{ fontWeight: '700', fontSize: 15, color: exportRange === 'year' ? COLORS.primary : COLORS.text }}>This Year</Text>
-                            {exportRange === 'year' && <View style={{width: 24, height: 24, borderRadius: 12, backgroundColor: COLORS.primary, justifyContent: 'center', alignItems: 'center'}}><Feather name="check" size={14} color="#fff" /></View>}
+                            {exportRange === 'year' && <View style={{ width: 24, height: 24, borderRadius: 12, backgroundColor: COLORS.primary, justifyContent: 'center', alignItems: 'center' }}><Feather name="check" size={14} color="#fff" /></View>}
                         </TouchableOpacity>
                         <TouchableOpacity onPress={() => setExportRange('all')} style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', padding: 16, borderRadius: 16, backgroundColor: COLORS.surface, borderWidth: 1.5, borderColor: exportRange === 'all' ? COLORS.primary : COLORS.border }}>
                             <Text style={{ fontWeight: '700', fontSize: 15, color: exportRange === 'all' ? COLORS.primary : COLORS.text }}>All Time</Text>
-                            {exportRange === 'all' && <View style={{width: 24, height: 24, borderRadius: 12, backgroundColor: COLORS.primary, justifyContent: 'center', alignItems: 'center'}}><Feather name="check" size={14} color="#fff" /></View>}
+                            {exportRange === 'all' && <View style={{ width: 24, height: 24, borderRadius: 12, backgroundColor: COLORS.primary, justifyContent: 'center', alignItems: 'center' }}><Feather name="check" size={14} color="#fff" /></View>}
                         </TouchableOpacity>
                     </View>
 
-                    <TouchableOpacity onPress={handleExportData} style={{ backgroundColor: COLORS.primary, padding: 18, borderRadius: 16, alignItems: 'center', shadowColor: COLORS.primary, shadowOffset: {width: 0, height: 4}, shadowOpacity: 0.3, shadowRadius: 8, elevation: 4 }}>
+                    <TouchableOpacity onPress={handleExportData} style={{ backgroundColor: COLORS.primary, padding: 18, borderRadius: 16, alignItems: 'center', shadowColor: COLORS.primary, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.3, shadowRadius: 8, elevation: 4 }}>
                         <Text style={{ color: '#fff', fontSize: 16, fontWeight: '900' }}>{exporting ? 'Generating...' : `Export ${exportFormat.toUpperCase()}`}</Text>
                     </TouchableOpacity>
                 </View>
@@ -650,6 +791,117 @@ export default function SettingsScreen({ navigation }) {
                     </View>
                 </ScrollView>
             </CustomAlertModal>
+
+            {/* ── Change Password Modal ────────────────────────────────────── */}
+            <BottomSheetModal visible={changePasswordModal} onClose={() => setChangePasswordModal(false)}>
+                <View style={{ paddingBottom: 20 }}>
+                    <Text style={{ fontSize: 22, fontWeight: '900', color: COLORS.text }}>Change Password</Text>
+                    <Text style={{ fontSize: 14, color: COLORS.textMuted, marginBottom: 20 }}>Enter your current and new passwords.</Text>
+
+                    <TextInput
+                        style={[styles.input, { backgroundColor: COLORS.background, color: COLORS.text, borderColor: COLORS.border }]}
+                        placeholder="Current Password"
+                        placeholderTextColor={COLORS.textMuted}
+                        secureTextEntry
+                        value={passwords.current}
+                        onChangeText={(t) => setPasswords({ ...passwords, current: t })}
+                    />
+                    <TextInput
+                        style={[styles.input, { backgroundColor: COLORS.background, color: COLORS.text, borderColor: COLORS.border }]}
+                        placeholder="New Password"
+                        placeholderTextColor={COLORS.textMuted}
+                        secureTextEntry
+                        value={passwords.next}
+                        onChangeText={(t) => setPasswords({ ...passwords, next: t })}
+                    />
+                    <TextInput
+                        style={[styles.input, { backgroundColor: COLORS.background, color: COLORS.text, borderColor: COLORS.border }]}
+                        placeholder="Confirm New Password"
+                        placeholderTextColor={COLORS.textMuted}
+                        secureTextEntry
+                        value={passwords.confirm}
+                        onChangeText={(t) => setPasswords({ ...passwords, confirm: t })}
+                    />
+
+                    <TouchableOpacity
+                        style={[styles.actionButton, { backgroundColor: COLORS.primary }]}
+                        onPress={handleChangePassword}
+                        disabled={isActionLoading}
+                    >
+                        {isActionLoading ? <ActivityIndicator color="#fff" /> : <Text style={styles.actionButtonText}>Update Password</Text>}
+                    </TouchableOpacity>
+                </View>
+            </BottomSheetModal>
+
+            {/* ── Wipe Data Modal ─────────────────────────────────────────── */}
+            <BottomSheetModal visible={wipeDataModal} onClose={() => setWipeDataModal(false)}>
+                <View style={{ paddingBottom: 20 }}>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 12 }}>
+                        <MaterialCommunityIcons name="alert-decagram" size={24} color={COLORS.warning} style={{ marginRight: 8 }} />
+                        <Text style={{ fontSize: 22, fontWeight: '900', color: COLORS.text }}>Wipe Financial Data</Text>
+                    </View>
+                    <Text style={{ fontSize: 14, color: COLORS.textMuted, marginBottom: 20 }}>
+                        This will permanently delete ALL transactions, wallets, and goals. Your account profile remains active.
+                    </Text>
+
+                    <Text style={{ fontSize: 12, fontWeight: '800', color: COLORS.textMuted, marginBottom: 8 }}>VERIFICATION</Text>
+                    <TextInput
+                        style={[styles.input, { backgroundColor: COLORS.background, color: COLORS.text, borderColor: COLORS.border }]}
+                        placeholder="Account Password"
+                        placeholderTextColor={COLORS.textMuted}
+                        secureTextEntry
+                        value={verifyPassword}
+                        onChangeText={setVerifyPassword}
+                    />
+                    <Text style={{ fontSize: 12, fontWeight: '800', color: COLORS.textMuted, marginBottom: 8, marginTop: 10 }}>CONFIRMATION</Text>
+                    <TextInput
+                        style={[styles.input, { backgroundColor: COLORS.background, color: COLORS.text, borderColor: COLORS.border }]}
+                        placeholder="Type 'RESET' to confirm"
+                        placeholderTextColor={COLORS.textMuted}
+                        autoCapitalize="characters"
+                        value={confirmText}
+                        onChangeText={setConfirmText}
+                    />
+
+                    <TouchableOpacity
+                        style={[styles.actionButton, { backgroundColor: COLORS.warning }]}
+                        onPress={handleWipeData}
+                        disabled={isActionLoading}
+                    >
+                        {isActionLoading ? <ActivityIndicator color="#fff" /> : <Text style={styles.actionButtonText}>Wipe Everything</Text>}
+                    </TouchableOpacity>
+                </View>
+            </BottomSheetModal>
+
+            {/* ── Delete Account Modal ────────────────────────────────────── */}
+            <BottomSheetModal visible={deleteAccountModal} onClose={() => setDeleteAccountModal(false)}>
+                <View style={{ paddingBottom: 20 }}>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 12 }}>
+                        <MaterialCommunityIcons name="account-remove" size={24} color={COLORS.danger} style={{ marginRight: 8 }} />
+                        <Text style={{ fontSize: 22, fontWeight: '900', color: COLORS.text }}>Delete Account</Text>
+                    </View>
+                    <Text style={{ fontSize: 14, color: COLORS.textMuted, marginBottom: 20 }}>
+                        We're sad to see you go. This will permanently delete your profile and ALL your financial data. This cannot be undone.
+                    </Text>
+
+                    <TextInput
+                        style={[styles.input, { backgroundColor: COLORS.background, color: COLORS.text, borderColor: COLORS.border }]}
+                        placeholder="Enter Password to Confirm"
+                        placeholderTextColor={COLORS.textMuted}
+                        secureTextEntry
+                        value={verifyPassword}
+                        onChangeText={setVerifyPassword}
+                    />
+
+                    <TouchableOpacity
+                        style={[styles.actionButton, { backgroundColor: COLORS.danger }]}
+                        onPress={handleDeleteAccount}
+                        disabled={isActionLoading}
+                    >
+                        {isActionLoading ? <ActivityIndicator color="#fff" /> : <Text style={styles.actionButtonText}>Permanently Delete Account</Text>}
+                    </TouchableOpacity>
+                </View>
+            </BottomSheetModal>
         </SafeAreaView>
     );
 }
@@ -712,4 +964,43 @@ const styles = StyleSheet.create({
     },
     currencyListCode: { fontSize: 18, fontWeight: '900' },
     currencyListName: { fontSize: 13, fontWeight: '600' },
+    input: {
+        height: 52,
+        borderRadius: 12,
+        borderWidth: 1.5,
+        paddingHorizontal: 16,
+        fontSize: 16,
+        marginBottom: 12,
+        fontWeight: '600',
+    },
+    actionButton: {
+        height: 56,
+        borderRadius: 16,
+        justifyContent: 'center',
+        alignItems: 'center',
+        marginTop: 16,
+        shadowOffset: { width: 0, height: 4 },
+        shadowOpacity: 0.2,
+        shadowRadius: 8,
+        elevation: 4,
+    },
+    actionButtonText: {
+        color: '#fff',
+        fontSize: 16,
+        fontWeight: '900',
+    },
+    // ─── Sync Status Styles ───
+    syncCard: { marginHorizontal: spacing.lg, padding: spacing.lg, borderRadius: radius.xl, elevation: 2, shadowOpacity: 0.1, shadowRadius: 10, marginBottom: spacing.lg },
+    syncHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: spacing.md },
+    syncTitle: { fontSize: 13, fontWeight: '700' },
+    readyBadge: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: radius.full },
+    readyText: { fontSize: 11, fontWeight: '800' },
+    syncInfoRow: { flexDirection: 'row', alignItems: 'center', padding: spacing.md, borderRadius: radius.lg, gap: 12, marginBottom: spacing.md },
+    syncCircle: { width: 36, height: 36, borderRadius: 18, justifyContent: 'center', alignItems: 'center' },
+    syncLabel: { fontSize: 11, fontWeight: '700' },
+    syncDate: { fontSize: 14, fontWeight: '800' },
+    syncBtn: { padding: 16, borderRadius: radius.lg, alignItems: 'center' },
+    syncBtnText: { color: '#fff', fontSize: 15, fontWeight: '900' },
+    pendingBadge: { marginLeft: 'auto', paddingHorizontal: 8, paddingVertical: 3, borderRadius: 6 },
+    pendingText: { color: '#fff', fontSize: 10, fontWeight: '800' },
 });

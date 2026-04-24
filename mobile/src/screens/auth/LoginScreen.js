@@ -2,8 +2,11 @@ import React, { useState, useEffect, useRef } from 'react';
 import {
     View, Text, TextInput, TouchableOpacity,
     StyleSheet, ActivityIndicator, KeyboardAvoidingView,
-    Platform, ScrollView, Alert, Image, SafeAreaView
+    Platform, ScrollView, Alert, Image, SafeAreaView,
+    BackHandler, ToastAndroid
 } from 'react-native';
+import * as WebBrowser from 'expo-web-browser';
+import * as Google from 'expo-auth-session/providers/google';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Feather, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useAuth } from '../../context/AuthContext';
@@ -11,11 +14,77 @@ import { useTheme } from '../../context/ThemeContext';
 import { spacing, radius, typography } from '../../theme/colors';
 import CustomAlertModal from '../../components/CustomAlertModal';
 
+import * as AuthSession from 'expo-auth-session';
+
+WebBrowser.maybeCompleteAuthSession();
+
 const otterIcon = require('../../../assets/icon/otter.png');
 
+// We dynamically determine the URI so it works for Expo Go AND standalone builds
+const REDIRECT_URI = AuthSession.makeRedirectUri({
+    useProxy: true,
+    scheme: 'otter'
+});
+
 export default function LoginScreen({ navigation }) {
-    const { login, isLoading } = useAuth();
+    const { login, socialLogin, isLoading } = useAuth();
     const { COLORS, toggleTheme, isDarkMode } = useTheme();
+    const [lastBackPressed, setLastBackPressed] = useState(0);
+
+    // ── Double Tap to Exit ──
+    useEffect(() => {
+        const backAction = () => {
+            const currentTime = Date.now();
+            if (currentTime - lastBackPressed < 2000) {
+                BackHandler.exitApp();
+                return true;
+            }
+
+            setLastBackPressed(currentTime);
+            if (Platform.OS === 'android') {
+                ToastAndroid.show('Press back again to exit', ToastAndroid.SHORT);
+            }
+            return true;
+        };
+
+        const backHandler = BackHandler.addEventListener(
+            'hardwareBackPress',
+            backAction
+        );
+
+        return () => backHandler.remove();
+    }, [lastBackPressed]);
+
+    // ── Google Auth Setup ──
+    const [request, response, promptAsync] = Google.useIdTokenAuthRequest({
+        // For Expo Go / Personal Testing
+        webClientId: '368902982049-1d7rsbq19pip9hmd3imrv6j5e3pcj3dt.apps.googleusercontent.com',
+        // For Standalone Build
+        androidClientId: '368902982049-7t1l2u3m97780l8ffkhejcu1i5o1p6q3.apps.googleusercontent.com', 
+        clientId: '368902982049-1d7rsbq19pip9hmd3imrv6j5e3pcj3dt.apps.googleusercontent.com',
+        redirectUri: 'https://auth.expo.io/@yamashiis029-organization/otter',
+        responseType: 'id_token',
+    }, {
+        useProxy: true
+    });
+
+    useEffect(() => {
+        if (response?.type === 'success') {
+            const { id_token } = response.params;
+            handleSocialLogin('google', id_token);
+        }
+    }, [response]);
+
+    const handleSocialLogin = async (provider, idToken) => {
+        const result = await socialLogin(provider, idToken);
+        if (!result.success) {
+            setAlertTitle('Login Failed');
+            setAlertMessage(result.message);
+            setAlertVisible(true);
+        }
+        // Navigation is handled automatically by AppNavigator based on userToken presence
+    };
+
     const [email, setEmail] = useState('');
     const [password, setPassword] = useState('');
     const [showPassword, setShowPassword] = useState(false);
@@ -123,6 +192,13 @@ export default function LoginScreen({ navigation }) {
                                 </View>
                             </View>
 
+                            <TouchableOpacity
+                                style={styles.forgotBtn}
+                                onPress={() => navigation.navigate('ForgotPassword')}
+                            >
+                                <Text style={[styles.forgotText, { color: COLORS.primary }]}>Forgot Password?</Text>
+                            </TouchableOpacity>
+
                             {/* Lockout Warning Banner */}
                             {isLocked && (
                                 <View style={styles.lockBanner}>
@@ -158,11 +234,40 @@ export default function LoginScreen({ navigation }) {
                                     <Text style={[styles.switchLink, { color: COLORS.primary }]}>Register</Text>
                                 </Text>
                             </TouchableOpacity>
-                        </View>
 
+                            {/* Divider */}
+                            <View style={styles.dividerRow}>
+                                <View style={[styles.dividerLine, { backgroundColor: COLORS.border }]} />
+                                <Text style={[styles.dividerText, { color: COLORS.textMuted }]}>OR CONTINUE WITH</Text>
+                                <View style={[styles.dividerLine, { backgroundColor: COLORS.border }]} />
+                            </View>
+
+                            {/* Social Buttons */}
+                            <View style={styles.socialRow}>
+                                <TouchableOpacity
+                                    style={[styles.socialBtn, { backgroundColor: COLORS.surface, borderColor: COLORS.border }]}
+                                    onPress={() => {
+                                        if (request) {
+                                            request.redirectUri = 'https://auth.expo.io/@yamashiis029-organization/otter';
+                                            request.responseType = 'id_token';
+                                            promptAsync({ useProxy: true });
+                                        }
+                                    }}
+                                    disabled={!request || isLoading}
+                                    activeOpacity={0.7}
+                                >
+                                    {isLoading ? <ActivityIndicator size="small" color={COLORS.primary} /> : (
+                                        <>
+                                            <MaterialCommunityIcons name="google" size={24} color="#EA4335" />
+                                            <Text style={[styles.socialBtnText, { color: COLORS.text }]}>Sign in with Google</Text>
+                                        </>
+                                    )}
+                                </TouchableOpacity>
+                            </View>
+                        </View>
                     </ScrollView>
                 </KeyboardAvoidingView>
-                
+
                 <CustomAlertModal
                     visible={alertVisible}
                     onClose={() => setAlertVisible(false)}
@@ -210,7 +315,9 @@ const styles = StyleSheet.create({
     inputFlex: {
         flex: 1, paddingVertical: 14, fontSize: 15,
     },
-    eyeIcon: { padding: 4 },
+    eyeIcon: { padding: 8 },
+    forgotBtn: { alignSelf: 'flex-end', padding: 4 },
+    forgotText: { fontSize: 14, fontWeight: '700' },
     btn: { borderRadius: radius.md, overflow: 'hidden', marginTop: spacing.sm },
     btnGradient: { paddingVertical: 16, alignItems: 'center' },
     btnDisabled: { opacity: 0.6 },
@@ -230,5 +337,14 @@ const styles = StyleSheet.create({
         marginBottom: spacing.sm,
     },
     lockBannerTitle: { color: '#ef4444', fontWeight: '700', fontSize: 13 },
-    lockBannerSub:   { color: '#ef4444', fontSize: 12, marginTop: 2 },
+    lockBannerSub: { color: '#ef4444', fontSize: 12, marginTop: 2 },
+    dividerRow: { flexDirection: 'row', alignItems: 'center', marginVertical: spacing.lg, gap: 12 },
+    dividerLine: { flex: 1, height: 1 },
+    dividerText: { fontSize: 10, fontWeight: '800', letterSpacing: 1 },
+    socialRow: { flexDirection: 'row', gap: 12 },
+    socialBtn: {
+        flex: 1, height: 56, borderRadius: radius.md, borderWidth: 1,
+        flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10
+    },
+    socialBtnText: { fontSize: 14, fontWeight: '700' },
 });

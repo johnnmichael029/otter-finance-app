@@ -44,15 +44,15 @@ const getBudgets = async (req, res) => {
 // POST /api/budgets — upsert (one per user+month+category)
 const upsertBudget = async (req, res) => {
     try {
-        const { month, category, categoryIcon, categoryColor, allocatedAmount } = req.body;
+        const { month, category, categoryIcon, categoryColor, allocatedAmount, reminderAmount } = req.body;
         if (!month || !category || allocatedAmount === undefined) {
             return res.status(400).json({ error: 'month, category, and allocatedAmount are required.' });
         }
 
         const budget = await Budget.findOneAndUpdate(
             { user: req.userId, month, category },
-            { $set: { allocatedAmount, categoryIcon, categoryColor } },
-            { new: true, upsert: true, runValidators: true }
+            { $set: { allocatedAmount, categoryIcon, categoryColor, reminderAmount } },
+            { returnDocument: 'after', upsert: true, runValidators: true }
         );
 
         const io = req.app.get('io');

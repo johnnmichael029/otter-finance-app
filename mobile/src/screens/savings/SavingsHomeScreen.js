@@ -1,9 +1,11 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react';
 import {
     View, Text, StyleSheet, TouchableOpacity, FlatList, ScrollView,
-    ActivityIndicator, RefreshControl, Animated, Image, Modal, TouchableWithoutFeedback
+    ActivityIndicator, RefreshControl, Animated, Image, Modal, TouchableWithoutFeedback,
+    BackHandler, ToastAndroid, Platform
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { useFocusEffect } from '@react-navigation/native';
 import { Feather, Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useTheme } from '../../context/ThemeContext';
@@ -60,6 +62,33 @@ export default function SavingsHomeScreen({ navigation, route }) {
     const [historyLoading, setHistoryLoading] = useState(false);
     const [page, setPage] = useState(1);
     const [hasMore, setHasMore] = useState(true);
+    const [lastBackPressed, setLastBackPressed] = useState(0);
+
+    // ── Double Tap to Exit ──
+    useFocusEffect(
+        useCallback(() => {
+            const onBackPress = () => {
+                const currentTime = Date.now();
+                if (currentTime - lastBackPressed < 2000) {
+                    BackHandler.exitApp();
+                    return true;
+                }
+
+                setLastBackPressed(currentTime);
+                if (Platform.OS === 'android') {
+                    ToastAndroid.show('Press back again to exit', ToastAndroid.SHORT);
+                }
+                return true;
+            };
+
+            const backHandler = BackHandler.addEventListener(
+                'hardwareBackPress',
+                onBackPress
+            );
+
+            return () => backHandler.remove();
+        }, [lastBackPressed])
+    );
 
     // Modal State
     const [selectedTransfer, setSelectedTransfer] = useState(null);
@@ -124,6 +153,9 @@ export default function SavingsHomeScreen({ navigation, route }) {
             setGoals(activeGoals);
             setGoalsPage(2);
             setGoalsHasMore(goalRes.hasMore);
+
+            // Fetch wallets to ensure balances are fresh during manual refresh
+            useFinanceStore.getState().fetchWallets(true);
 
             const histRes = await getSavingsTransfers({ limit: 15, page: 1 });
             setHistory(histRes.transfers || []);
@@ -448,11 +480,11 @@ export default function SavingsHomeScreen({ navigation, route }) {
 
                 {/* Actions */}
                 <View style={styles.actionRow}>
-                    <TouchableOpacity style={[styles.actionBtn, { backgroundColor: COLORS.surface }]} onPress={() => navigation.navigate('SavingsTransfer', { direction: 'to_savings', isDirect: true, fromSavings: true })}>
+                    <TouchableOpacity style={[styles.actionBtn, { backgroundColor: COLORS.surface }]} onPress={() => navigation.navigate('SavingsTransfer', { goal: masterPot, direction: 'to_savings', isDirect: true, fromSavings: true })}>
                         <View style={[styles.actionIcon, { backgroundColor: '#22c55e20' }]}><Feather name="plus" size={18} color="#22c55e" /></View>
                         <Text style={[styles.actionLabel, { color: COLORS.text }]}>Add Funds</Text>
                     </TouchableOpacity>
-                    <TouchableOpacity style={[styles.actionBtn, { backgroundColor: COLORS.surface }]} onPress={() => navigation.navigate('SavingsTransfer', { direction: 'from_savings', isDirect: true, fromSavings: true })}>
+                    <TouchableOpacity style={[styles.actionBtn, { backgroundColor: COLORS.surface }]} onPress={() => navigation.navigate('SavingsTransfer', { goal: masterPot, direction: 'from_savings', isDirect: true, fromSavings: true })}>
                         <View style={[styles.actionIcon, { backgroundColor: '#f59e0b20' }]}><Feather name="arrow-up" size={18} color="#f59e0b" /></View>
                         <Text style={[styles.actionLabel, { color: COLORS.text }]}>Withdraw</Text>
                     </TouchableOpacity>
@@ -547,8 +579,34 @@ export default function SavingsHomeScreen({ navigation, route }) {
                                                         <Text style={[styles.modalDetailLabel, { color: COLORS.textMuted }]}>Date</Text>
                                                         <Text style={[styles.modalDetailValue, { color: COLORS.text }]}>{formatDateTime(selectedTransfer.createdAt)}</Text>
                                                     </View>
+                                                    
+                                                    {/* Payment Source — shown for deposits AND wallet withdrawals */}
+                                                    {(isDeposit || selectedTransfer.direction === 'from_savings') && (
+                                                        <View style={styles.modalDetailRow}>
+                                                            <Text style={[styles.modalDetailLabel, { color: COLORS.textMuted }]}>
+                                                                {isDeposit ? 'Payment Source' : 'Destination Wallet'}
+                                                            </Text>
+                                                            <View style={[styles.walletBadge, { backgroundColor: (selectedTransfer.wallet?.color || COLORS.primary) + '20' }]}>
+                                                                <Text style={[styles.walletBadgeText, { color: selectedTransfer.wallet?.color || COLORS.primary }]}>
+                                                                    {selectedTransfer.wallet
+                                                                        ? `${selectedTransfer.wallet.name} (${selectedTransfer.wallet.type})`
+                                                                        : (isGoal ? 'Internal Transfer' : 'Main Balance')}
+                                                                </Text>
+                                                            </View>
+                                                        </View>
+                                                    )}
+
+                                                    {selectedTransfer.walletAmount !== null && selectedTransfer.walletAmount !== undefined && (
+                                                        <View style={[styles.modalDetailRow, { borderBottomWidth: 0 }]}>
+                                                            <Text style={[styles.modalDetailLabel, { color: COLORS.textMuted }]}>Native Cost</Text>
+                                                            <Text style={[styles.modalDetailValue, { color: COLORS.text, fontWeight: '700' }]}>
+                                                                {selectedTransfer.walletAmount.toLocaleString(undefined, { maximumFractionDigits: 8 })} {selectedTransfer.walletCurrency}
+                                                            </Text>
+                                                        </View>
+                                                    )}
+
                                                     {selectedTransfer.note ? (
-                                                        <View style={[styles.modalDetailRow, { borderBottomWidth: 0, paddingBottom: 0, marginTop: 4, flexDirection: 'column', alignItems: 'flex-start' }]}>
+                                                        <View style={[styles.modalDetailRow, { borderBottomWidth: 0, paddingBottom: 0, marginTop: 4, alignItems: 'flex-start' }]}>
                                                             <Text style={[styles.modalDetailLabel, { color: COLORS.textMuted, marginBottom: 4 }]}>Note</Text>
                                                             <Text style={[styles.modalDetailValue, { color: COLORS.text }]}>{selectedTransfer.note}</Text>
                                                         </View>
@@ -650,6 +708,8 @@ const getStyles = (COLORS) => StyleSheet.create({
     modalDetailBox: { width: '100%', borderWidth: 1, borderRadius: radius.lg, padding: spacing.md },
     modalDetailRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: 'rgba(0,0,0,0.05)' },
     modalDetailLabel: { fontSize: 13, fontWeight: '600' },
-    modalDetailValue: { fontSize: 14, fontWeight: '500' },
+    modalDetailValue: { fontSize: 13, fontWeight: '700' },
+    walletBadge: { paddingHorizontal: 8, paddingVertical: 4, borderRadius: 8 },
+    walletBadgeText: { fontSize: 11, fontWeight: '800' },
     txDesc: { ...typography.caption, fontStyle: 'italic' },
 });

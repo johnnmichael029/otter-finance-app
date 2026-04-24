@@ -22,8 +22,20 @@ const userSchema = new mongoose.Schema({
     },
     password: {
         type: String,
-        required: [true, 'Password is required.'],
+        // Password is only required for local accounts (not social login)
+        required: function() {
+            return !this.googleId && !this.facebookId && !this.appleId;
+        },
         minlength: [6, 'Password must be at least 6 characters.'],
+    },
+    googleId: { type: String, default: null, index: true },
+    facebookId: { type: String, default: null, index: true },
+    appleId: { type: String, default: null, index: true },
+
+    // ── User Information ──────────────────────────────────────────────────────
+    occupation: {
+        type: String,
+        default: null,
     },
 
     // ── Push Notifications ────────────────────────────────────────────────────
@@ -45,6 +57,15 @@ const userSchema = new mongoose.Schema({
     isOnboarded: {
         type: Boolean,
         default: false,
+    },
+    // Password Reset
+    passwordResetCode: {
+        type: String,
+        default: null,
+    },
+    passwordResetExpires: {
+        type: Date,
+        default: null,
     },
 
     // ── Sessions (Refresh Token Store) ────────────────────────────────────────

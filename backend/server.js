@@ -73,7 +73,7 @@ const allowedOrigins = [
 ].filter(Boolean);
 
 app.use(cors({
-    origin: allowedOrigins,
+    origin: process.env.NODE_ENV === 'production' ? allowedOrigins : true,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     credentials: true,
 }));
@@ -168,7 +168,7 @@ app.use(cookieParser());
 //     + helmet sets X-XSS-Protection and Content-Security-Policy headers
 // ─────────────────────────────────────────────────────────────────────────────
 app.use((req, res, next) => {
-    if (req.body)   mongoSanitize.sanitize(req.body,   { replaceWith: '_' });
+    if (req.body) mongoSanitize.sanitize(req.body, { replaceWith: '_' });
     if (req.params) mongoSanitize.sanitize(req.params, { replaceWith: '_' });
     next();
 });
@@ -216,10 +216,14 @@ const csrfMiddleware = (req, res, next) => {
     }
     // Mobile register/login/2FA: no token yet, source: 'mobile' signals mobile origin
     const publicAuthRoutes = [
-        '/api/auth/register', 
-        '/api/auth/login', 
-        '/api/auth/verify-2fa', 
-        '/api/auth/2fa/resend'
+        '/api/auth/register',
+        '/api/auth/login',
+        '/api/auth/verify-2fa',
+        '/api/auth/2fa/resend',
+        '/api/auth/google',
+        '/api/auth/forgot-password',
+        '/api/auth/verify-reset-code',
+        '/api/auth/reset-password'
     ];
     if (publicAuthRoutes.includes(req.path)) {
         return next();
@@ -294,8 +298,8 @@ app.use((err, req, res, next) => {
 // ─────────────────────────────────────────────────────────────────────────────
 //  START SERVER
 // ─────────────────────────────────────────────────────────────────────────────
-server.listen(port, () => {
-    console.log(`✅ OTTER API live at http://localhost:${port}`);
+server.listen(port, '0.0.0.0', () => {
+    console.log(`✅ OTTER API live at http://0.0.0.0:${port}`);
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

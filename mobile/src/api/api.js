@@ -1,6 +1,10 @@
 import axios from 'axios';
 import { API_BASE } from '../context/AuthContext';
 
+// Set global defaults
+axios.defaults.timeout = 5000;
+axios.defaults.headers.post['Content-Type'] = 'application/json';
+
 // ─── Core / Utils ─────────────────────────────────────────────────────────────
 
 export const uploadReceipt = (formData) =>
@@ -24,6 +28,9 @@ export const updateTransaction = (id, data) =>
 
 export const deleteTransaction = (id) =>
     axios.delete(`${API_BASE}/transactions/${id}`).then(r => r.data);
+
+export const archiveTransaction = (id) =>
+    axios.patch(`${API_BASE}/transactions/${id}/archive`).then(r => r.data);
 
 export const getAnalytics = () =>
     axios.get(`${API_BASE}/transactions/analytics`).then(r => r.data);
@@ -62,6 +69,17 @@ export const savePushToken = (pushToken) =>
 
 export const completeOnboarding = (data) =>
     axios.post(`${API_BASE}/users/complete-onboarding`, data).then(r => r.data);
+
+// ── Security & Data Management ──────────────────────────────────────────────
+
+export const changePassword = (data) =>
+    axios.post(`${API_BASE}/users/change-password`, data).then(r => r.data);
+
+export const wipeData = (password) =>
+    axios.post(`${API_BASE}/users/wipe-data`, { password }).then(r => r.data);
+
+export const deleteAccount = (password) =>
+    axios.delete(`${API_BASE}/users/me`, { data: { password } }).then(r => r.data);
 
 // ─── Sessions (Auth) ─────────────────────────────────────────────────────────
 

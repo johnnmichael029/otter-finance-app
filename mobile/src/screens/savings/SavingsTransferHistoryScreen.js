@@ -82,7 +82,7 @@ export default function SavingsTransferHistoryScreen({ navigation }) {
             const params = { limit: 20, page };
             if (activeTab === 'In') params.type = 'in';
             if (activeTab === 'Out') params.type = 'out';
-            
+
             const res = await getSavingsTransfers(params);
             const incoming = res.transfers || [];
             setTransfers(prev => {
@@ -291,8 +291,34 @@ export default function SavingsTransferHistoryScreen({ navigation }) {
                                                         <Text style={[styles.modalDetailLabel, { color: COLORS.textMuted }]}>Date</Text>
                                                         <Text style={[styles.modalDetailValue, { color: COLORS.text }]}>{formatDateTime(selectedTransfer.createdAt, true)}</Text>
                                                     </View>
+
+                                                    {/* Payment Source — shown for deposits AND wallet withdrawals */}
+                                                    {(isDeposit || selectedTransfer.direction === 'from_savings') && (
+                                                        <View style={styles.modalDetailRow}>
+                                                            <Text style={[styles.modalDetailLabel, { color: COLORS.textMuted }]}>
+                                                                {isDeposit ? 'Payment Source' : 'Destination Wallet'}
+                                                            </Text>
+                                                            <View style={[styles.walletBadge, { backgroundColor: (selectedTransfer.wallet?.color || COLORS.primary) + '20' }]}>
+                                                                <Text style={[styles.walletBadgeText, { color: selectedTransfer.wallet?.color || COLORS.primary }]}>
+                                                                    {selectedTransfer.wallet
+                                                                        ? `${selectedTransfer.wallet.name} (${selectedTransfer.wallet.type})`
+                                                                        : (isGoal ? 'Internal Transfer' : 'Main Balance')}
+                                                                </Text>
+                                                            </View>
+                                                        </View>
+                                                    )}
+
+                                                    {selectedTransfer.walletAmount !== null && selectedTransfer.walletAmount !== undefined && (
+                                                        <View style={[styles.modalDetailRow, { borderBottomWidth: 0 }]}>
+                                                            <Text style={[styles.modalDetailLabel, { color: COLORS.textMuted }]}>Native Cost</Text>
+                                                            <Text style={[styles.modalDetailValue, { color: COLORS.text, fontWeight: '700' }]}>
+                                                                {selectedTransfer.walletAmount.toLocaleString(undefined, { maximumFractionDigits: 8 })} {selectedTransfer.walletCurrency}
+                                                            </Text>
+                                                        </View>
+                                                    )}
+
                                                     {selectedTransfer.note ? (
-                                                        <View style={[styles.modalDetailRow, { borderBottomWidth: 0, paddingBottom: 0, marginTop: 4, flexDirection: 'column', alignItems: 'flex-start' }]}>
+                                                        <View style={[styles.modalDetailRow, { borderBottomWidth: 0, paddingBottom: 0, marginTop: 4, alignItems: 'flex-start' }]}>
                                                             <Text style={[styles.modalDetailLabel, { color: COLORS.textMuted, marginBottom: 4 }]}>Note</Text>
                                                             <Text style={[styles.modalDetailValue, { color: COLORS.text }]}>{selectedTransfer.note}</Text>
                                                         </View>
@@ -351,5 +377,7 @@ const getStyles = (COLORS) => StyleSheet.create({
     modalDetailBox: { width: '100%', borderWidth: 1, borderRadius: radius.lg, padding: spacing.md },
     modalDetailRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: 'rgba(0,0,0,0.05)' },
     modalDetailLabel: { fontSize: 13, fontWeight: '600' },
-    modalDetailValue: { fontSize: 14, fontWeight: '500' },
+    modalDetailValue: { fontSize: 13, fontWeight: '700' },
+    walletBadge: { paddingHorizontal: 8, paddingVertical: 4, borderRadius: 8 },
+    walletBadgeText: { fontSize: 11, fontWeight: '800' },
 });

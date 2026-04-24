@@ -45,7 +45,7 @@ const updateTemplate = async (req, res) => {
         const template = await ShoppingTemplate.findOneAndUpdate(
             { _id: req.params.id, user: req.userId },
             { $set: { name, emoji, items, defaultBudget } },
-            { new: true }
+            { returnDocument: 'after', runValidators: true }
         );
         if (!template) return res.status(404).json({ error: 'Template not found.' });
 
@@ -80,7 +80,7 @@ const useTemplate = async (req, res) => {
         const template = await ShoppingTemplate.findOneAndUpdate(
             { _id: req.params.id, user: req.userId },
             { $inc: { usageCount: 1 } },
-            { new: true }
+            { returnDocument: 'after', runValidators: true }
         );
         if (!template) return res.status(404).json({ error: 'Template not found.' });
         res.json(template);

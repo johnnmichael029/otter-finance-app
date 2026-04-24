@@ -6,6 +6,7 @@ const walletSchema = new mongoose.Schema({
     type:         { type: String, enum: ['Debit', 'Credit', 'Stocks', 'Crypto', 'Cash', 'E-Wallet'], required: true },
     templateId:   { type: String, default: 'custom' },
     balance:      { type: Number, default: 0 },
+    currency:     { type: String, default: 'PHP' },
     color:        { type: String, default: '#374151' },
     isArchived:   { type: Boolean, default: false },
     hideBalance:  { type: Boolean, default: false },

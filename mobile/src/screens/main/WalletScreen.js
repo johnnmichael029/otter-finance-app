@@ -223,7 +223,7 @@ const InsightsPanel = ({ wallets, prices, hideVal, COLORS }) => {
 };
 
 // ─── Screen ───────────────────────────────────────────────────────────────────
-export default function WalletScreen() {
+export default function WalletScreen({ navigation }) {
     const { COLORS } = useTheme();
     const wallets = useFinanceStore(state => state.wallets);
     const fetchWallets = useFinanceStore(state => state.fetchWallets);
@@ -272,6 +272,16 @@ export default function WalletScreen() {
             message: `Balance: ${balString} \nAccount: ${wallet.type}`,
             onConfirm: null,
             extraActions: [
+                {
+                    label: 'Add Balance', icon: 'plus-circle',
+                    onPress: () => { 
+                        setAlert(a => ({ ...a, visible: false })); 
+                        navigation.navigate('AddTransaction', {
+                            type: 'income',
+                            preselectedWallet: wallet
+                        });
+                    }
+                },
                 {
                     label: 'Edit Wallet', icon: 'edit-2',
                     onPress: () => { setAlert(a => ({ ...a, visible: false })); setEditingWallet(wallet); }

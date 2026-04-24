@@ -144,6 +144,33 @@ export const useAuthStore = create((set, get) => ({
         }
     },
 
+    socialLogin: async (provider, idToken) => {
+        set({ isLoading: true });
+        try {
+            const endpoint = provider === 'google' ? '/auth/google' : '/auth/facebook';
+            const res = await axios.post(`${API_BASE}${endpoint}`, {
+                idToken, source: 'mobile'
+            }, {
+                headers: {
+                    'X-Platform': Platform.OS,
+                    'X-Device-Info': `${Platform.OS === 'ios' ? 'Apple Device' : 'Android Device'}`
+                }
+            });
+
+            await get()._persistSession(res.data);
+            
+            // If the backend says isNewUser, or the user profile says they aren't onboarded yet
+            return { 
+                success: true, 
+                isNewUser: res.data.isNewUser || !res.data.user?.isOnboarded 
+            };
+        } catch (err) {
+            return { success: false, message: err.response?.data?.error || err.message };
+        } finally {
+            set({ isLoading: false });
+        }
+    },
+
     updateLocalUser: async (userData) => {
         const AsyncStorage = (await import('@react-native-async-storage/async-storage')).default;
         const current = get().userInfo || {};

@@ -1,18 +1,21 @@
-import React, { useState, useCallback, useEffect } from 'react';
+import React, { useState, useCallback, useEffect, useRef } from 'react';
 import {
     View, Text, StyleSheet, TouchableOpacity, ScrollView,
-    TextInput, ActivityIndicator, RefreshControl, Modal, TouchableWithoutFeedback, Image
+    TextInput, ActivityIndicator, RefreshControl, Modal, TouchableWithoutFeedback, Image,
+    Animated, Vibration
 } from 'react-native';
 import { FlashList } from '@shopify/flash-list';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Feather, MaterialCommunityIcons, Ionicons } from '@expo/vector-icons';
+import { Swipeable } from 'react-native-gesture-handler';
 import { useTheme } from '../../context/ThemeContext';
 import { useAuth, API_BASE } from '../../context/AuthContext';
-import { getTransactions } from '../../api/api';
+import { getTransactions, archiveTransaction as archiveTxApi } from '../../api/api';
 import { spacing, radius } from '../../theme/colors';
 import Skeleton from '../../components/Skeleton';
 import { getSocket, connectSocket } from '../../utils/socket';
 import { useDebounce } from '../../utils/debounce';
+import { useFinanceStore } from '../../store/financeStore';
 
 const formatCurrency = (amount, currency = 'PHP') =>
     new Intl.NumberFormat('en-PH', { style: 'currency', currency }).format(amount);
@@ -62,7 +65,7 @@ const getIconColor = (tx, COLORS) => {
     return tx.categoryColor || (tx.type === 'income' ? COLORS.income : COLORS.expense);
 };
 
-const TABS = ['All', 'Income', 'Expense', 'Ledger'];
+const TABS = ['All', 'Income', 'Expense', 'Ledger', 'Archive'];
 
 const TransactionsScreen = () => {
     const { COLORS } = useTheme();
@@ -81,11 +84,12 @@ const TransactionsScreen = () => {
     const [selectedTx, setSelectedTx] = useState(null);
 
     const typeFilter = activeTab === 'Income' ? 'income' : activeTab === 'Expense' ? 'expense' : '';
+    const isArchiveView = activeTab === 'Archive';
 
     const load = useCallback(async () => {
         setLoading(true);
         try {
-            const params = { limit: 15, page: 1 };
+            const params = { limit: 15, page: 1, isArchived: isArchiveView };
             if (typeFilter) params.type = typeFilter;
             const res = await getTransactions(params);
             const txs = res.transactions || [];
@@ -98,7 +102,7 @@ const TransactionsScreen = () => {
             setLoading(false);
             setRefreshing(false);
         }
-    }, [typeFilter]);
+    }, [typeFilter, isArchiveView]);
 
     useEffect(() => { load(); }, [load]);
 
@@ -108,6 +112,9 @@ const TransactionsScreen = () => {
         const socket = getSocket();
 
         const handleNew = (tx) => {
+            if (isArchiveView && !tx.isArchived) return;
+            if (!isArchiveView && tx.isArchived) return;
+
             if (!typeFilter || tx.type === typeFilter) {
                 setTransactions(prev => {
                     const exists = prev.find(t => t._id === tx._id);
@@ -118,29 +125,44 @@ const TransactionsScreen = () => {
         };
 
         const handleUpdate = (tx) => {
-            setTransactions(prev => prev.map(t => t._id === tx._id ? tx : t));
+            setTransactions(prev => {
+                // If the archive status changed, remove it from the current view
+                if ((isArchiveView && !tx.isArchived) || (!isArchiveView && tx.isArchived)) {
+                    return prev.filter(t => t._id !== tx._id);
+                }
+                return prev.map(t => t._id === tx._id ? tx : t);
+            });
         };
 
         const handleDelete = (data) => {
             setTransactions(prev => prev.filter(t => t._id !== data._id));
         };
 
+        const handleArchive = (data) => {
+            // Remove from current list if the status doesn't match the view
+            if ((isArchiveView && !data.isArchived) || (!isArchiveView && data.isArchived)) {
+                setTransactions(prev => prev.filter(t => t._id !== data._id));
+            }
+        };
+
         socket.on('new_transaction', handleNew);
         socket.on('update_transaction', handleUpdate);
         socket.on('delete_transaction', handleDelete);
+        socket.on('transaction_archived', handleArchive);
 
         return () => {
             socket.off('new_transaction', handleNew);
             socket.off('update_transaction', handleUpdate);
             socket.off('delete_transaction', handleDelete);
+            socket.off('transaction_archived', handleArchive);
         };
-    }, [userInfo?._id, typeFilter]);
+    }, [userInfo?._id, typeFilter, isArchiveView]);
 
     const fetchMore = async () => {
         if (!hasMore || loadingMore) return;
         setLoadingMore(true);
         try {
-            const params = { limit: 15, page };
+            const params = { limit: 15, page, isArchived: isArchiveView };
             if (typeFilter) params.type = typeFilter;
             const res = await getTransactions(params);
             const incoming = res.transactions || [];
@@ -152,6 +174,17 @@ const TransactionsScreen = () => {
             setPage(p => p + 1);
             if (incoming.length < 15) setHasMore(false);
         } catch (e) { } finally { setLoadingMore(false); }
+    };
+
+    const handleArchiveToggle = async (id) => {
+        try {
+            Vibration.vibrate(50); // Haptic feedback
+            setTransactions(prev => prev.filter(t => t._id !== id));
+            await archiveTxApi(id);
+        } catch (e) {
+            console.error('Archive failed:', e);
+            load(); // Revert on failure
+        }
     };
 
     const filtered = debouncedSearch.trim()
@@ -170,12 +203,29 @@ const TransactionsScreen = () => {
         else ledgerGroups[key].debit += tx.amount;
         ledgerGroups[key].entries.push(tx);
     }
-    
+
     const flatData = [];
     Object.values(ledgerGroups).forEach(day => {
         flatData.push({ type: 'header', date: day.date, credit: day.credit, debit: day.debit, _id: `header-${day.date}` });
         day.entries.forEach(tx => flatData.push({ type: 'item', transaction: tx, _id: tx._id }));
     });
+
+    const renderRightActions = (id, isArchived) => {
+        return (
+            <TouchableOpacity
+                style={styles.archiveAction}
+                onPress={() => handleArchiveToggle(id)}
+                activeOpacity={0.8}
+            >
+                <MaterialCommunityIcons
+                    name={isArchived ? "archive-arrow-up-outline" : "archive-arrow-down-outline"}
+                    size={28}
+                    color="#fff"
+                />
+                <Text style={styles.archiveActionText}>{isArchived ? 'Restore' : 'Archive'}</Text>
+            </TouchableOpacity>
+        );
+    };
 
     return (
         <SafeAreaView style={styles.safe}>
@@ -241,8 +291,10 @@ const TransactionsScreen = () => {
                     onEndReachedThreshold={0.5}
                     ListEmptyComponent={
                         <View style={styles.empty}>
-                            <Text style={styles.emptyEmoji}>📭</Text>
-                            <Text style={[styles.emptyText, { color: COLORS.textMuted }]}>No transactions found.</Text>
+                            <Text style={styles.emptyEmoji}>{isArchiveView ? '📦' : '📭'}</Text>
+                            <Text style={[styles.emptyText, { color: COLORS.textMuted }]}>
+                                {isArchiveView ? 'Your archive is empty.' : 'No transactions found.'}
+                            </Text>
                         </View>
                     }
                     renderItem={({ item }) => {
@@ -261,34 +313,47 @@ const TransactionsScreen = () => {
                         } else {
                             const tx = item.transaction;
                             return (
-                                <TouchableOpacity style={[styles.txRow, { backgroundColor: COLORS.surface }]} onPress={() => setSelectedTx(tx)} activeOpacity={0.7}>
-                                    <View style={[styles.txIcon, { backgroundColor: getIconColor(tx, COLORS) + '20' }]}>
-                                        <IconRenderer name={getIconName(tx)} size={16} color={getIconColor(tx, COLORS)} />
-                                    </View>
-                                    <View style={{ flex: 1 }}>
-                                        <Text style={[styles.txCat, { color: COLORS.text }]}>{tx.category}</Text>
-                                        <Text style={[styles.txNote, { color: COLORS.textMuted }]} numberOfLines={1}>
-                                            {(tx.description || tx.note) ? `" ${tx.description || tx.note} "` : '—'}
-                                        </Text>
-                                    </View>
-                                    <View style={styles.txRight}>
-                                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4, justifyContent: 'flex-end' }}>
-                                            {tx.attachment && <Feather name="camera" size={12} color={COLORS.primary} />}
-                                            {activeTab === 'Ledger' ? (
-                                                <Text style={[styles.txType, { color: tx.type === 'income' ? '#22c55e' : '#ef4444', fontSize: 9 }]}>
-                                                    {tx.type === 'income' ? '↑ CREDIT' : '↓ DEBIT'}
-                                                </Text>
-                                            ) : (
-                                                <Text style={[styles.txDateSimple, { color: COLORS.textMuted }]}>
-                                                    {new Intl.DateTimeFormat('en-US', { hour: 'numeric', minute: '2-digit' }).format(new Date(tx.date || tx.createdAt))}
-                                                </Text>
-                                            )}
+                                <Swipeable
+                                    renderRightActions={() => renderRightActions(tx._id, tx.isArchived)}
+                                    onSwipeableOpen={(direction) => direction === 'right' && handleArchiveToggle(tx._id)}
+                                    friction={2}
+                                    containerStyle={{ borderRadius: radius.md, marginBottom: spacing.xs }}
+                                >
+                                    <TouchableOpacity style={[styles.txRow, { backgroundColor: COLORS.surface, marginBottom: 0 }]} onPress={() => setSelectedTx(tx)} activeOpacity={0.7}>
+                                        <View style={[styles.txIcon, { backgroundColor: getIconColor(tx, COLORS) + '20' }]}>
+                                            <IconRenderer name={getIconName(tx)} size={16} color={getIconColor(tx, COLORS)} />
                                         </View>
-                                        <Text style={[styles.txAmt, { color: tx.type === 'income' ? COLORS.income : COLORS.expense }]}>
-                                            {tx.type === 'income' ? '+' : '-'}{formatCurrency(tx.amount, userInfo?.currency)}
-                                        </Text>
-                                    </View>
-                                </TouchableOpacity>
+                                        <View style={{ flex: 1 }}>
+                                            <Text style={[styles.txCat, { color: COLORS.text }]}>{tx.category}</Text>
+                                            <Text style={[styles.txNote, { color: COLORS.textMuted }]} numberOfLines={1}>
+                                                {(tx.description || tx.note) ? `" ${tx.description || tx.note} "` : '—'}
+                                            </Text>
+                                        </View>
+                                        <View style={styles.txRight}>
+                                            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4, justifyContent: 'flex-end' }}>
+                                                {tx.isPending && (
+                                                    <View style={{ flexDirection: 'row', alignItems: 'center', marginRight: 4 }}>
+                                                        <Feather name="clock" size={10} color={COLORS.primary} style={{ marginRight: 2 }} />
+                                                        <Text style={{ fontSize: 9, color: COLORS.primary, fontWeight: 'bold' }}>OFFLINE</Text>
+                                                    </View>
+                                                )}
+                                                {tx.attachment && <Feather name="camera" size={12} color={COLORS.primary} />}
+                                                {activeTab === 'Ledger' ? (
+                                                    <Text style={[styles.txType, { color: tx.type === 'income' ? '#22c55e' : '#ef4444', fontSize: 9 }]}>
+                                                        {tx.type === 'income' ? '↑ CREDIT' : '↓ DEBIT'}
+                                                    </Text>
+                                                ) : (
+                                                    <Text style={[styles.txDateSimple, { color: COLORS.textMuted }]}>
+                                                        {new Intl.DateTimeFormat('en-US', { hour: 'numeric', minute: '2-digit' }).format(new Date(tx.date || tx.createdAt))}
+                                                    </Text>
+                                                )}
+                                            </View>
+                                            <Text style={[styles.txAmt, { color: tx.type === 'income' ? COLORS.income : COLORS.expense }]}>
+                                                {tx.type === 'income' ? '+' : '-'}{formatCurrency(tx.amount, userInfo?.currency)}
+                                            </Text>
+                                        </View>
+                                    </TouchableOpacity>
+                                </Swipeable>
                             );
                         }
                     }}
@@ -317,28 +382,66 @@ const TransactionsScreen = () => {
                                                 {selectedTx.type === 'income' ? '+' : '-'}{formatCurrency(selectedTx.amount, userInfo?.currency)}
                                             </Text>
                                             <Text style={[styles.modalCat, { color: COLORS.text }]}>{selectedTx.category}</Text>
-                                            
+
                                             <View style={[styles.detailBox, { backgroundColor: COLORS.background, borderColor: COLORS.border }]}>
-                                                {[
-                                                    ['Type', selectedTx.type],
-                                                    ['Date', formatDateTime(selectedTx.date || selectedTx.createdAt)],
-                                                    ['Source', selectedTx.wallet ? `${selectedTx.wallet.name} (${selectedTx.wallet.type})` : 'HAND'],
-                                                    selectedTx.walletAmount !== null && selectedTx.walletAmount !== undefined ? ['Native Cost', `${selectedTx.walletAmount.toLocaleString(undefined, { maximumFractionDigits: 8 })} ${selectedTx.walletCurrency}`] : null,
-                                                    selectedTx.description || selectedTx.note ? ['Note', selectedTx.description || selectedTx.note] : null,
-                                                ].filter(Boolean).map(([label, val]) => (
-                                                    <View key={label} style={[styles.detailRow, { borderColor: COLORS.border, borderBottomWidth: label === 'Note' || label === 'Native Cost' ? 0 : StyleSheet.hairlineWidth }]}>
-                                                        <Text style={[styles.detailLabel, { color: COLORS.textMuted }]}>{label}</Text>
-                                                        <Text style={[styles.detailVal, { color: COLORS.text, textTransform: label === 'Type' ? 'capitalize' : 'none', fontWeight: (label === 'Native Cost' || label === 'Source') ? '700' : '500' }]}>{val}</Text>
+                                                <View style={styles.detailRow}>
+                                                    <Text style={[styles.detailLabel, { color: COLORS.textMuted }]}>Type</Text>
+                                                    <Text style={[styles.detailVal, { color: COLORS.text, textTransform: 'capitalize' }]}>{selectedTx.type}</Text>
+                                                </View>
+                                                <View style={styles.detailRow}>
+                                                    <Text style={[styles.detailLabel, { color: COLORS.textMuted }]}>Date</Text>
+                                                    <Text style={[styles.detailVal, { color: COLORS.text }]}>{formatDateTime(selectedTx.date || selectedTx.createdAt)}</Text>
+                                                </View>
+                                                {/* Payment Source / From Row */}
+                                                <View style={styles.detailRow}>
+                                                    <Text style={[styles.detailLabel, { color: COLORS.textMuted }]}>Payment Source</Text>
+                                                    <View style={[styles.walletBadge, { backgroundColor: ((selectedTx.type === 'income' ? selectedTx.sourceWallet?.color : selectedTx.wallet?.color) || COLORS.primary) + '20' }]}>
+                                                        <Text style={[styles.walletBadgeText, { color: (selectedTx.type === 'income' ? selectedTx.sourceWallet?.color : selectedTx.wallet?.color) || COLORS.primary }]}>
+                                                            {selectedTx.type === 'income' 
+                                                                ? (selectedTx.sourceWallet ? selectedTx.sourceWallet.name : 'External Source')
+                                                                : (selectedTx.wallet ? selectedTx.wallet.name : 'HAND')
+                                                            }
+                                                        </Text>
                                                     </View>
-                                                ))}
+                                                </View>
+
+                                                {/* Deposit To Row (Only for Income) */}
+                                                {selectedTx.type === 'income' && (
+                                                    <View style={[styles.detailRow]}>
+                                                        <Text style={[styles.detailLabel, { color: COLORS.textMuted }]}>Deposit To</Text>
+                                                        <View style={[styles.walletBadge, { backgroundColor: (selectedTx.wallet?.color || COLORS.primary) + '20' }]}>
+                                                            <Text style={[styles.walletBadgeText, { color: selectedTx.wallet?.color || COLORS.primary }]}>
+                                                                {selectedTx.wallet ? selectedTx.wallet.name : 'HAND'}
+                                                            </Text>
+                                                        </View>
+                                                    </View>
+                                                )}
+                                                {/* Native Cost Row */}
+                                                {((selectedTx.type === 'income' && selectedTx.sourceWalletAmount) || (selectedTx.type === 'expense' && selectedTx.walletAmount)) && (
+                                                    <View style={[styles.detailRow, { borderBottomWidth: 0 }]}>
+                                                        <Text style={[styles.detailLabel, { color: COLORS.textMuted }]}>Native Cost</Text>
+                                                        <Text style={[styles.detailVal, { color: COLORS.text, fontWeight: '700' }]}>
+                                                            {selectedTx.type === 'income' 
+                                                                ? `${selectedTx.sourceWalletAmount?.toLocaleString(undefined, { maximumFractionDigits: 8 })} ${selectedTx.sourceWalletCurrency}`
+                                                                : `${selectedTx.walletAmount?.toLocaleString(undefined, { maximumFractionDigits: 8 })} ${selectedTx.walletCurrency}`
+                                                            }
+                                                        </Text>
+                                                    </View>
+                                                )}
+                                                {selectedTx.description || selectedTx.note ? (
+                                                    <View style={[styles.detailRow, { borderBottomWidth: 0, paddingBottom: 0, marginTop: 4, alignItems: 'flex-start' }]}>
+                                                        <Text style={[styles.detailLabel, { color: COLORS.textMuted }]}>Note</Text>
+                                                        <Text style={[styles.detailVal, { color: COLORS.text, textAlign: 'left' }]}>{selectedTx.description || selectedTx.note}</Text>
+                                                    </View>
+                                                ) : null}
                                             </View>
 
                                             {selectedTx.attachment && (
                                                 <View style={styles.receiptSection}>
                                                     <Text style={[styles.detailLabel, { color: COLORS.textMuted, marginBottom: 8, marginTop: spacing.lg }]}>Receipt Attachment</Text>
-                                                    <Image 
-                                                        source={{ uri: `${API_BASE.replace('/api', '')}${selectedTx.attachment}` }} 
-                                                        style={styles.modalReceipt} 
+                                                    <Image
+                                                        source={{ uri: `${API_BASE.replace('/api', '')}${selectedTx.attachment}` }}
+                                                        style={styles.modalReceipt}
                                                     />
                                                 </View>
                                             )}
@@ -371,7 +474,7 @@ const getStyles = (COLORS) => StyleSheet.create({
     empty: { alignItems: 'center', paddingTop: 80 },
     emptyEmoji: { fontSize: 48, marginBottom: 12 },
     emptyText: { fontSize: 14 },
-    txRow: { flexDirection: 'row', alignItems: 'center', borderRadius: radius.md, padding: spacing.md, marginBottom: spacing.xs },
+    txRow: { flexDirection: 'row', alignItems: 'center', padding: spacing.md },
     txIcon: { width: 38, height: 38, borderRadius: 19, justifyContent: 'center', alignItems: 'center', marginRight: spacing.sm },
     txCat: { fontWeight: '700', fontSize: 14 },
     txNote: { fontSize: 12, fontStyle: 'italic', marginTop: 2 },
@@ -384,6 +487,20 @@ const getStyles = (COLORS) => StyleSheet.create({
     ledgerDaySummary: { flexDirection: 'row', gap: 8 },
     ledgerCredit: { fontSize: 12, fontWeight: '700' },
     ledgerDebit: { fontSize: 12, fontWeight: '700' },
+    archiveAction: {
+        backgroundColor: '#725149',
+        justifyContent: 'center',
+        alignItems: 'center',
+        width: 80,
+        height: '100%',
+        borderRadius: radius.md,
+    },
+    archiveActionText: {
+        color: '#fff',
+        fontSize: 10,
+        fontWeight: '700',
+        marginTop: 4
+    },
     modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
     modalSheet: { borderTopLeftRadius: radius.xl, borderTopRightRadius: radius.xl, padding: spacing.lg, paddingBottom: 40, maxHeight: '80%' },
     modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: spacing.md },
@@ -393,11 +510,13 @@ const getStyles = (COLORS) => StyleSheet.create({
     modalAmt: { fontSize: 32, fontWeight: '800', marginBottom: 4, alignSelf: 'center' },
     modalCat: { fontSize: 16, fontWeight: '600', marginBottom: spacing.lg, alignSelf: 'center' },
     detailBox: { width: '100%', borderWidth: 1, borderRadius: radius.lg, padding: spacing.md },
-    detailRow: { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 8, borderBottomWidth: StyleSheet.hairlineWidth },
+    detailRow: { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: 'rgba(0,0,0,0.05)' },
     detailLabel: { fontSize: 13, fontWeight: '600' },
-    detailVal: { fontSize: 14, fontWeight: '500', maxWidth: '60%', textAlign: 'right' },
-    receiptSection: { width: '100%', marginTop: spacing.md },
+    detailVal: { fontSize: 13, fontWeight: '700', maxWidth: '60%', textAlign: 'right' },
+    attachmentSection: { width: '100%', marginTop: spacing.md },
     modalReceipt: { width: '100%', height: 300, borderRadius: radius.lg, resizeMode: 'contain', backgroundColor: '#000' },
+    walletBadge: { paddingHorizontal: 8, paddingVertical: 4, borderRadius: 8 },
+    walletBadgeText: { fontSize: 11, fontWeight: '800' },
 });
 
 export default TransactionsScreen;

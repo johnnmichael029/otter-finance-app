@@ -2,10 +2,11 @@ import React, { useEffect, useState, useCallback, useRef } from 'react';
 import {
     View, Text, ScrollView, StyleSheet, Image,
     TouchableOpacity, RefreshControl, ActivityIndicator, Animated,
-    Modal, TouchableWithoutFeedback
+    Modal, TouchableWithoutFeedback, BackHandler, ToastAndroid, Platform
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { useFocusEffect } from '@react-navigation/native';
 import { useAuth } from '../../context/AuthContext';
 import { useTheme } from '../../context/ThemeContext';
 import { Feather, MaterialCommunityIcons, Ionicons } from '@expo/vector-icons';
@@ -110,6 +111,33 @@ export default function HomeScreen({ navigation }) {
     const [logoutModalVisible, setLogoutModalVisible] = useState(false);
     const [dateRange, setDateRange] = useState('Week');
     const [unreadNotifCount, setUnreadNotifCount] = useState(0);
+    const [lastBackPressed, setLastBackPressed] = useState(0);
+
+    // ── Double Tap to Exit ──
+    useFocusEffect(
+        useCallback(() => {
+            const onBackPress = () => {
+                const currentTime = Date.now();
+                if (currentTime - lastBackPressed < 2000) {
+                    BackHandler.exitApp();
+                    return true;
+                }
+
+                setLastBackPressed(currentTime);
+                if (Platform.OS === 'android') {
+                    ToastAndroid.show('Press back again to exit', ToastAndroid.SHORT);
+                }
+                return true;
+            };
+
+            const backHandler = BackHandler.addEventListener(
+                'hardwareBackPress',
+                onBackPress
+            );
+
+            return () => backHandler.remove();
+        }, [lastBackPressed])
+    );
 
     // Transaction Details Modal State
     const [selectedTx, setSelectedTx] = useState(null);
@@ -155,6 +183,7 @@ export default function HomeScreen({ navigation }) {
     const load = useCallback(async () => {
         // Guard: don't attempt authenticated requests without a valid token
         if (!userToken) return;
+
         try {
             const [s, t, savRes, debtsRes, notifRes] = await Promise.all([
                 getTransactionSummary({ range: dateRange.toLowerCase() }),
@@ -317,6 +346,7 @@ export default function HomeScreen({ navigation }) {
         socket.on('update_debt', handleDebtChange);
         socket.on('delete_debt', handleDebtChange);
         socket.on('currency_updated', handleCurrencyUpdate);
+        socket.on('finances_wiped', load);
 
         socket.on('new_notification', () => {
             setUnreadNotifCount(prev => prev + 1);
@@ -340,6 +370,7 @@ export default function HomeScreen({ navigation }) {
             socket.off('update_debt', handleDebtChange);
             socket.off('delete_debt', handleDebtChange);
             socket.off('currency_updated', handleCurrencyUpdate);
+            socket.off('finances_wiped', load);
             socket.off('new_notification');
             socket.off('notification_read');
             socket.off('all_notifications_read');
@@ -348,8 +379,7 @@ export default function HomeScreen({ navigation }) {
 
     const onRefresh = () => { setRefreshing(true); load(); };
 
-    // Calculations for Net Worth Tracker
-    const walletBal = summary.netBalance ?? summary.balance ?? 0;
+    const walletBal = (summary.netBalance ?? summary.balance ?? 0);
     const savingBal = savingsTotalSaved ?? 0;
     const netDebt = debtStats.owedToMe - debtStats.iOwe;
 
@@ -661,6 +691,7 @@ export default function HomeScreen({ navigation }) {
                                             {tx.type === 'income' ? '+' : '-'}{formatCurrency(tx.amount, userInfo?.currency)}
                                         </Text>
                                         <View style={{ alignItems: 'flex-end' }}>
+
                                             <Text style={[styles.txDate, { color: COLORS.textMuted }]}>
                                                 {new Intl.DateTimeFormat('en-US', { hour: 'numeric', minute: '2-digit' }).format(new Date(tx.date || tx.createdAt))}
                                             </Text>
@@ -741,28 +772,50 @@ export default function HomeScreen({ navigation }) {
                                                     <Text style={[styles.modalDetailLabel, { color: COLORS.textMuted }]}>Date</Text>
                                                     <Text style={[styles.modalDetailValue, { color: COLORS.text }]}>{formatDateTime(selectedTx.date || selectedTx.createdAt)}</Text>
                                                 </View>
+                                                {/* Payment Source / From Row */}
+                                                <View style={[styles.modalDetailRow]}>
+                                                    <Text style={[styles.modalDetailLabel, { color: COLORS.textMuted }]}>
+                                                        {selectedTx.type === 'income' ? 'Payment Source' : 'Payment Source'}
+                                                    </Text>
+                                                    <View style={[styles.walletBadge, { backgroundColor: ((selectedTx.type === 'income' ? selectedTx.sourceWallet?.color : selectedTx.wallet?.color) || COLORS.primary) + '20' }]}>
+                                                        <Text style={[styles.walletBadgeText, { color: (selectedTx.type === 'income' ? selectedTx.sourceWallet?.color : selectedTx.wallet?.color) || COLORS.primary }]}>
+                                                            {selectedTx.type === 'income' 
+                                                                ? (selectedTx.sourceWallet ? selectedTx.sourceWallet.name : 'External Source')
+                                                                : (selectedTx.wallet ? selectedTx.wallet.name : 'HAND')
+                                                            }
+                                                        </Text>
+                                                    </View>
+                                                </View>
+
+                                                {/* Deposit To Row (Only for Income) */}
+                                                {selectedTx.type === 'income' && (
+                                                    <View style={[styles.modalDetailRow]}>
+                                                        <Text style={[styles.modalDetailLabel, { color: COLORS.textMuted }]}>Deposit To</Text>
+                                                        <View style={[styles.walletBadge, { backgroundColor: (selectedTx.wallet?.color || COLORS.primary) + '20' }]}>
+                                                            <Text style={[styles.walletBadgeText, { color: selectedTx.wallet?.color || COLORS.primary }]}>
+                                                                {selectedTx.wallet ? selectedTx.wallet.name : 'HAND'}
+                                                            </Text>
+                                                        </View>
+                                                    </View>
+                                                )}
+                                                {/* Native Cost Row (Shows deduction amount in native unit) */}
+                                                {((selectedTx.type === 'income' && selectedTx.sourceWalletAmount) || (selectedTx.type === 'expense' && selectedTx.walletAmount)) && (
+                                                    <View style={[styles.modalDetailRow, { borderBottomWidth: 0 }]}>
+                                                        <Text style={[styles.modalDetailLabel, { color: COLORS.textMuted }]}>Native Cost</Text>
+                                                        <Text style={[styles.modalDetailValue, { color: COLORS.text, fontWeight: '700' }]}>
+                                                            {selectedTx.type === 'income' 
+                                                                ? `${selectedTx.sourceWalletAmount?.toLocaleString(undefined, { maximumFractionDigits: 8 })} ${selectedTx.sourceWalletCurrency}`
+                                                                : `${selectedTx.walletAmount?.toLocaleString(undefined, { maximumFractionDigits: 8 })} ${selectedTx.walletCurrency}`
+                                                            }
+                                                        </Text>
+                                                    </View>
+                                                )}
                                                 {(selectedTx.description || selectedTx.note) ? (
-                                                    <View style={[styles.modalDetailRow, { borderBottomWidth: 0, paddingBottom: 0, marginTop: 4, flexDirection: 'column', alignItems: 'flex-start' }]}>
+                                                    <View style={[styles.modalDetailRow, { borderBottomWidth: 0, paddingBottom: 0, marginTop: 4, alignItems: 'flex-start' }]}>
                                                         <Text style={[styles.modalDetailLabel, { color: COLORS.textMuted, marginBottom: 4 }]}>Note</Text>
                                                         <Text style={[styles.modalDetailValue, { color: COLORS.text }]}>{selectedTx.description || selectedTx.note}</Text>
                                                     </View>
                                                 ) : null}
-                                                <View style={[styles.modalDetailRow]}>
-                                                    <Text style={[styles.modalDetailLabel, { color: COLORS.textMuted }]}>Payment Source</Text>
-                                                    <View style={[styles.walletBadge, { backgroundColor: (selectedTx.wallet?.color || COLORS.primary) + '20' }]}>
-                                                        <Text style={[styles.walletBadgeText, { color: selectedTx.wallet?.color || COLORS.primary }]}>
-                                                            {selectedTx.wallet ? `${selectedTx.wallet.name} (${selectedTx.wallet.type})` : 'HAND'}
-                                                        </Text>
-                                                    </View>
-                                                </View>
-                                                {selectedTx.walletAmount !== null && selectedTx.walletAmount !== undefined && (
-                                                    <View style={[styles.modalDetailRow, { borderBottomWidth: 0 }]}>
-                                                        <Text style={[styles.modalDetailLabel, { color: COLORS.textMuted }]}>Native Cost</Text>
-                                                        <Text style={[styles.modalDetailValue, { color: COLORS.text, fontWeight: '700' }]}>
-                                                            {selectedTx.walletAmount.toLocaleString(undefined, { maximumFractionDigits: 8 })} {selectedTx.walletCurrency}
-                                                        </Text>
-                                                    </View>
-                                                )}
                                             </View>
                                         </View>
                                     </>

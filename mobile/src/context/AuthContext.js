@@ -33,7 +33,13 @@ export const AuthProvider = ({ children }) => {
             (response) => response,
             async (error) => {
                 const originalRequest = error.config;
-                if (error.response?.status === 401 && !originalRequest._retry && !originalRequest.url.includes('/auth/')) {
+                // Skips retry only for strictly public auth routes where a 401 is expected or handled manually
+                const skipRetryPaths = ['/auth/login', '/auth/register', '/auth/refresh', '/auth/verify-2fa', '/auth/2fa/resend'];
+                const shouldRetry = error.response?.status === 401 && 
+                                    !originalRequest._retry && 
+                                    !skipRetryPaths.some(p => originalRequest.url.includes(p));
+
+                if (shouldRetry) {
                     
                     if (isRefreshing) {
                         return new Promise((resolve) => {

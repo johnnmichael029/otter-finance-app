@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import {
     View, Text, StyleSheet, TouchableOpacity, TextInput,
     ScrollView, KeyboardAvoidingView, Platform, ActivityIndicator,
@@ -62,8 +62,16 @@ export default function AddTransactionScreen({ navigation, route }) {
     const [amount, setAmount] = useState(prefillData?.price ? String(prefillData.price) : '');
     const [note, setNote] = useState(prefillData?.name || '');
     const [category, setCategory] = useState(null);
-    const [selectedWallet, setSelectedWallet] = useState(null);   // full wallet object
+    const [selectedWallet, setSelectedWallet] = useState(null);   // Destination wallet (locked if passed from Wallet screen)
+    const [sourceWallet, setSourceWallet] = useState(null);       // source wallet object (for income)
     const [isLoading, setIsLoading] = useState(false);
+
+    // If we came from the Wallet Screen, pre-set the destination wallet
+    useEffect(() => {
+        if (route.params?.preselectedWallet) {
+            setSelectedWallet(route.params.preselectedWallet);
+        }
+    }, [route.params?.preselectedWallet]);
 
     const cryptoPrices = useFinanceStore(state => state.cryptoPrices);
     const [alert, setAlert] = useState({ visible: false, type: 'info', title: '', message: '' });
@@ -77,6 +85,8 @@ export default function AddTransactionScreen({ navigation, route }) {
     const [currencyModalVisible, setCurrencyModalVisible] = useState(false);
     const [convertedPreview, setConvertedPreview] = useState(null);
     const [exchangeRate, setExchangeRate] = useState(1);
+    const [sourceExchangeRate, setSourceExchangeRate] = useState(1);
+    const [sourceConvertedAmount, setSourceConvertedAmount] = useState(null);
 
     const [remoteCats, setRemoteCats] = useState([]);
     const formatIconName = (name) => {
@@ -165,6 +175,65 @@ export default function AddTransactionScreen({ navigation, route }) {
         return () => clearTimeout(timeout);
     }, [amount, currency]);
 
+    const [destExchangeRate, setDestExchangeRate] = useState(1);
+    const [destConvertedAmount, setDestConvertedAmount] = useState(null);
+
+    // Live Conversion for Source & Destination Wallets
+    React.useEffect(() => {
+        const fetchWalletConversions = async () => {
+            if (!amount || isNaN(parseFloat(amount))) return;
+
+            // 1. Source Wallet Conversion
+            if (sourceWallet) {
+                if (sourceWallet.type === 'Crypto' && sourceWallet.coinId) {
+                    const price = cryptoPrices[sourceWallet.coinId];
+                    if (price) {
+                        setSourceExchangeRate(price);
+                        setSourceConvertedAmount(parseFloat(amount) / price);
+                    }
+                } else {
+                    const walletCurrency = sourceWallet.currency || 'PHP';
+                    if (walletCurrency === 'PHP') {
+                        setSourceConvertedAmount(null);
+                        setSourceExchangeRate(1);
+                    } else {
+                        try {
+                            const res = await convertCurrency(walletCurrency, 'PHP', 1);
+                            setSourceExchangeRate(res.rate);
+                            setSourceConvertedAmount(parseFloat(amount) / res.rate);
+                        } catch (e) { console.warn('Source conversion failed:', e.message); }
+                    }
+                }
+            }
+
+            // 2. Destination (Selected) Wallet Conversion
+            if (selectedWallet) {
+                if (selectedWallet.type === 'Crypto' && selectedWallet.coinId) {
+                    const price = cryptoPrices[selectedWallet.coinId];
+                    if (price) {
+                        setDestExchangeRate(price);
+                        setDestConvertedAmount(parseFloat(amount) / price);
+                    }
+                } else {
+                    const walletCurrency = selectedWallet.currency || 'PHP';
+                    if (walletCurrency === 'PHP') {
+                        setDestConvertedAmount(null);
+                        setDestExchangeRate(1);
+                    } else {
+                        try {
+                            const res = await convertCurrency(walletCurrency, 'PHP', 1);
+                            setDestExchangeRate(res.rate);
+                            setDestConvertedAmount(parseFloat(amount) / res.rate);
+                        } catch (e) { console.warn('Dest conversion failed:', e.message); }
+                    }
+                }
+            }
+        };
+
+        const timeout = setTimeout(fetchWalletConversions, 500);
+        return () => clearTimeout(timeout);
+    }, [amount, sourceWallet, selectedWallet, cryptoPrices]);
+
     const handleQuickAdd = (template) => {
         showAlert(
             'confirm',
@@ -243,14 +312,20 @@ export default function AddTransactionScreen({ navigation, route }) {
             // 2. Create transaction
             const finalAmountPHP = convertedPreview !== null ? convertedPreview : parseFloat(amount);
 
-            // Calculate native deduct amount for crypto/stocks wallets
+            // Calculate native amounts for both wallets independently
             let walletDeductAmount = null;
+            let sourceWalletDeductAmount = null;
+
             if (selectedWallet) {
-                const deduct = calcNativeDeduct(selectedWallet, finalAmountPHP, cryptoPrices);
+                const deduct = calcNativeDeduct(selectedWallet, finalAmountPHP, cryptoPrices, destExchangeRate);
                 walletDeductAmount = deduct?.nativeAmount ?? null;
             }
+            if (sourceWallet) {
+                const deduct = calcNativeDeduct(sourceWallet, finalAmountPHP, cryptoPrices, sourceExchangeRate);
+                sourceWalletDeductAmount = deduct?.nativeAmount ?? null;
+            }
 
-            await createTransaction({
+            const txData = {
                 type,
                 amount: finalAmountPHP,
                 currency: currency.code,
@@ -264,22 +339,27 @@ export default function AddTransactionScreen({ navigation, route }) {
                 attachment: finalAttachmentUrl,
                 walletId: selectedWallet?._id || null,
                 walletDeductAmount,
-            });
+                sourceWalletId: sourceWallet?._id || null,
+                sourceWalletDeductAmount,
+            };
+
+            await createTransaction(txData);
+
+            // Refresh store to reflect new balance and transaction
+            useFinanceStore.getState().refreshAll();
+
             showAlert('success', isIncome ? 'Income Added!' : 'Expense Logged!',
-                `${currency.symbol}${parseFloat(amount).toFixed(2)} recorded.${currency.code !== 'PHP' ? ` (≈ ₱${finalAmountPHP.toFixed(2)})` : ''}`
+                `${currency.symbol}${parseFloat(amount).toFixed(2)} recorded.${currency.code !== 'PHP' ? ` (≈ ₱${finalAmountPHP.toFixed(2)})` : ''}`,
+                () => navigation.goBack()
             );
+
         } catch (err) {
-            const errorData = err?.response?.data;
-            let errorMsg = errorData?.error || errorData?.message || 'Something went wrong. Please try again.';
-
-            if (errorData?.details && Array.isArray(errorData.details) && errorData.details.length > 0) {
-                errorMsg = errorData.details[0].message;
-            }
-
-            showAlert('error', 'Failed', errorMsg);
-            setIsUploading(false);
+            setIsLoading(false);
+            const errorMsg = err?.response?.data?.message || 'Something went wrong. Please check your inputs.';
+            showAlert('error', 'Error', errorMsg);
         } finally {
             setIsLoading(false);
+            setIsUploading(false);
         }
     };
 
@@ -355,32 +435,92 @@ export default function AddTransactionScreen({ navigation, route }) {
                             />
                         </View>
 
-                        {convertedPreview !== null && (
+                        {/* Main Transaction Conversion Preview */}
+                        {currency.code !== 'PHP' && convertedPreview !== null && (
                             <View style={styles.conversionInfo}>
                                 <Text style={[styles.conversionText, { color: COLORS.textMuted }]}>
                                     ≈ ₱{convertedPreview.toLocaleString(undefined, { minimumFractionDigits: 2 })}
                                 </Text>
                                 <View style={[styles.rateTag, { backgroundColor: COLORS.primary + '15' }]}>
-                                    <Text style={[styles.rateText, { color: COLORS.primary }]}>1 {currency.code} = ₱{exchangeRate.toFixed(4)}</Text>
+                                    <Text style={[styles.rateText, { color: COLORS.primary }]}>1 {currency.code} is = to ₱{exchangeRate.toFixed(2)}</Text>
+                                </View>
+                            </View>
+                        )}
+
+                        {/* Source Wallet Conversion Preview (If main is PHP but source isn't) */}
+                        {currency.code === 'PHP' && sourceWallet && (sourceWallet.currency !== 'PHP' || sourceWallet.type === 'Crypto') && (
+                            <View style={styles.conversionInfo}>
+                                <Text style={[styles.conversionText, { color: COLORS.textMuted }]}>
+                                    ≈ {sourceConvertedAmount?.toLocaleString(undefined, { maximumFractionDigits: 8 })} {sourceWallet.coinSymbol || sourceWallet.currency || 'USD'} deducted
+                                </Text>
+                                <View style={[styles.rateTag, { backgroundColor: COLORS.primary + '15' }]}>
+                                    <Text style={[styles.rateText, { color: COLORS.primary }]}>
+                                        1 {sourceWallet.coinSymbol || sourceWallet.currency || 'USD'} is = to ₱{sourceExchangeRate.toFixed(2)}
+                                    </Text>
+                                </View>
+                            </View>
+                        )}
+                        {/* Wallet Conversion Preview for Expense (When main is PHP but wallet isn't) */}
+                        {!isIncome && currency.code === 'PHP' && selectedWallet && (selectedWallet.currency !== 'PHP' || selectedWallet.type === 'Crypto') && (
+                            <View style={styles.conversionInfo}>
+                                <Text style={[styles.conversionText, { color: COLORS.textMuted }]}>
+                                    ≈ {destConvertedAmount?.toLocaleString(undefined, { maximumFractionDigits: 8 })} {selectedWallet.coinSymbol || selectedWallet.currency || 'USD'} deducted
+                                </Text>
+                                <View style={[styles.rateTag, { backgroundColor: COLORS.primary + '15' }]}>
+                                    <Text style={[styles.rateText, { color: COLORS.primary }]}>
+                                        1 {selectedWallet.coinSymbol || selectedWallet.currency || 'USD'} is = to ₱{destExchangeRate.toFixed(2)}
+                                    </Text>
                                 </View>
                             </View>
                         )}
                     </View>
+                    {/* Destination Info Badge (Always for Income) */}
+                    {isIncome && (
+                        <View style={[styles.prefillBadge, { backgroundColor: COLORS.primary + '15', borderColor: COLORS.primary + '40', marginBottom: 15 }]}>
+                            <MaterialCommunityIcons
+                                name={selectedWallet ? "wallet-plus" : "hand-coin-outline"}
+                                size={16}
+                                color={COLORS.primary}
+                            />
+                            <Text style={[styles.prefillText, { color: COLORS.primary }]}>
+                                Depositing to: <Text style={{ fontWeight: '800' }}>{selectedWallet ? selectedWallet.name : 'Main Wallet (HAND)'}</Text>
+                            </Text>
+                        </View>
+                    )}
 
-                    {/* Wallet Selector */}
-                    <View style={styles.section}>
-                        <Text style={[styles.sectionTitle, { color: COLORS.textMuted }]}>
-                            {isIncome ? 'RECEIVE TO WALLET' : 'PAY FROM WALLET'}
-                        </Text>
-                        <WalletSelector
-                            selectedWalletId={selectedWallet?._id}
-                            onSelect={(w) => setSelectedWallet(w)}
-                            COLORS={COLORS}
-                            amountPHP={convertedPreview !== null ? convertedPreview : parseFloat(amount) || 0}
-                            isExpense={!isIncome}
-                        />
-                    </View>
-                    
+                    {/* Source Wallet Selector (Only for Income) */}
+                    {isIncome && (
+                        <View style={styles.section}>
+                            <Text style={[styles.sectionTitle, { color: COLORS.textMuted }]}>
+                                SOURCE WALLET (DEDUCT FROM)
+                            </Text>
+                            <WalletSelector
+                                selectedWalletId={sourceWallet?._id}
+                                onSelect={(w) => setSourceWallet(sourceWallet?._id === w?._id ? null : w)}
+                                COLORS={COLORS}
+                                amountPHP={convertedPreview !== null ? convertedPreview : parseFloat(amount) || 0}
+                                isExpense={true} // It behaves as an expense for the source wallet
+                                excludeId={selectedWallet?._id}
+                            />
+                        </View>
+                    )}
+
+                    {/* Pay From Wallet Selector (Only for Expense) */}
+                    {!isIncome && (
+                        <View style={styles.section}>
+                            <Text style={[styles.sectionTitle, { color: COLORS.textMuted }]}>
+                                PAY FROM WALLET
+                            </Text>
+                            <WalletSelector
+                                selectedWalletId={selectedWallet?._id}
+                                onSelect={(w) => setSelectedWallet(w)}
+                                COLORS={COLORS}
+                                amountPHP={convertedPreview !== null ? convertedPreview : parseFloat(amount) || 0}
+                                isExpense={true}
+                            />
+                        </View>
+                    )}
+
                     {/* Category Picker */}
                     <View style={styles.section}>
                         <Text style={[styles.sectionTitle, { color: COLORS.textMuted }]}>CATEGORY</Text>

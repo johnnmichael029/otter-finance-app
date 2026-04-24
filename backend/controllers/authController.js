@@ -2,7 +2,10 @@ const User = require('../models/userModel');
 const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
 const { validationResult } = require('express-validator');
-const { send2FAOTP } = require('../utils/emailService');
+const { send2FAOTP, sendEmail } = require('../utils/emailService');
+const { OAuth2Client } = require('google-auth-library');
+
+const client = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 
 // ── Token helpers ──────────────────────────────────────────────────────────────
 const signAccessToken = (userId) =>
@@ -348,7 +351,94 @@ const revokeSession = async (req, res) => {
     }
 };
 
-module.exports = { register, login, refresh, logout, logoutAll, getSessions, revokeSession, verify2FA, resend2FA, toggle2FA, verifyPassword };
+// ─────────────────────────────────────────────────────────────────────────────
+//  POST /api/auth/google
+// ─────────────────────────────────────────────────────────────────────────────
+const googleLogin = async (req, res) => {
+    const { idToken } = req.body;
+    if (!idToken) return res.status(400).json({ error: 'Google ID Token is required.' });
+
+    try {
+        const ticket = await client.verifyIdToken({
+            idToken,
+            audience: process.env.GOOGLE_CLIENT_ID,
+        });
+        const payload = ticket.getPayload();
+        const { sub: googleId, email, name, picture } = payload;
+
+        let user = await User.findOne({ 
+            $or: [{ googleId }, { email: email.toLowerCase().trim() }] 
+        });
+
+        let isNewUser = false;
+
+        if (!user) {
+            // Create a new user (passwordless)
+            user = await User.create({
+                name,
+                email: email.toLowerCase().trim(),
+                googleId,
+                avatarUrl: picture,
+                isOnboarded: false
+            });
+            isNewUser = true;
+        } else {
+            // Link googleId if they had a local account
+            if (!user.googleId) {
+                user.googleId = googleId;
+                if (!user.avatarUrl) user.avatarUrl = picture;
+                await user.save();
+            }
+        }
+
+        // Reset lockout
+        user.loginAttempts = 0;
+        user.lockUntil = null;
+
+        // Session creation
+        const now = new Date();
+        user.sessions = (user.sessions || []).filter(s => s.expiresAt > now);
+        const refreshToken = signRefreshToken(user._id);
+        const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+        
+        user.sessions.push({
+            tokenHash: hashToken(refreshToken),
+            deviceInfo: req.headers['x-device-info'] || 'Unknown Device',
+            platform: req.headers['x-platform'] || 'mobile',
+            ipAddress: req.ip,
+            expiresAt,
+        });
+        await user.save();
+
+        const accessToken = signAccessToken(user._id);
+
+        res.json({
+            accessToken,
+            refreshToken,
+            isNewUser, // Screen redirection flag
+            user: {
+                _id: user._id,
+                name: user.name,
+                email: user.email,
+                currency: user.currency,
+                avatarUrl: user.avatarUrl,
+                pushToken: user.pushToken,
+                isOnboarded: user.isOnboarded,
+                occupation: user.occupation,
+            }
+        });
+    } catch (err) {
+        console.error('[AUTH] Google Auth Error:', err.message);
+        res.status(401).json({ error: 'Google authentication failed.' });
+    }
+};
+
+module.exports = { 
+    register, login, refresh, logout, logoutAll, 
+    getSessions, revokeSession, verify2FA, resend2FA, 
+    toggle2FA, verifyPassword, googleLogin,
+    forgotPassword, verifyResetCode, resetPassword
+};
 
 // ── 2FA Helpers ───────────────────────────────────────────────────────────────
 // Signed short-lived temp token used only for 2FA verification step
@@ -479,5 +569,127 @@ async function verifyPassword(req, res) {
     } catch (err) {
         console.error('[AUTH] Verify password error:', err.message);
         res.status(500).json({ error: 'Failed to verify password.' });
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  POST /api/auth/forgot-password
+// ─────────────────────────────────────────────────────────────────────────────
+async function forgotPassword(req, res) {
+    try {
+        const { email } = req.body;
+        if (!email) return res.status(400).json({ error: 'Email is required.' });
+
+        const user = await User.findOne({ email: email.toLowerCase() });
+        
+        // HELPFUL MODE: Inform the user if the account doesn't exist
+        if (!user) {
+            return res.status(404).json({ error: 'No account found with this email address.' });
+        }
+
+        // Generate 6-digit code
+        const resetCode = Math.floor(100000 + Math.random() * 900000).toString();
+        const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
+
+        user.passwordResetCode = resetCode;
+        user.passwordResetExpires = expiresAt;
+        await user.save();
+
+        // Send Email
+        const emailContent = `
+            <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e1e1e1; border-radius: 10px;">
+                <h2 style="color: #E91E8C; text-align: center;">Reset Your Password</h2>
+                <p>Hello <strong>${user.name || 'Otter User'}</strong>,</p>
+                <p>We received a request to reset your Otter Finance password. Use the verification code below to proceed:</p>
+                <div style="background-color: #fce7f3; padding: 20px; text-align: center; border-radius: 8px; margin: 20px 0;">
+                    <span style="font-size: 32px; font-weight: bold; letter-spacing: 5px; color: #B0146A;">${resetCode}</span>
+                </div>
+                <p style="color: #6b7280; font-size: 13px;">This code is valid for <strong>10 minutes</strong>. If you did not request this, please ignore this email.</p>
+                <hr style="border: 0; border-top: 1px solid #eeeeee; margin: 20px 0;">
+                <p style="text-align: center; color: #9ca3af; font-size: 12px;">Otter Finance App &bull; Securely Managing Your Raft</p>
+            </div>
+        `;
+
+        await sendEmail({
+            to: user.email,
+            subject: `[Otter] Password Reset Code: ${resetCode}`,
+            html: emailContent,
+        });
+
+        res.json({ message: 'If an account exists, a verification code was sent.' });
+    } catch (error) {
+        console.error('[Forgot Password Error]:', error);
+        res.status(500).json({ error: 'Failed to send reset code.' });
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  POST /api/auth/verify-reset-code
+// ─────────────────────────────────────────────────────────────────────────────
+async function verifyResetCode(req, res) {
+    try {
+        const { email, code } = req.body;
+        if (!email || !code) return res.status(400).json({ error: 'Email and code are required.' });
+
+        const user = await User.findOne({ 
+            email: email.toLowerCase(),
+            passwordResetCode: code,
+            passwordResetExpires: { $gt: Date.now() }
+        });
+
+        if (!user) {
+            return res.status(400).json({ error: 'Invalid or expired code.' });
+        }
+
+        // Generate a temporary reset JWT (valid for 10 mins)
+        const resetToken = jwt.sign(
+            { id: user._id, type: 'password_reset' },
+            process.env.JWT_SECRET,
+            { expiresIn: '10m' }
+        );
+
+        // Clear code to prevent reuse
+        user.passwordResetCode = null;
+        user.passwordResetExpires = null;
+        await user.save();
+
+        res.json({ resetToken });
+    } catch (error) {
+        console.error('[Verify Reset Code Error]:', error);
+        res.status(500).json({ error: 'Verification failed.' });
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  POST /api/auth/reset-password
+// ─────────────────────────────────────────────────────────────────────────────
+async function resetPassword(req, res) {
+    try {
+        const { resetToken, newPassword } = req.body;
+        if (!resetToken || !newPassword) return res.status(400).json({ error: 'Missing information.' });
+
+        // Verify token
+        const decoded = jwt.verify(resetToken, process.env.JWT_SECRET);
+        if (decoded.type !== 'password_reset') {
+            return res.status(400).json({ error: 'Invalid token type.' });
+        }
+
+        const user = await User.findById(decoded.id);
+        if (!user) return res.status(404).json({ error: 'User no longer exists.' });
+
+        // Update password (hashing is handled by userModel's pre-save middleware)
+        user.password = newPassword;
+        
+        // Revoke all existing sessions for security
+        user.sessions = [];
+        await user.save();
+
+        res.json({ message: 'Password updated successfully.' });
+    } catch (error) {
+        if (error.name === 'TokenExpiredError') {
+            return res.status(401).json({ error: 'Reset session expired. Please start over.' });
+        }
+        console.error('[Reset Password Error]:', error);
+        res.status(500).json({ error: 'Failed to reset password.' });
     }
 }

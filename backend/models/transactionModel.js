@@ -108,6 +108,12 @@ const transactionSchema = new mongoose.Schema({
         default: null,
         index: true,
     },
+    sourceWallet: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Wallet',
+        default: null,
+        index: true,
+    },
     // The actual amount deducted from the wallet in its native unit (e.g. BTC, Shares, USD)
     walletAmount: {
         type: Number,
@@ -116,6 +122,19 @@ const transactionSchema = new mongoose.Schema({
     walletCurrency: {
         type: String,
         default: null,
+    },
+    sourceWalletAmount: {
+        type: Number,
+        default: null,
+    },
+    sourceWalletCurrency: {
+        type: String,
+        default: null,
+    },
+    isArchived: {
+        type: Boolean,
+        default: false,
+        index: true,
     },
 }, { timestamps: true });
 

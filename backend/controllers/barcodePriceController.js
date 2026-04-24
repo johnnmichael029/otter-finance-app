@@ -28,7 +28,7 @@ exports.upsertBarcode = async (req, res) => {
                 $set: { name, brand: brand || '', price },
                 $inc: { count: 1 },
             },
-            { upsert: true, new: true, setDefaultsOnInsert: true }
+            { upsert: true, returnDocument: 'after', runValidators: true, setDefaultsOnInsert: true }
         );
 
         res.status(200).json(entry);

@@ -14,13 +14,13 @@ exports.getWallets = async (req, res) => {
 exports.createWallet = async (req, res) => {
     try {
         const {
-            name, type, templateId, balance, color,
+            name, type, templateId, balance, color, currency,
             coinId, coinSymbol, coinName, coinImageUrl,
             stockTicker, stockSymbol, stockName, stockExchange
         } = req.body;
         const wallet = await Wallet.create({
             userId: req.userId,
-            name, type, templateId, balance, color,
+            name, type, templateId, balance, color, currency: currency || 'PHP',
             coinId, coinSymbol, coinName, coinImageUrl,
             stockTicker, stockSymbol, stockName, stockExchange
         });

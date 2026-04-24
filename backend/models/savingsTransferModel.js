@@ -7,6 +7,9 @@ const savingsTransferSchema = new mongoose.Schema({
     amount: { type: Number, required: true, min: 0 },
     goal: { type: mongoose.Schema.Types.ObjectId, ref: 'SavingsGoal', required: true },
     goalName: { type: String },
+    wallet: { type: mongoose.Schema.Types.ObjectId, ref: 'Wallet' },
+    walletAmount: { type: Number },
+    walletCurrency: { type: String },
     note: { type: String, default: '' },
     runningBalance: { type: Number }, // Snapshot of goal balance after transfer
 }, { timestamps: true });
