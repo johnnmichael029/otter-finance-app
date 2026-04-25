@@ -12,6 +12,7 @@ import AnimatedFAB from './src/components/AnimatedFAB';
 import * as Sentry from '@sentry/react-native';
 import ErrorBoundary from './src/components/ErrorBoundary';
 import SocketManager from './src/components/SocketManager';
+import NotificationManager from './src/components/NotificationManager';
 // Initialize Sentry
 Sentry.init({
     dsn: 'https://1bf9c89d4d85c2cbbe9f46a366662602@o4511268540776448.ingest.us.sentry.io/4511268551393280',
@@ -300,6 +301,7 @@ function App() {
                             <GlobalStatusBar />
                             <AppNavigator />
                             <SocketManager />
+                            <NotificationManager />
                             <AppLockOverlay />
                             <Toast />
                         </ErrorBoundary>

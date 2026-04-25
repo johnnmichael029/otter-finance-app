@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { View, Text, StyleSheet, TextInput, TouchableOpacity, FlatList, KeyboardAvoidingView, Platform, ActivityIndicator, SafeAreaView, Image } from 'react-native';
+import { View, Text, StyleSheet, TextInput, TouchableOpacity, FlatList, KeyboardAvoidingView, Platform, ActivityIndicator, SafeAreaView, Image, Animated } from 'react-native';
 import { Feather, Ionicons } from '@expo/vector-icons';
 import { useTheme } from '../../context/ThemeContext';
 import { useAuth } from '../../context/AuthContext';
@@ -71,6 +71,51 @@ const MessageItem = React.memo(({ item, isMine, showDateSeparator, COLORS }) => 
         </View>
     );
 });
+
+const TypingIndicator = ({ color }) => {
+    const dot1 = useRef(new Animated.Value(0)).current;
+    const dot2 = useRef(new Animated.Value(0)).current;
+    const dot3 = useRef(new Animated.Value(0)).current;
+
+    useEffect(() => {
+        const animateDot = (dot, delay) => {
+            Animated.loop(
+                Animated.sequence([
+                    Animated.delay(delay),
+                    Animated.timing(dot, { toValue: 1, duration: 300, useNativeDriver: true }),
+                    Animated.timing(dot, { toValue: 0, duration: 300, useNativeDriver: true }),
+                    Animated.delay(300)
+                ])
+            ).start();
+        };
+
+        animateDot(dot1, 0);
+        animateDot(dot2, 150);
+        animateDot(dot3, 300);
+    }, []);
+
+    const dotStyle = (dot) => ({
+        width: 6,
+        height: 6,
+        borderRadius: 3,
+        backgroundColor: color,
+        marginHorizontal: 3,
+        transform: [{
+            translateY: dot.interpolate({
+                inputRange: [0, 1],
+                outputRange: [0, -5]
+            })
+        }]
+    });
+
+    return (
+        <View style={{ flexDirection: 'row', alignItems: 'center', height: 20, paddingHorizontal: 4 }}>
+            <Animated.View style={dotStyle(dot1)} />
+            <Animated.View style={dotStyle(dot2)} />
+            <Animated.View style={dotStyle(dot3)} />
+        </View>
+    );
+};
 
 export default function ChatScreen({ route, navigation }) {
     const { friend } = route.params; // Expects { _id, name, otterTag }
@@ -146,6 +191,11 @@ export default function ChatScreen({ route, navigation }) {
             const onStopTyping = ({ senderId }) => {
                 if (senderId === friend._id) setIsTyping(false);
             };
+            const onMessagesRead = ({ readerId }) => {
+                if (readerId === friend._id) {
+                    setMessages(prev => prev.map(m => m.receiver === friend._id ? { ...m, read: true } : m));
+                }
+            };
 
             socket.on('receive_message', handleReceive);
             socket.on('message_sent_ack', handleReceive);
@@ -153,6 +203,7 @@ export default function ChatScreen({ route, navigation }) {
             socket.on('user_offline', onUserOffline);
             socket.on('typing', onTyping);
             socket.on('stop_typing', onStopTyping);
+            socket.on('messages_read', onMessagesRead);
 
             return () => {
                 socket.off('receive_message', handleReceive);
@@ -161,6 +212,7 @@ export default function ChatScreen({ route, navigation }) {
                 socket.off('user_offline', onUserOffline);
                 socket.off('typing', onTyping);
                 socket.off('stop_typing', onStopTyping);
+                socket.off('messages_read', onMessagesRead);
             };
         }
     }, [loadHistory, friend._id, userInfo?._id]);
@@ -275,7 +327,7 @@ export default function ChatScreen({ route, navigation }) {
                             ListHeaderComponent={isTyping ? (
                                 <View style={[styles.msgWrapper, styles.msgLeft]}>
                                     <View style={[styles.msgBubble, styles.theirBubble, { backgroundColor: COLORS.surface, paddingHorizontal: 16, paddingVertical: 10 }]}>
-                                        <ActivityIndicator size="small" color={COLORS.textMuted} />
+                                        <TypingIndicator color={COLORS.textMuted} />
                                     </View>
                                 </View>
                             ) : null}

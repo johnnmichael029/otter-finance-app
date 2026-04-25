@@ -57,7 +57,7 @@ export default function ShoppingHomeScreen({ navigation }) {
     const handleDelete = (id) => {
         deleteShoppingSession(id).then(() => {
             loadSessions();
-        }).catch(() => {});
+        }).catch(() => { });
     };
 
     const renderRightActions = (progress, dragX, item) => {
@@ -152,8 +152,8 @@ export default function ShoppingHomeScreen({ navigation }) {
         <SafeAreaView style={[styles.safe, { backgroundColor: COLORS.background }]}>
             {/* Header */}
             <View style={styles.header}>
-                <TouchableOpacity 
-                    onPress={() => navigation.canGoBack() ? navigation.goBack() : navigation.navigate('HomeRoot')} 
+                <TouchableOpacity
+                    onPress={() => navigation.canGoBack() ? navigation.goBack() : navigation.navigate('HomeRoot')}
                     style={[styles.backBtn, { backgroundColor: COLORS.surface }]}
                 >
                     <Feather name="arrow-left" size={20} color={COLORS.text} />
@@ -250,7 +250,7 @@ export default function ShoppingHomeScreen({ navigation }) {
 const getStyles = (COLORS) => StyleSheet.create({
     safe: { flex: 1 },
     header: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, padding: spacing.lg, paddingBottom: spacing.md },
-    headerTitle: { fontSize: 26, fontWeight: '900' },
+    headerTitle: { fontSize: 15, fontWeight: '800' },
     headerSub: { fontSize: 13, fontWeight: '600', marginTop: 2 },
     headerActions: { flexDirection: 'row', alignItems: 'center', gap: 10, marginLeft: 'auto' },
     templateBtn: { width: 44, height: 44, borderRadius: 12, justifyContent: 'center', alignItems: 'center', borderWidth: 1 },

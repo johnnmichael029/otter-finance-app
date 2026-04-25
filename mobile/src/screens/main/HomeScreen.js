@@ -315,7 +315,7 @@ export default function HomeScreen({ navigation }) {
         const handleNewTransaction = (tx) => {
             // Defensive check: only add if it belongs to me
             if (tx.user && tx.user.toString() !== userInfo._id.toString()) return;
-            
+
             setRecent(prev => {
                 const merged = [tx, ...prev];
                 const seen = new Set();
@@ -390,7 +390,7 @@ export default function HomeScreen({ navigation }) {
         socket.on('all_notifications_read', () => {
             setUnreadNotifCount(0);
         });
-        
+
         socket.on('new_friend_request', () => {
             setPendingRequestsCount(prev => prev + 1);
         });
@@ -534,15 +534,15 @@ export default function HomeScreen({ navigation }) {
             >
                 {/* Header */}
                 <View style={styles.header}>
-                    <TouchableOpacity 
+                    <TouchableOpacity
                         onPress={() => navigation.navigate('ProfileScreen')}
                         style={styles.headerProfileWrap}
                     >
                         <View style={[styles.headerAvatar, { backgroundColor: COLORS.primary + '20' }]}>
                             {userInfo?.avatarUrl ? (
-                                <Image 
-                                    source={{ uri: userInfo.avatarUrl.startsWith('http') ? userInfo.avatarUrl : `${API_BASE.replace('/api', '')}/${userInfo.avatarUrl}` }} 
-                                    style={styles.headerAvatarImg} 
+                                <Image
+                                    source={{ uri: userInfo.avatarUrl.startsWith('http') ? userInfo.avatarUrl : `${API_BASE.replace('/api', '')}/${userInfo.avatarUrl}` }}
+                                    style={styles.headerAvatarImg}
                                 />
                             ) : (
                                 <Text style={[styles.headerAvatarText, { color: COLORS.primary }]}>
@@ -553,7 +553,7 @@ export default function HomeScreen({ navigation }) {
                         <View>
                             <Text style={[styles.greeting, { color: COLORS.textMuted, textTransform: 'uppercase', letterSpacing: 0.5, fontSize: 10, marginBottom: 1 }]}>{currentDate}</Text>
                             <Text style={[styles.userName, { color: COLORS.text }]} numberOfLines={1}>
-                                Good day, <Text style={{ fontWeight: 'bold', color: COLORS.primary }}>{userInfo?.name?.split(' ')[0] || 'User'} 👋</Text>
+                                Hi, <Text style={{ fontWeight: 'bold', color: COLORS.primary }}>{userInfo?.name?.split(' ')[0] || 'User'}</Text>
                             </Text>
                         </View>
                     </TouchableOpacity>
@@ -836,7 +836,7 @@ export default function HomeScreen({ navigation }) {
                 onClose={() => setRevertModalVisible(false)}
                 onConfirm={handleRevertConfirm}
                 title="Revert Transaction"
-                message={revertingTx?.relatedType === 'Debt' 
+                message={revertingTx?.relatedType === 'Debt'
                     ? "You can revert back this Debt transaction. This will undo the payment and restore the remaining balance of the debt."
                     : `Are you sure you want to undo this ${revertingTx?.type || 'transaction'}? This will restore your wallet balances and permanently delete the record.`
                 }
@@ -899,9 +899,9 @@ export default function HomeScreen({ navigation }) {
                                                     </Text>
                                                     <View style={[styles.walletBadge, { backgroundColor: ((selectedTx.type === 'income' ? selectedTx.sourceWallet?.color : (selectedTx.sourceRelatedType === 'SavingsGoal' ? selectedTx.sourceRelatedId?.color : selectedTx.wallet?.color)) || COLORS.primary) + '20' }]}>
                                                         <Text style={[styles.walletBadgeText, { color: (selectedTx.type === 'income' ? selectedTx.sourceWallet?.color : (selectedTx.sourceRelatedType === 'SavingsGoal' ? selectedTx.sourceRelatedId?.color : selectedTx.wallet?.color)) || COLORS.primary }]}>
-                                                            {selectedTx.type === 'income' 
+                                                            {selectedTx.type === 'income'
                                                                 ? (selectedTx.sourceWallet ? selectedTx.sourceWallet.name : (selectedTx.paymentSource || 'External Source'))
-                                                                : (selectedTx.sourceRelatedType === 'SavingsGoal' 
+                                                                : (selectedTx.sourceRelatedType === 'SavingsGoal'
                                                                     ? 'Internal Transfer'
                                                                     : (selectedTx.relatedType === 'SavingsGoal'
                                                                         ? 'Savings Balance'
@@ -927,7 +927,7 @@ export default function HomeScreen({ navigation }) {
                                                     <View style={[styles.modalDetailRow, { borderBottomWidth: 0 }]}>
                                                         <Text style={[styles.modalDetailLabel, { color: COLORS.textMuted }]}>Native Cost</Text>
                                                         <Text style={[styles.modalDetailValue, { color: COLORS.text, fontWeight: '700' }]}>
-                                                            {selectedTx.type === 'income' 
+                                                            {selectedTx.type === 'income'
                                                                 ? `${selectedTx.sourceWalletAmount?.toLocaleString(undefined, { maximumFractionDigits: 8 })} ${selectedTx.sourceWalletCurrency}`
                                                                 : `${selectedTx.walletAmount?.toLocaleString(undefined, { maximumFractionDigits: 8 })} ${selectedTx.walletCurrency}`
                                                             }
@@ -1035,9 +1035,9 @@ const styles = StyleSheet.create({
         paddingHorizontal: 24, paddingTop: 12, paddingBottom: 16,
     },
     headerProfileWrap: { flexDirection: 'row', alignItems: 'center', flex: 1, marginRight: 12 },
-    headerAvatar: { 
-        width: 40, height: 40, borderRadius: 12, marginRight: 12, 
-        justifyContent: 'center', alignItems: 'center', overflow: 'hidden' 
+    headerAvatar: {
+        width: 40, height: 40, borderRadius: 12, marginRight: 12,
+        justifyContent: 'center', alignItems: 'center', overflow: 'hidden'
     },
     headerAvatarImg: { width: '100%', height: '100%' },
     headerAvatarText: { fontSize: 16, fontWeight: '900' },

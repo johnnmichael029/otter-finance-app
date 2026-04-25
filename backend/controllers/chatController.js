@@ -1,5 +1,6 @@
 const Message = require('../models/messageModel');
 const User = require('../models/userModel');
+const axios = require('axios');
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  GET /api/chat/:friendId
@@ -24,10 +25,10 @@ const getConversation = async (req, res) => {
                 { sender: friendId, receiver: req.userId }
             ]
         })
-        .sort({ createdAt: -1 }) // Sort newest first for pagination
-        .skip(skip)
-        .limit(parseInt(limit))
-        .lean();
+            .sort({ createdAt: -1 }) // Sort newest first for pagination
+            .skip(skip)
+            .limit(parseInt(limit))
+            .lean();
 
         // Optional: Mark received messages as read
         const unreadIds = messages
@@ -65,7 +66,8 @@ const sendMessage = async (req, res) => {
         }
 
         // Must be friends (ObjectId comparison requires .toString())
-        const sender = await User.findById(req.userId).select('friends');
+        // Get names for notification
+        const sender = await User.findById(req.userId).select('friends name');
         if (!sender.friends.some(id => id.toString() === friendId)) {
             return res.status(403).json({ error: 'You can only message your friends.' });
         }
@@ -82,6 +84,35 @@ const sendMessage = async (req, res) => {
             io.to(`user:${friendId}`).emit('receive_message', message);
             // Also emit back to the sender just in case they have multiple devices open
             io.to(`user:${req.userId}`).emit('message_sent_ack', message);
+        }
+
+        // Send Push Notification ONLY if user is not currently online in the app
+        const receiver = await User.findById(friendId).select('pushToken');
+        
+        // Check if receiver has any active socket connections
+        const activeSockets = io ? await io.in(`user:${friendId}`).fetchSockets() : [];
+        const isUserOnline = activeSockets.length > 0;
+
+        if (!isUserOnline && receiver && receiver.pushToken) {
+            try {
+                await axios.post('https://exp.host/--/api/v2/push/send', {
+                    to: receiver.pushToken,
+                    title: sender.name || 'New Message',
+                    body: content.trim(),
+                    data: { 
+                        type: 'message', 
+                        senderId: req.userId,
+                        senderName: sender.name,
+                        messageId: message._id
+                    },
+                    categoryIdentifier: 'message-reply',
+                    sound: 'default',
+                    priority: 'high',
+                    channelId: 'default'
+                });
+            } catch (pushErr) {
+                console.error('[CHAT] Push error:', pushErr.response?.data || pushErr.message);
+            }
         }
 
         res.status(201).json(message);
@@ -103,6 +134,11 @@ const markAsRead = async (req, res) => {
             { sender: friendId, receiver: req.userId, read: false },
             { $set: { read: true } }
         );
+
+        const io = req.app.get('io');
+        if (io) {
+            io.to(`user:${friendId}`).emit('messages_read', { readerId: req.userId });
+        }
 
         res.json({ message: 'Messages marked as read.' });
     } catch (err) {

@@ -82,7 +82,7 @@ export default function FriendsScreen({ navigation }) {
     // Debounced Search Effect
     useEffect(() => {
         if (activeTab !== 'Find') return;
-        
+
         if (searchQuery.length < 3) {
             setSearchResults([]);
             return;
@@ -216,7 +216,7 @@ export default function FriendsScreen({ navigation }) {
                     contentContainerStyle={styles.listContainer}
                     ListEmptyComponent={<Text style={{ color: COLORS.textMuted, textAlign: 'center', marginTop: 20 }}>No friends yet.</Text>}
                     renderItem={({ item }) => (
-                        <TouchableOpacity 
+                        <TouchableOpacity
                             style={[styles.userCard, { backgroundColor: COLORS.surface }]}
                             activeOpacity={0.7}
                             onPress={() => navigation.navigate('ChatScreen', { friend: item })}
@@ -224,19 +224,19 @@ export default function FriendsScreen({ navigation }) {
                             <View style={styles.avatarContainer}>
                                 <View style={[styles.avatarPlaceholder, { backgroundColor: COLORS.border, overflow: 'hidden' }]}>
                                     {item.avatarUrl ? (
-                                        <Image 
-                                            source={{ uri: item.avatarUrl.startsWith('http') ? item.avatarUrl : `${API_BASE.replace('/api', '')}/${item.avatarUrl}` }} 
-                                            style={styles.avatarImg} 
+                                        <Image
+                                            source={{ uri: item.avatarUrl.startsWith('http') ? item.avatarUrl : `${API_BASE.replace('/api', '')}/${item.avatarUrl}` }}
+                                            style={styles.avatarImg}
                                         />
                                     ) : (
                                         <Text style={{ color: COLORS.text, fontWeight: 'bold' }}>{item.name.charAt(0)}</Text>
                                     )}
                                 </View>
                                 <View style={[
-                                    styles.statusDot, 
-                                    { 
+                                    styles.statusDot,
+                                    {
                                         backgroundColor: item.isOnline ? '#22c55e' : '#94a3b8',
-                                        borderColor: COLORS.surface 
+                                        borderColor: COLORS.surface
                                     }
                                 ]} />
                             </View>
@@ -268,9 +268,9 @@ export default function FriendsScreen({ navigation }) {
                         <View style={[styles.userCard, { backgroundColor: COLORS.surface }]}>
                             <View style={[styles.avatarPlaceholder, { backgroundColor: COLORS.border, overflow: 'hidden' }]}>
                                 {item.sender.avatarUrl ? (
-                                    <Image 
-                                        source={{ uri: item.sender.avatarUrl.startsWith('http') ? item.sender.avatarUrl : `${API_BASE.replace('/api', '')}/${item.sender.avatarUrl}` }} 
-                                        style={styles.avatarImg} 
+                                    <Image
+                                        source={{ uri: item.sender.avatarUrl.startsWith('http') ? item.sender.avatarUrl : `${API_BASE.replace('/api', '')}/${item.sender.avatarUrl}` }}
+                                        style={styles.avatarImg}
                                     />
                                 ) : (
                                     <Text style={{ color: COLORS.text, fontWeight: 'bold' }}>{item.sender.name.charAt(0)}</Text>
@@ -323,11 +323,11 @@ export default function FriendsScreen({ navigation }) {
                         }}
                         renderItem={({ item }) => (
                             <View style={[styles.userCard, { backgroundColor: COLORS.surface }]}>
-                                <View style={[styles.avatarPlaceholder, { backgroundColor: COLORS.border, overflow: 'hidden' }]}>
+                                <View style={[styles.avatarPlaceholder, { backgroundColor: COLORS.border, overflow: 'hidden', marginRight: spacing.sm }]}>
                                     {item.avatarUrl ? (
-                                        <Image 
-                                            source={{ uri: item.avatarUrl.startsWith('http') ? item.avatarUrl : `${API_BASE.replace('/api', '')}/${item.avatarUrl}` }} 
-                                            style={styles.avatarImg} 
+                                        <Image
+                                            source={{ uri: item.avatarUrl.startsWith('http') ? item.avatarUrl : `${API_BASE.replace('/api', '')}/${item.avatarUrl}` }}
+                                            style={styles.avatarImg}
                                         />
                                     ) : (
                                         <Text style={{ color: COLORS.text, fontWeight: 'bold' }}>{item.name.charAt(0)}</Text>

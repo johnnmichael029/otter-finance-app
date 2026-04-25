@@ -21,8 +21,8 @@ WebBrowser.maybeCompleteAuthSession();
 const otterIcon = require('../../../assets/icon/otter.png');
 
 // We dynamically determine the URI so it works for Expo Go AND standalone builds
+// We dynamically determine the URI so it works for Expo Go AND standalone builds
 const REDIRECT_URI = AuthSession.makeRedirectUri({
-    useProxy: true,
     scheme: 'otter'
 });
 
@@ -66,8 +66,6 @@ export default function LoginScreen({ navigation }) {
         clientId: '368902982049-1d7rsbq19pip9hmd3imrv6j5e3pcj3dt.apps.googleusercontent.com',
         redirectUri: REDIRECT_URI,
         responseType: 'id_token',
-    }, {
-        useProxy: true
     });
 
     useEffect(() => {
@@ -142,6 +140,10 @@ export default function LoginScreen({ navigation }) {
                 maskedEmail: result.maskedEmail
             });
         }
+    };
+
+    const handleGoogleLogin = () => {
+        promptAsync();
     };
 
     return (
@@ -248,11 +250,7 @@ export default function LoginScreen({ navigation }) {
                             <View style={styles.socialRow}>
                                 <TouchableOpacity
                                     style={[styles.socialBtn, { backgroundColor: COLORS.surface, borderColor: COLORS.border }]}
-                                    onPress={() => {
-                                        if (request) {
-                                            promptAsync({ useProxy: true });
-                                        }
-                                    }}
+                                    onPress={handleGoogleLogin}
                                     disabled={!request || isLoading}
                                     activeOpacity={0.7}
                                 >
