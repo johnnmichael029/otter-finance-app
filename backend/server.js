@@ -10,6 +10,7 @@ const { Server } = require('socket.io');
 const path = require('path');
 const fs = require('fs');
 const uploadRoutes = require('./routes/uploadRoutes');
+const User = require('./models/userModel');
 
 const app = express();
 const server = createServer(app);
