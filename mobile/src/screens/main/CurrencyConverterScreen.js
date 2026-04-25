@@ -17,7 +17,7 @@ const fmt = (n, decimals = 2) =>
     Number(n).toLocaleString('en-US', { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
 
 export default function CurrencyConverterScreen({ navigation }) {
-    const { COLORS } = useTheme();
+    const COLORS = useTheme(state => state.COLORS);
     const { userInfo } = useAuth();
     const styles = getStyles(COLORS);
 

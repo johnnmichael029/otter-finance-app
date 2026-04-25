@@ -1,30 +1,40 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import {
     View, Text, StyleSheet, FlatList, TouchableOpacity,
-    ActivityIndicator, RefreshControl, Platform, Alert, Animated as RNAnimated
+    ActivityIndicator, RefreshControl, Platform, Alert, Image, Animated as RNAnimated
 } from 'react-native';
 import Animated, { ZoomIn, ZoomOut } from 'react-native-reanimated';
 import { Swipeable } from 'react-native-gesture-handler';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Feather, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useTheme } from '../../context/ThemeContext';
-import { getNotifications, markNotificationRead, markAllNotificationsRead, deleteNotification } from '../../api/api';
+import { useAuth, API_BASE } from '../../context/AuthContext';
+import { getNotifications, markNotificationRead, markAllNotificationsRead, deleteNotification, respondFriendRequest, respondDebtRequest } from '../../api/api';
+import { connectSocket, disconnectSocket, getSocket } from '../../utils/socket';
 import { spacing, radius, typography, shadow } from '../../theme/colors';
+import CustomAlertModal from '../../components/CustomAlertModal';
 
 const NOTIF_ICONS = {
     budget_alert: { name: 'pie-chart', color: '#f59e0b', bg: '#fef3c7' },
     savings_goal: { name: 'target', color: '#8b5cf6', bg: '#ede9fe' },
     debt_reminder: { name: 'clock', color: '#06b6d4', bg: '#ecfeff' },
     system: { name: 'info', color: '#3b82f6', bg: '#eff6ff' },
-    transaction: { name: 'shopping-bag', color: '#e91e8c', bg: '#fdf2f8' }
+    transaction: { name: 'shopping-bag', color: '#e91e8c', bg: '#fdf2f8' },
+    friend_request: { name: 'user-plus', color: '#22c55e', bg: '#f0fdf4' },
+    friend_accepted: { name: 'check-circle', color: '#8b5cf6', bg: '#ede9fe' },
+    debt_request: { name: 'dollar-sign', color: '#f59e0b', bg: '#fff7ed' },
+    debt_accepted: { name: 'check-circle', color: '#22c55e', bg: '#f0fdf4' },
+    debt_payment: { name: 'check-circle', color: '#8b5cf6', bg: '#ede9fe' }
 };
 
 export default function NotificationsScreen({ navigation }) {
-    const { COLORS } = useTheme();
+    const COLORS = useTheme(state => state.COLORS);
+    const { userInfo } = useAuth();
     const [notifications, setNotifications] = useState([]);
     const [unreadCount, setUnreadCount] = useState(0);
     const [loading, setLoading] = useState(true);
     const [refreshing, setRefreshing] = useState(false);
+    const [alertConfig, setAlertConfig] = useState({ visible: false, title: '', message: '', type: 'info' });
 
     const loadData = useCallback(async () => {
         try {
@@ -41,7 +51,29 @@ export default function NotificationsScreen({ navigation }) {
 
     useEffect(() => {
         loadData();
-    }, [loadData]);
+
+        if (userInfo?._id) {
+            connectSocket(userInfo._id);
+        }
+
+        const socket = getSocket();
+        if (socket) {
+            socket.on('new_notification', (notif) => {
+                setNotifications(prev => [notif, ...prev]);
+                setUnreadCount(prev => prev + 1);
+            });
+            socket.on('notification_deleted', ({ debtId }) => {
+                setNotifications(prev => prev.filter(n => n.data?.debtId !== debtId));
+            });
+        }
+
+        return () => {
+            if (socket) {
+                socket.off('new_notification');
+                socket.off('notification_deleted');
+            }
+        };
+    }, [loadData, userInfo?._id]);
 
     const handleMarkAsRead = async (id) => {
         try {
@@ -71,6 +103,36 @@ export default function NotificationsScreen({ navigation }) {
             if (wasUnread) setUnreadCount(prev => Math.max(0, prev - 1));
         } catch (error) {
             console.error('[Notifications] Delete error:', error);
+        }
+    };
+
+    const handleRespondFriendRequest = async (notifId, requestId, status) => {
+        try {
+            await respondFriendRequest(requestId, status);
+            // Delete the notification or mark it as read after responding?
+            // Usually, once responded, the notification is "done"
+            handleDelete(notifId);
+            setAlertConfig({ visible: true, title: 'Success', message: `Friend request ${status}!`, type: 'success' });
+        } catch (error) {
+            console.error('[Notifications] Respond error:', error);
+            const msg = error.response?.data?.error || 'Failed to respond to request.';
+            setAlertConfig({ visible: true, title: 'Error', message: msg, type: 'error' });
+        }
+    };
+
+    const handleRespondDebtRequest = async (notifId, debtId, status) => {
+        try {
+            await respondDebtRequest(debtId, status === 'accepted' ? 'linked' : 'rejected');
+            handleDelete(notifId);
+            setAlertConfig({ visible: true, title: 'Success', message: `Debt request ${status}!`, type: 'success' });
+        } catch (error) {
+            console.error('[Notifications] Debt Respond error:', error);
+            const msg = error.response?.data?.error || 'Failed to respond to debt request.';
+            setAlertConfig({ visible: true, title: 'Error', message: msg, type: 'error' });
+            // If it's already processed, clean up the notification so it goes away
+            if (error.response?.status === 404) {
+                handleDelete(notifId);
+            }
         }
     };
 
@@ -111,7 +173,7 @@ export default function NotificationsScreen({ navigation }) {
                         activeOpacity={0.7}
                         onPress={() => !item.isRead && handleMarkAsRead(item._id)}
                     >
-                        <View style={[styles.iconContainer, { backgroundColor: config.bg }]}>
+                        <View style={[styles.iconContainer, { backgroundColor: config.bg, overflow: 'hidden' }]}>
                             <Feather name={config.name} size={20} color={config.color} />
                         </View>
 
@@ -126,8 +188,46 @@ export default function NotificationsScreen({ navigation }) {
                                 {item.message}
                             </Text>
                             <Text style={[styles.date, { color: COLORS.textMuted }]}>
-                                {new Date(item.createdAt).toLocaleDateString()} • {new Date(item.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                {new Date(item.createdAt).toLocaleDateString('en-GB')} • {new Date(item.createdAt).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true })}
                             </Text>
+
+                            {item.type === 'friend_request' && item.data?.requestId && (
+                                <View style={styles.actionRow}>
+                                    <TouchableOpacity 
+                                        style={[styles.actionBtn, { backgroundColor: '#22c55e' }]} 
+                                        onPress={() => handleRespondFriendRequest(item._id, item.data.requestId, 'accepted')}
+                                    >
+                                        <Feather name="check" size={14} color="#fff" />
+                                        <Text style={styles.actionBtnText}>Accept</Text>
+                                    </TouchableOpacity>
+                                    <TouchableOpacity 
+                                        style={[styles.actionBtn, { backgroundColor: COLORS.border }]} 
+                                        onPress={() => handleRespondFriendRequest(item._id, item.data.requestId, 'rejected')}
+                                    >
+                                        <Feather name="x" size={14} color={COLORS.text} />
+                                        <Text style={[styles.actionBtnText, { color: COLORS.text }]}>Decline</Text>
+                                    </TouchableOpacity>
+                                </View>
+                            )}
+
+                            {item.type === 'debt_request' && item.data?.debtId && (
+                                <View style={styles.actionRow}>
+                                    <TouchableOpacity 
+                                        style={[styles.actionBtn, { backgroundColor: COLORS.primary }]} 
+                                        onPress={() => handleRespondDebtRequest(item._id, item.data.debtId, 'accepted')}
+                                    >
+                                        <Feather name="check" size={14} color="#fff" />
+                                        <Text style={styles.actionBtnText}>Confirm</Text>
+                                    </TouchableOpacity>
+                                    <TouchableOpacity 
+                                        style={[styles.actionBtn, { backgroundColor: COLORS.border }]} 
+                                        onPress={() => handleRespondDebtRequest(item._id, item.data.debtId, 'rejected')}
+                                    >
+                                        <Feather name="x" size={14} color={COLORS.text} />
+                                        <Text style={[styles.actionBtnText, { color: COLORS.text }]}>Reject</Text>
+                                    </TouchableOpacity>
+                                </View>
+                            )}
                         </View>
                     </TouchableOpacity>
                 </Swipeable>
@@ -170,6 +270,14 @@ export default function NotificationsScreen({ navigation }) {
                     }
                 />
             )}
+
+            <CustomAlertModal
+                visible={alertConfig.visible}
+                title={alertConfig.title}
+                message={alertConfig.message}
+                type={alertConfig.type}
+                onClose={() => setAlertConfig(p => ({ ...p, visible: false }))}
+            />
         </SafeAreaView>
     );
 }
@@ -213,4 +321,7 @@ const styles = StyleSheet.create({
     message: { fontSize: 13, lineHeight: 18, marginBottom: 6 },
     date: { fontSize: 11, fontWeight: '600', opacity: 0.7 },
     hiddenDeleteBtn: { width: 80, height: '100%', borderRadius: radius.lg, justifyContent: 'center', alignItems: 'center', marginLeft: 12, elevation: 1 },
+    actionRow: { flexDirection: 'row', gap: 10, marginTop: 12 },
+    actionBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 12, paddingVertical: 8, borderRadius: 8 },
+    actionBtnText: { color: '#fff', fontSize: 12, fontWeight: '800' },
 });

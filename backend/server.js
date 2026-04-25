@@ -46,6 +46,7 @@ const currencyRoutes = require('./routes/currencyRoutes');
 const notificationRoutes = require('./routes/notificationRoutes');
 const categoryRoutes = require('./routes/categoryRoutes');
 const walletRoutes = require('./routes/walletRoutes');
+const friendRoutes = require('./routes/friendRoutes');
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  HELMET — Secure HTTP headers
@@ -128,25 +129,79 @@ const io = new Server(server, {
 
 app.set('io', io); // Access via req.app.get('io') in controllers
 
+const onlineUsers = new Set();
+const socketToUser = new Map();
+
 io.on('connection', (socket) => {
     // Mobile client joins a personal room (scoped by userId)
-    socket.on('join_user_room', (userId) => {
+    socket.on('join_user_room', async (userId) => {
         if (userId) {
             socket.join(`user:${userId}`);
+            onlineUsers.add(userId.toString());
+            socketToUser.set(socket.id, userId.toString());
             console.log(`[SOCKET] Client ${socket.id} joined room user:${userId}`);
+
+            // Notify friends that this user is online
+            try {
+                const user = await User.findById(userId).select('friends');
+                if (user && user.friends) {
+                    user.friends.forEach(friendId => {
+                        io.to(`user:${friendId.toString()}`).emit('user_online', userId.toString());
+                    });
+                }
+            } catch (err) {
+                console.error('[SOCKET] Online notify error:', err);
+            }
         }
     });
 
     socket.on('leave_user_room', (userId) => {
         if (userId) {
             socket.leave(`user:${userId}`);
+            onlineUsers.delete(userId.toString());
+            socketToUser.delete(socket.id);
         }
     });
 
-    socket.on('disconnect', () => {
+    // Chat Typing Indicators
+    socket.on('typing', ({ senderId, receiverId }) => {
+        io.to(`user:${receiverId}`).emit('typing', { senderId });
+    });
+
+    socket.on('stop_typing', ({ senderId, receiverId }) => {
+        io.to(`user:${receiverId}`).emit('stop_typing', { senderId });
+    });
+
+    socket.on('disconnect', async () => {
+        const userId = socketToUser.get(socket.id);
+        if (userId) {
+            socketToUser.delete(socket.id);
+            
+            // Check if user has other active sockets before declaring offline
+            const activeSockets = await io.in(`user:${userId}`).fetchSockets();
+            if (activeSockets.length === 0) {
+                onlineUsers.delete(userId);
+                console.log(`[SOCKET] User ${userId} went offline`);
+
+                // Notify friends
+                try {
+                    const user = await User.findById(userId).select('friends');
+                    if (user && user.friends) {
+                        user.friends.forEach(friendId => {
+                            io.to(`user:${friendId.toString()}`).emit('user_offline', userId);
+                        });
+                    }
+                } catch (err) {
+                    console.error('[SOCKET] Offline notify error:', err);
+                }
+            }
+        }
         console.log(`[SOCKET] Client disconnected: ${socket.id}`);
     });
 });
+
+// Expose onlineUsers for other controllers
+app.set('onlineUsers', onlineUsers);
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  BODY PARSERS
@@ -282,6 +337,11 @@ app.use('/api/categories', categoryRoutes);
 
 // Wallets
 app.use('/api/wallets', walletRoutes);
+
+// Friends & Connections
+const chatRoutes = require('./routes/chatRoutes');
+app.use('/api/friends', friendRoutes);
+app.use('/api/chat', chatRoutes);
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  GLOBAL ERROR HANDLER

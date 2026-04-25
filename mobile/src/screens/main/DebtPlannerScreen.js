@@ -107,7 +107,8 @@ const simulatePayoff = (debts, strategy, totalMonthlyBudget) => {
 };
 
 export default function DebtPlannerScreen({ navigation }) {
-    const { COLORS, isBaseDark } = useTheme();
+    const COLORS = useTheme(state => state.COLORS);
+    const isDarkMode = useTheme(state => state.isDarkMode);
     const { userToken, userInfo } = useAuth();
     
     const [debts, setDebts] = useState([]);
@@ -254,7 +255,7 @@ export default function DebtPlannerScreen({ navigation }) {
                         </View>
 
                         {/* Extra Contribution Input */}
-                        <View style={[styles.inputCard, { borderColor: COLORS.border, backgroundColor: isBaseDark ? '#1F2937' : '#F3F4F6' }]}>
+                        <View style={[styles.inputCard, { borderColor: COLORS.border, backgroundColor: isDarkMode ? '#1F2937' : '#F3F4F6' }]}>
                             <View style={styles.inputHeaderRow}>
                                 <Feather name="trending-down" size={18} color="#22c55e" />
                                 <Text style={[styles.inputTitle, { color: COLORS.text }]}>Extra Monthly Payment</Text>

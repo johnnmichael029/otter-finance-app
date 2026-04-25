@@ -22,7 +22,7 @@ const STATUS_COLORS = { completed: '#22c55e', cancelled: '#ef4444', active: '#f5
 
 export default function ShoppingHistoryDetailScreen({ route, navigation }) {
     const { session } = route.params;
-    const { COLORS } = useTheme();
+    const COLORS = useTheme(state => state.COLORS);
     const { userInfo } = useAuth();
     const styles = getStyles(COLORS);
 

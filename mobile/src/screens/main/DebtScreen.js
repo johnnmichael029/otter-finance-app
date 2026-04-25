@@ -15,7 +15,7 @@ import { useFinanceStore } from '../../store/financeStore';
 import { spacing, radius } from '../../theme/colors';
 import {
     getDebts, createDebt, updateDebt, deleteDebt,
-    logDebtPayment, getDebtPayments,
+    logDebtPayment, getDebtPayments, getFriends, respondDebtRequest
 } from '../../api/api';
 import { connectSocket, getSocket } from '../../utils/socket';
 import CustomAlertModal from '../../components/CustomAlertModal';
@@ -36,10 +36,14 @@ const daysUntil = (dateStr) => {
 };
 
 // ── Debt Card ─────────────────────────────────────────────────────────────────
-const DebtCard = ({ debt, onPay, onView, COLORS }) => {
+const DebtCard = ({ debt, onPay, onView, onAccept, onReject, COLORS, userId }) => {
     const isOverdue = debt.isOverdue;
     const isPaid = debt.status === 'settled';
     const isOwedToMe = debt.direction === 'owed_to_me';
+
+    const isPendingRequest = debt.syncStatus === 'pending';
+    const isIncomingRequest = isPendingRequest && debt.linkedUserId === userId;
+    const isOutgoingRequest = isPendingRequest && debt.user?._id === userId;
 
     const remaining = debt.principal ?? (debt.amount - debt.amountPaid);
     const totalOwed = debt.totalOwed ?? remaining;
@@ -74,12 +78,12 @@ const DebtCard = ({ debt, onPay, onView, COLORS }) => {
                 </View>
                 {/* Status Badge */}
                 <View style={[styles.badge, {
-                    backgroundColor: isPaid ? '#22c55e20' : isOverdue ? '#ef444420' : accentColor + '20'
+                    backgroundColor: isIncomingRequest ? '#f59e0b20' : isOutgoingRequest ? '#8b5cf620' : isPaid ? '#22c55e20' : isOverdue ? '#ef444420' : accentColor + '20'
                 }]}>
                     <Text style={[styles.badgeText, {
-                        color: isPaid ? '#22c55e' : isOverdue ? '#ef4444' : accentColor
+                        color: isIncomingRequest ? '#f59e0b' : isOutgoingRequest ? '#8b5cf6' : isPaid ? '#22c55e' : isOverdue ? '#ef4444' : accentColor
                     }]}>
-                        {isPaid ? 'PAID' : isOverdue ? `${debt.daysOverdue}d OVERDUE` : 'ACTIVE'}
+                        {isIncomingRequest ? 'NEW REQUEST' : isOutgoingRequest ? 'WAITING FOR APPROVAL' : isPaid ? 'PAID' : isOverdue ? `${debt.daysOverdue}d OVERDUE` : 'ACTIVE'}
                     </Text>
                 </View>
             </View>
@@ -123,17 +127,38 @@ const DebtCard = ({ debt, onPay, onView, COLORS }) => {
             )}
 
             {/* Quick Action Buttons */}
-            {!isPaid && (
+            {isIncomingRequest ? (
                 <View style={styles.cardActions}>
-                    {!isOwedToMe && (
-                        <TouchableOpacity
-                            onPress={() => onPay(debt)}
-                            style={[styles.payBtn, { backgroundColor: accentColor + '15', borderColor: accentColor }]}
-                        >
-                            <Feather name="dollar-sign" size={14} color={accentColor} />
-                            <Text style={[styles.payBtnText, { color: accentColor }]}>Log Payment</Text>
-                        </TouchableOpacity>
-                    )}
+                    <TouchableOpacity
+                        onPress={() => onAccept(debt)}
+                        style={[styles.payBtn, { backgroundColor: '#22c55e' + '15', borderColor: '#22c55e', flex: 1, justifyContent: 'center' }]}
+                    >
+                        <Feather name="check" size={14} color="#22c55e" />
+                        <Text style={[styles.payBtnText, { color: '#22c55e' }]}>Accept</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                        onPress={() => onReject(debt)}
+                        style={[styles.payBtn, { backgroundColor: '#ef4444' + '15', borderColor: '#ef4444', flex: 1, justifyContent: 'center' }]}
+                    >
+                        <Feather name="x" size={14} color="#ef4444" />
+                        <Text style={[styles.payBtnText, { color: '#ef4444' }]}>Reject</Text>
+                    </TouchableOpacity>
+                </View>
+            ) : !isPaid && !isOutgoingRequest ? (
+                <View style={styles.cardActions}>
+                    <TouchableOpacity
+                        onPress={() => onPay(debt)}
+                        style={[styles.payBtn, { backgroundColor: accentColor + '15', borderColor: accentColor }]}
+                    >
+                        <Feather
+                            name={isOwedToMe ? 'download' : 'dollar-sign'}
+                            size={14}
+                            color={accentColor}
+                        />
+                        <Text style={[styles.payBtnText, { color: accentColor }]}>
+                            {isOwedToMe ? 'Log Receipt' : 'Log Payment'}
+                        </Text>
+                    </TouchableOpacity>
                     {debt.isInstallment && debt.monthlyPayment && (
                         <View style={[styles.installmentTag, { backgroundColor: COLORS.background }]}>
                             <Text style={[styles.installmentText, { color: COLORS.textMuted }]}>
@@ -142,16 +167,17 @@ const DebtCard = ({ debt, onPay, onView, COLORS }) => {
                         </View>
                     )}
                 </View>
-            )}
+            ) : null}
         </TouchableOpacity>
     );
 };
 
 // ── Main Screen ───────────────────────────────────────────────────────────────
 export default function DebtScreen({ navigation }) {
-    const { COLORS } = useTheme();
+    const COLORS = useTheme(state => state.COLORS);
     const { userToken, userInfo } = useAuth();
     const debts = useFinanceStore(state => state.debts);
+    const transactionSummary = useFinanceStore(state => state.transactionSummary);
     const fetchDebts = useFinanceStore(state => state.fetchDebts);
     const loadingDebts = useFinanceStore(state => state.isLoadingDebts);
     const [loading, setLoading] = useState(true);
@@ -175,6 +201,7 @@ export default function DebtScreen({ navigation }) {
         gracePeriodMonths: '12',
         penaltyRate: '20',
         dueDate: '',
+        linkedUserId: null,
     });
     const [payAmount, setPayAmount] = useState('');
     const [payNote, setPayNote] = useState('');
@@ -234,9 +261,13 @@ export default function DebtScreen({ navigation }) {
         setAlert({ visible: true, type, title, message, onConfirm });
     const closeAlert = () => setAlert(a => ({ ...a, visible: false }));
 
+    const [friends, setFriends] = useState([]);
+
     const load = useCallback(async (force = false) => {
         try {
             await fetchDebts(force);
+            const fRes = await getFriends();
+            setFriends(fRes);
         } catch (e) {
             console.warn('[DebtScreen] Load error:', e.message);
         } finally {
@@ -271,8 +302,19 @@ export default function DebtScreen({ navigation }) {
 
     // Filtered debts
     const filtered = debts.filter(d => {
+        // Pending incoming requests should ALWAYS show in 'all' or their respective direction tab, but never 'settled'.
+        const isIncoming = d.syncStatus === 'pending' && d.linkedUserId === userInfo?._id;
+        
         if (filter === 'all') return d.status !== 'settled';
-        if (filter === 'settled') return d.status === 'settled';
+        if (filter === 'settled') return d.status === 'settled' && d.syncStatus !== 'pending';
+        
+        if (isIncoming) {
+            // Incoming requests: The original debt direction is from the sender's perspective.
+            // If sender chose "owed_to_me", it means "owed_by_me" for me.
+            const myDirection = d.direction === 'owed_to_me' ? 'owed_by_me' : 'owed_to_me';
+            return myDirection === filter;
+        }
+        
         return d.direction === filter && d.status !== 'settled';
     });
 
@@ -308,6 +350,7 @@ export default function DebtScreen({ navigation }) {
                 gracePeriodMonths: form.isInstallment ? parseInt(form.gracePeriodMonths) || 0 : 0,
                 penaltyRate: form.isInstallment ? parseFloat(form.penaltyRate) || 0 : 0,
                 dueDate: buildDueDate(),
+                linkedUserId: form.linkedUserId,
             });
             setAddModal(false);
             resetForm();
@@ -334,6 +377,13 @@ export default function DebtScreen({ navigation }) {
             if (!hasEnoughBalance(selectedWallet, amount, cryptoPrices)) {
                 return showAlert('warning', 'Insufficient Balance',
                     `Your ${selectedWallet.name} wallet doesn't have enough balance to cover this payment.`);
+            }
+        } else {
+            // Check HAND balance (transactionSummary.balance or netBalance)
+            const handBalance = transactionSummary.netBalance ?? transactionSummary.balance ?? 0;
+            if (handBalance < amount) {
+                return showAlert('warning', 'Insufficient Balance',
+                    `You don't have enough money on HAND to cover this payment. (Available: ${formatCurrency(handBalance)})`);
             }
         }
 
@@ -382,7 +432,7 @@ export default function DebtScreen({ navigation }) {
                 visible: true,
                 type: 'confirm',
                 title: 'Delete Debt?',
-                message: `"${debt.personName}" has existing payments. Do you want to undo those payments (return money to wallet) or keep them in your history?`,
+                message: `"${debt.personName}" has existing payments. You can revert back these Debt transactions (return money to wallet) or delete the record while keeping the payment history.`,
                 confirmText: 'Undo Payments & Delete',
                 cancelText: 'Cancel',
                 extraBtnText: 'Keep History & Delete',
@@ -420,8 +470,18 @@ export default function DebtScreen({ navigation }) {
     const resetForm = () => setForm({
         direction: 'owed_by_me', personName: '', amount: '', description: '',
         isInstallment: false, monthlyPayment: '',
-        gracePeriodMonths: '12', penaltyRate: '20', dueDate: '',
+        gracePeriodMonths: '12', penaltyRate: '20', dueDate: '', linkedUserId: null,
     });
+
+    const handleRespondRequest = async (debtId, status) => {
+        try {
+            await respondDebtRequest(debtId, status);
+            showAlert('success', 'Success', status === 'linked' ? 'Debt request accepted.' : 'Debt request rejected.');
+            load();
+        } catch (e) {
+            showAlert('error', 'Failed', e?.response?.data?.error || 'Failed to respond to request.');
+        }
+    };
 
     if (loading) {
         return (
@@ -553,6 +613,7 @@ export default function DebtScreen({ navigation }) {
                         <DebtCard
                             debt={debt}
                             COLORS={COLORS}
+                            userId={userInfo?._id}
                             onPay={(d) => {
                                 setPayModal({ visible: true, debt: d });
                                 setPayAmount('');
@@ -560,6 +621,8 @@ export default function DebtScreen({ navigation }) {
                                 setSelectedWallet(null);
                             }}
                             onView={handleViewDetail}
+                            onAccept={(d) => handleRespondRequest(d._id, 'linked')}
+                            onReject={(d) => handleRespondRequest(d._id, 'rejected')}
                         />
                     )}
                 />
@@ -617,9 +680,30 @@ export default function DebtScreen({ navigation }) {
                                 placeholder="e.g. BDO Phone Installment"
                                 placeholderTextColor={COLORS.textMuted}
                                 value={form.personName}
-                                onChangeText={v => setForm(f => ({ ...f, personName: v }))}
+                                onChangeText={v => setForm(f => ({ ...f, personName: v, linkedUserId: null }))}
                             />
                         </View>
+
+                        {/* Friend Picker */}
+                        {friends && friends.length > 0 && (
+                            <View style={{ marginTop: 12 }}>
+                                <Text style={[styles.formLabel, { color: COLORS.textMuted, marginTop: 0 }]}>OR SELECT A FRIEND TO LINK</Text>
+                                <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+                                    {friends.map(f => {
+                                        const isSelected = form.linkedUserId === f._id;
+                                        return (
+                                            <TouchableOpacity
+                                                key={f._id}
+                                                style={[styles.friendPill, isSelected && { backgroundColor: COLORS.primary, borderColor: COLORS.primary }]}
+                                                onPress={() => setForm(s => ({ ...s, linkedUserId: f._id, personName: f.name }))}
+                                            >
+                                                <Text style={[styles.friendPillText, { color: isSelected ? '#fff' : COLORS.text }]}>{f.name}</Text>
+                                            </TouchableOpacity>
+                                        );
+                                    })}
+                                </ScrollView>
+                            </View>
+                        )}
 
                         {/* Amount */}
                         <Text style={[styles.formLabel, { color: COLORS.textMuted }]}>TOTAL AMOUNT</Text>
@@ -751,9 +835,11 @@ export default function DebtScreen({ navigation }) {
                     <View style={[styles.handle, { backgroundColor: COLORS.border }]} />
                     <View style={styles.sheetHeader}>
                         <View>
-                            <Text style={[styles.sheetTitle, { color: COLORS.text }]}>Log Payment</Text>
+                            <Text style={[styles.sheetTitle, { color: COLORS.text }]}>
+                                {payModal.debt?.direction === 'owed_to_me' ? 'Log Receipt' : 'Log Payment'}
+                            </Text>
                             <Text style={[styles.sheetSub, { color: COLORS.textMuted }]}>
-                                {payModal.debt?.personName} · {formatCurrency(payModal.debt?.principal)} remaining
+                                {payModal.debt?.personName} · {formatCurrency(payModal.debt?.principal)} {payModal.debt?.direction === 'owed_to_me' ? 'to receive' : 'remaining'}
                             </Text>
                         </View>
                         <TouchableOpacity onPress={() => setPayModal({ visible: false, debt: null })}>
@@ -799,14 +885,20 @@ export default function DebtScreen({ navigation }) {
                     </View>
 
                     {/* Wallet Selector */}
-                    <Text style={[styles.formLabel, { color: COLORS.textMuted, marginTop: spacing.md }]}>DEDUCT FROM WALLET</Text>
+                    {/* Wallet Selector */}
+                    <Text style={[styles.formLabel, { color: COLORS.textMuted, marginTop: spacing.md }]}>
+                        {payModal.debt?.direction === 'owed_to_me' ? 'ADD TO WALLET' : 'DEDUCT FROM WALLET'}
+                    </Text>
                     <WalletSelector
                         selectedWalletId={selectedWallet?._id}
                         onSelect={(w) => setSelectedWallet(w)}
                         COLORS={COLORS}
                         amountPHP={parseFloat(payAmount) || 0}
-                        isExpense={true}
+                        isExpense={payModal.debt?.direction !== 'owed_to_me'}
                     />
+                    <Text style={{ fontSize: 10, color: COLORS.textMuted, marginTop: 6, fontStyle: 'italic', paddingHorizontal: 4 }}>
+                        * If no wallet is selected, it will automatically {payModal.debt?.direction === 'owed_to_me' ? 'add to' : 'deduct from'} HAND.
+                    </Text>
 
                     <Text style={[styles.formLabel, { color: COLORS.textMuted, marginTop: spacing.md }]}>NOTE (OPTIONAL)</Text>
                     <View style={[styles.inputWrap, { backgroundColor: COLORS.background, borderColor: COLORS.border }]}>
@@ -957,9 +1049,9 @@ const styles = StyleSheet.create({
     pill: { paddingHorizontal: 14, paddingVertical: 7, borderRadius: radius.full, backgroundColor: 'rgba(128,128,128,0.12)' },
     pillText: { fontSize: 13, fontWeight: '700' },
 
-    list: { padding: spacing.lg, paddingTop: 4, gap: 12, paddingBottom: 40 },
+    list: { padding: spacing.lg, paddingTop: 4, paddingBottom: 40 },
 
-    card: { borderRadius: radius.xl, padding: spacing.md, borderWidth: 1 },
+    card: { borderRadius: radius.xl, padding: spacing.md, borderWidth: 1, marginBottom: spacing.md },
     cardHeader: { flexDirection: 'row', alignItems: 'center', marginBottom: spacing.md },
     cardIcon: { width: 44, height: 44, borderRadius: 12, justifyContent: 'center', alignItems: 'center' },
     cardName: { fontSize: 15, fontWeight: '800' },
@@ -1027,6 +1119,9 @@ const styles = StyleSheet.create({
     installmentBox: { borderWidth: 1.5, borderRadius: radius.lg, padding: spacing.md, marginTop: spacing.md },
     dueDatePreview: { flexDirection: 'row', alignItems: 'center', gap: 8, padding: spacing.sm, borderRadius: radius.md, borderWidth: 1, marginTop: spacing.md },
     dueDatePreviewText: { fontSize: 13, fontWeight: '700' },
+
+    friendPill: { paddingHorizontal: 16, paddingVertical: 8, borderRadius: 20, borderWidth: 1, borderColor: 'rgba(128,128,128,0.2)', marginRight: 8 },
+    friendPillText: { fontSize: 13, fontWeight: '700' },
 
     saveBtn: { flexDirection: 'row', justifyContent: 'center', alignItems: 'center', paddingVertical: 16, borderRadius: radius.xl, marginTop: spacing.lg },
     saveBtnText: { color: '#fff', fontSize: 16, fontWeight: '800' },

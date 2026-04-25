@@ -18,7 +18,7 @@ const CustomAlertModal = ({
     hideButtons = false,
     extraActions, // Array of { label, icon, onPress, danger }
 }) => {
-    const { COLORS } = useTheme();
+    const COLORS = useTheme(state => state.COLORS);
     const styles = getStyles(COLORS);
 
     const getIcon = () => {

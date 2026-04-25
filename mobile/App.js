@@ -68,6 +68,9 @@ import ShoppingCheckoutScreen from './src/screens/shopping/ShoppingCheckoutScree
 import ShoppingHistoryDetailScreen from './src/screens/shopping/ShoppingHistoryDetailScreen';
 import ShoppingTemplatesScreen from './src/screens/shopping/ShoppingTemplatesScreen';
 import ManageCategoriesScreen from './src/screens/main/ManageCategoriesScreen';
+import FriendsScreen from './src/screens/friends/FriendsScreen';
+import ChatScreen from './src/screens/friends/ChatScreen';
+import ProfileScreen from './src/screens/main/ProfileScreen';
 
 import { StatusBar } from 'expo-status-bar';
 
@@ -96,7 +99,7 @@ const AuthStack = () => (
 
 // ── Shared Custom Tab Bar ──────────────────────────────────────
 const CustomTabBar = ({ state, descriptors, navigation: tabNav, onPressAdd }) => {
-    const { COLORS } = useTheme();
+    const COLORS = useTheme(state => state.COLORS);
     const setIsSavingsMode = useUIStore(state => state.setIsSavingsMode);
     const leftTabs = state.routes.slice(0, 2);
     const rightTabs = state.routes.slice(2);
@@ -157,7 +160,7 @@ const styles = StyleSheet.create({
 
 // ── Main Mode Tabs ─────────────────────────────────────────────
 const MainTabs = ({ navigation }) => {
-    const { COLORS } = useTheme();
+    const COLORS = useTheme(state => state.COLORS);
     return (
         <View style={{ flex: 1, backgroundColor: COLORS.background }}>
             <Tab.Navigator
@@ -175,7 +178,7 @@ const MainTabs = ({ navigation }) => {
 
 // ── Savings Mode Tabs ──────────────────────────────────────────
 const SavingsTabs = ({ navigation: rootNav }) => {
-    const { COLORS } = useTheme();
+    const COLORS = useTheme(state => state.COLORS);
     const setIsSavingsMode = useUIStore(state => state.setIsSavingsMode);
     return (
         <View style={{ flex: 1, backgroundColor: COLORS.background }}>
@@ -198,13 +201,14 @@ const SavingsTabs = ({ navigation: rootNav }) => {
 };
 
 const GlobalStatusBar = () => {
-    const { isDarkMode } = useTheme();
+    const isDarkMode = useTheme(state => state.isDarkMode);
     return <StatusBar style={isDarkMode ? 'light' : 'dark'} />;
 };
 
 const AppNavigator = () => {
     const { userToken, userInfo, isSplashLoading } = useAuth();
-    const { COLORS, isDarkMode } = useTheme();
+    const COLORS = useTheme(state => state.COLORS);
+    const isDarkMode = useTheme(state => state.isDarkMode);
     const isSavingsMode = useUIStore(state => state.isSavingsMode);
 
     const navTheme = isDarkMode
@@ -245,6 +249,7 @@ const AppNavigator = () => {
                             {/* Shared Screens available in both modes */}
                             <Stack.Screen name="AddTransaction" component={AddTransactionScreen} />
                             <Stack.Screen name="BarcodeScanner" component={BarcodeScannerScreen} />
+                            <Stack.Screen name="RecurringBills" component={RecurringBillsScreen} />
                             <Stack.Screen name="DebtScreen" component={DebtScreen} />
                             <Stack.Screen name="SavingsGoalDetail" component={SavingsGoalDetailScreen} />
                             <Stack.Screen name="SavingsTransfer" component={SavingsTransferScreen} />
@@ -266,6 +271,9 @@ const AppNavigator = () => {
                             <Stack.Screen name="DebtPlanner" component={DebtPlannerScreen} />
                             <Stack.Screen name="Analytics" component={AnalyticsScreen} />
                             <Stack.Screen name="Notifications" component={NotificationsScreen} />
+                            <Stack.Screen name="FriendsScreen" component={FriendsScreen} />
+                            <Stack.Screen name="ChatScreen" component={ChatScreen} />
+                            <Stack.Screen name="ProfileScreen" component={ProfileScreen} />
                         </Stack.Navigator>
                     )
                 ) : <AuthStack />}

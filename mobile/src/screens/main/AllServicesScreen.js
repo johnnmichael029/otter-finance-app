@@ -11,9 +11,15 @@ const SERVICES = [
         category: 'Core Finance',
         items: [
             { id: 'debts', icon: 'credit-card', label: 'Debts', color: '#f59e0b', screen: 'DebtScreen' },
-            { id: 'bills', icon: 'repeat', label: 'Bills', color: '#22c55e', screen: 'Bills' },
+            { id: 'bills', icon: 'repeat', label: 'Bills', color: '#22c55e', screen: 'RecurringBills' },
             { id: 'convert', icon: 'dollar-sign', label: 'Converter', color: '#8b5cf6', screen: 'CurrencyConverter' },
             { id: 'debt_planner', icon: 'trending-down', label: 'Debt Planner', color: '#ef4444', screen: 'DebtPlanner' },
+        ]
+    },
+    {
+        category: 'Social & Connect',
+        items: [
+            { id: 'friends', icon: 'users', label: 'Friends', color: '#3b82f6', screen: 'FriendsScreen' },
         ]
     },
     {
@@ -39,7 +45,7 @@ const SERVICES = [
 ];
 
 export default function AllServicesScreen({ navigation }) {
-    const { COLORS } = useTheme();
+    const COLORS = useTheme(state => state.COLORS);
     const setIsSavingsMode = useUIStore(state => state.setIsSavingsMode);
 
     const handlePress = (item) => {
@@ -50,7 +56,7 @@ export default function AllServicesScreen({ navigation }) {
         }
 
         if (item.screen) {
-            if (item.screen === 'Bills' || item.screen === 'Budget') {
+            if (item.screen === 'Budget') {
                 setIsSavingsMode(false);
                 navigation.navigate('HomeRoot', { screen: item.screen });
             } else {

@@ -5,17 +5,17 @@ import {
     TextInput, ScrollView, KeyboardAvoidingView, Platform
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { Feather, MaterialCommunityIcons } from '@expo/vector-icons';
+import { Feather, MaterialCommunityIcons, FontAwesome, FontAwesome5 } from '@expo/vector-icons';
 import { useTheme } from '../../context/ThemeContext';
 import { useAuth } from '../../context/AuthContext';
-import { completeOnboarding, getCurrencyList } from '../../api/api';
+import { completeOnboarding, getCurrencyList, checkTagAvailability } from '../../api/api';
 import { triggerHaptic } from '../../utils/haptics';
 
 const { width, height } = Dimensions.get('window');
 
 const OCCUPATIONS = [
     { id: 'student', label: 'Student', icon: 'school-outline', color: '#3b82f6' },
-    { id: 'teacher', label: 'Teacher', icon: 'apple-outline', color: '#ef4444' },
+    { id: 'teacher', label: 'Teacher', icon: 'chalkboard-teacher', provider: 'font-awesome-5', color: '#ef4444' },
     { id: 'freelancer', label: 'Freelancer', icon: 'laptop', color: '#8b5cf6' },
     { id: 'employee', label: 'Employee', icon: 'briefcase-outline', color: '#22c55e' },
     { id: 'business', label: 'Business Owner', icon: 'rocket-launch-outline', color: '#f59e0b' },
@@ -55,18 +55,23 @@ const SLIDES = [
 ];
 
 export default function OnboardingScreen() {
-    const { COLORS, isDarkMode } = useTheme();
+    const COLORS = useTheme(state => state.COLORS);
+    const isDarkMode = useTheme(state => state.isDarkMode);
     const { userInfo, updateLocalUser, hapticsEnabled } = useAuth();
     const [currentIndex, setCurrentIndex] = useState(0);
     const [loading, setLoading] = useState(false);
-    
+
     // Setup States
     const [name, setName] = useState(userInfo?.name || '');
+    const [otterTag, setOtterTag] = useState('');
     const [currency, setCurrency] = useState({ code: 'PHP', symbol: '₱', flag: '🇵🇭' });
     const [currencies, setCurrencies] = useState([]);
     const [occupation, setOccupation] = useState('');
     const [otherOccupation, setOtherOccupation] = useState('');
     const [showOtherInput, setShowOtherInput] = useState(false);
+    const [tagError, setTagError] = useState('');
+    const [isTagChecking, setIsTagChecking] = useState(false);
+    const [isTagAvailable, setIsTagAvailable] = useState(null); // null, true, false
 
     const scrollX = useRef(new Animated.Value(0)).current;
     const slidesRef = useRef(null);
@@ -74,9 +79,47 @@ export default function OnboardingScreen() {
     useEffect(() => {
         getCurrencyList().then(res => {
             if (res.currencies) setCurrencies(res.currencies);
-        }).catch(() => {});
+        }).catch(() => { });
         if (userInfo?.name) setName(userInfo.name);
     }, [userInfo]);
+
+    // Real-time tag availability check
+    useEffect(() => {
+        if (!otterTag) {
+            setIsTagAvailable(null);
+            setTagError('');
+            return;
+        }
+
+        if (otterTag.length < 3) {
+            setIsTagAvailable(null);
+            setTagError('Too short');
+            return;
+        }
+
+        // Basic format validation
+        if (!/^[a-zA-Z0-9_]+$/.test(otterTag)) {
+            setTagError('Only letters, numbers, and underscores allowed.');
+            setIsTagAvailable(false);
+            return;
+        }
+
+        setTagError('');
+        const timeoutId = setTimeout(async () => {
+            setIsTagChecking(true);
+            try {
+                const { available } = await checkTagAvailability(otterTag);
+                setIsTagAvailable(available);
+                if (!available) setTagError('This tag is already taken.');
+            } catch (err) {
+                console.error('Tag check error', err);
+            } finally {
+                setIsTagChecking(false);
+            }
+        }, 600);
+
+        return () => clearTimeout(timeoutId);
+    }, [otterTag]);
 
     const handleOccupationSelect = (occ) => {
         triggerHaptic(hapticsEnabled, 'impactLight');
@@ -90,15 +133,25 @@ export default function OnboardingScreen() {
     };
 
     const handleComplete = async () => {
-        if (!name.trim()) return;
-        
+        if (!name.trim()) {
+            setTagError('Please enter your name.');
+            return;
+        }
+        if (!otterTag || otterTag.length < 3) {
+            setTagError('Otter Tag must be at least 3 characters.');
+            return;
+        }
+        if (isTagAvailable === false) return;
+        if (isTagChecking) return;
+
         setLoading(true);
         try {
             const finalOccupation = occupation === 'other' ? otherOccupation : occupation;
-            const res = await completeOnboarding({ 
+            const res = await completeOnboarding({
                 name: name.trim(),
                 currency: currency.code,
-                occupation: finalOccupation
+                occupation: finalOccupation,
+                otterTag: otterTag.trim()
             });
             await updateLocalUser(res);
         } catch (e) {
@@ -111,13 +164,13 @@ export default function OnboardingScreen() {
     const renderSlide = ({ item }) => {
         if (item.type === 'setup') {
             return (
-                <KeyboardAvoidingView 
+                <KeyboardAvoidingView
                     behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
                     style={{ width }}
                 >
                     <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollContent}>
                         <View style={styles.setupHeader}>
-                            <Image 
+                            <Image
                                 source={require('../../../assets/onboarding/welcome.png')}
                                 style={styles.mascotSmall}
                             />
@@ -136,15 +189,45 @@ export default function OnboardingScreen() {
                                 placeholderTextColor={COLORS.textMuted}
                             />
 
+                            <Text style={[styles.sectionLabel, { color: COLORS.textMuted, marginTop: 24 }]}>YOUR UNIQUE @OTTERTAG</Text>
+                            <View style={styles.tagInputWrapper}>
+                                <Text style={[styles.tagPrefix, { color: COLORS.primary }]}>@</Text>
+                                <TextInput
+                                    style={[
+                                        styles.tagInput,
+                                        {
+                                            backgroundColor: COLORS.surface,
+                                            color: COLORS.text,
+                                            borderColor: tagError ? '#ef4444' : (isTagAvailable ? '#22c55e' : COLORS.border)
+                                        }
+                                    ]}
+                                    value={otterTag}
+
+                                    onChangeText={(t) => setOtterTag(t.replace(/\s/g, '').toLowerCase())}
+                                    placeholder="yamashii_dev"
+                                    placeholderTextColor={COLORS.textMuted}
+                                    autoCapitalize="none"
+                                />
+                                {isTagChecking && (
+                                    <ActivityIndicator size="small" color={COLORS.primary} style={styles.tagLoader} />
+                                )}
+                                {isTagAvailable === true && !isTagChecking && (
+                                    <Feather name="check-circle" size={18} color="#22c55e" style={styles.tagLoader} />
+                                )}
+                            </View>
+                            {tagError ? <Text style={styles.errorText}>{tagError}</Text> : (
+                                <Text style={styles.tagHint}>This is how friends will find you.</Text>
+                            )}
+
                             <Text style={[styles.sectionLabel, { color: COLORS.textMuted, marginTop: 24 }]}>CHOOSE YOUR CURRENCY</Text>
                             <View style={styles.currencyRow}>
                                 {currencies.slice(0, 4).map(curr => {
                                     const isSelected = currency.code === curr.code;
                                     return (
-                                        <TouchableOpacity 
+                                        <TouchableOpacity
                                             key={curr.code}
                                             style={[
-                                                styles.currencyPill, 
+                                                styles.currencyPill,
                                                 { backgroundColor: isSelected ? COLORS.primary : COLORS.surface, borderColor: isSelected ? COLORS.primary : COLORS.border }
                                             ]}
                                             onPress={() => setCurrency(curr)}
@@ -161,7 +244,7 @@ export default function OnboardingScreen() {
                                 {OCCUPATIONS.map((occ) => {
                                     const isSelected = (occ.id === 'other' && occupation === 'other') || occupation === occ.label;
                                     return (
-                                        <TouchableOpacity 
+                                        <TouchableOpacity
                                             key={occ.id}
                                             style={[
                                                 styles.occCard,
@@ -169,7 +252,11 @@ export default function OnboardingScreen() {
                                             ]}
                                             onPress={() => handleOccupationSelect(occ)}
                                         >
-                                            <MaterialCommunityIcons name={occ.icon} size={24} color={isSelected ? COLORS.primary : COLORS.textMuted} />
+                                            {occ.provider === 'font-awesome-5' ? (
+                                                <FontAwesome5 name={occ.icon} size={18} color={isSelected ? COLORS.primary : COLORS.textMuted} />
+                                            ) : (
+                                                <MaterialCommunityIcons name={occ.icon} size={24} color={isSelected ? COLORS.primary : COLORS.textMuted} />
+                                            )}
                                             <Text style={[styles.occLabel, { color: isSelected ? COLORS.text : COLORS.textMuted }]}>{occ.label}</Text>
                                         </TouchableOpacity>
                                     );
@@ -196,10 +283,10 @@ export default function OnboardingScreen() {
 
         return (
             <View style={[styles.slide, { width }]}>
-                <Image 
-                    source={require('../../../assets/onboarding/welcome.png')} 
-                    style={styles.image} 
-                    resizeMode="contain" 
+                <Image
+                    source={require('../../../assets/onboarding/welcome.png')}
+                    style={styles.image}
+                    resizeMode="contain"
                 />
                 <View style={styles.content}>
                     <Text style={[styles.title, { color: COLORS.text }]}>{item.title}</Text>
@@ -232,8 +319,14 @@ export default function OnboardingScreen() {
             />
 
             <View style={styles.footer}>
-                <TouchableOpacity 
-                    style={[styles.nextBtn, { backgroundColor: COLORS.primary, opacity: (currentIndex === 3 && !name.trim()) ? 0.6 : 1 }]} 
+                <TouchableOpacity
+                    style={[
+                        styles.nextBtn,
+                        {
+                            backgroundColor: COLORS.primary,
+                            opacity: (currentIndex === 3 && (!name.trim() || !otterTag || isTagAvailable === false || isTagChecking)) ? 0.6 : 1
+                        }
+                    ]}
                     onPress={() => {
                         if (currentIndex < 3) {
                             slidesRef.current.scrollToIndex({ index: currentIndex + 1 });
@@ -263,7 +356,7 @@ const styles = StyleSheet.create({
     content: { alignItems: 'center' },
     title: { fontSize: 32, fontWeight: '900', textAlign: 'center', marginBottom: 16 },
     description: { fontSize: 18, textAlign: 'center', lineHeight: 26, paddingHorizontal: 20 },
-    
+
     setupHeader: { flexDirection: 'row', alignItems: 'center', marginBottom: 32, gap: 12 },
     mascotSmall: { width: 80, height: 80, borderRadius: 40 },
     bubble: { backgroundColor: '#E91E8C', padding: 12, borderRadius: 20, borderBottomLeftRadius: 0, flex: 1 },
@@ -272,25 +365,31 @@ const styles = StyleSheet.create({
     formSection: { width: '100%' },
     sectionLabel: { fontSize: 11, fontWeight: '900', letterSpacing: 1.2, marginBottom: 12 },
     input: { height: 60, borderRadius: 16, paddingHorizontal: 16, fontSize: 16, fontWeight: '700', borderWidth: 1.5 },
-    
+
+    tagInputWrapper: { flexDirection: 'row', alignItems: 'center' },
+    tagPrefix: { fontSize: 20, fontWeight: '900', marginRight: 8 },
+    tagInput: { flex: 1, height: 60, borderRadius: 16, paddingHorizontal: 16, fontSize: 16, fontWeight: '700', borderWidth: 1.5 },
+    tagLoader: { position: 'absolute', right: 16 },
+    errorText: { color: '#ef4444', fontSize: 12, fontWeight: '700', marginTop: 6, marginLeft: 32 },
+
     currencyRow: { flexDirection: 'row', gap: 8 },
-    currencyPill: { 
-        flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', 
-        gap: 6, paddingVertical: 12, borderRadius: 12, borderWidth: 1.5 
+    currencyPill: {
+        flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+        gap: 6, paddingVertical: 12, borderRadius: 12, borderWidth: 1.5
     },
     pillFlag: { fontSize: 18 },
     pillCode: { fontSize: 13, fontWeight: '800' },
 
     occGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
-    occCard: { 
-        width: (width - 68) / 2, padding: 16, borderRadius: 16, borderWidth: 1.5, 
-        alignItems: 'center', justifyContent: 'center', gap: 8 
+    occCard: {
+        width: (width - 68) / 2, padding: 16, borderRadius: 16, borderWidth: 1.5,
+        alignItems: 'center', justifyContent: 'center', gap: 8
     },
     occLabel: { fontSize: 13, fontWeight: '800' },
 
     footer: { position: 'absolute', bottom: 40, left: 24, right: 24 },
-    nextBtn: { 
-        height: 64, borderRadius: 24, flexDirection: 'row', 
+    nextBtn: {
+        height: 64, borderRadius: 24, flexDirection: 'row',
         justifyContent: 'center', alignItems: 'center', gap: 12,
         shadowColor: '#E91E8C', shadowOffset: { width: 0, height: 6 },
         shadowOpacity: 0.3, shadowRadius: 12, elevation: 8

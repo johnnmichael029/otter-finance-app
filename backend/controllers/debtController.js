@@ -38,13 +38,30 @@ const calcAccruedInterest = (debt) => {
 const getDebts = async (req, res) => {
     try {
         const { status, direction, page = 1, limit = 20 } = req.query;
-        const filter = { user: req.userId };
+        
+        // Match debts owned by the user, OR debts where the user is the linkedUserId and it's pending
+        const filter = {
+            $or: [
+                { user: req.userId },
+                { linkedUserId: req.userId, syncStatus: 'pending' }
+            ]
+        };
+
         if (status) filter.status = status;
-        if (direction) filter.direction = direction;
+        // Direction is tricky for pending requests because it's inverse for the receiver,
+        // but for now we apply it normally or skip it if it breaks filtering.
+        // To be safe, let's only apply direction/status if they exist and aren't over-restricting pending requests.
+        if (direction) {
+            filter.$or = [
+                { user: req.userId, direction },
+                // If I am the receiver, the direction on the sender's side is the opposite
+                { linkedUserId: req.userId, syncStatus: 'pending', direction: direction === 'owed_to_me' ? 'owed_by_me' : 'owed_to_me' }
+            ];
+        }
 
         const skip = (parseInt(page) - 1) * parseInt(limit);
         const [debts, total] = await Promise.all([
-            Debt.find(filter).sort({ dueDate: 1, createdAt: -1 }).skip(skip).limit(parseInt(limit)).lean(),
+            Debt.find(filter).populate('user', 'name otterTag').sort({ dueDate: 1, createdAt: -1 }).skip(skip).limit(parseInt(limit)).lean(),
             Debt.countDocuments(filter)
         ]);
 
@@ -90,7 +107,7 @@ const createDebt = async (req, res) => {
 
         const {
             direction, personName, amount, description, dateBorrowed, dueDate,
-            isInstallment, monthlyPayment, gracePeriodMonths, penaltyRate,
+            isInstallment, monthlyPayment, gracePeriodMonths, penaltyRate, linkedUserId
         } = req.body;
 
         if (!direction || !personName || !amount) {
@@ -109,11 +126,41 @@ const createDebt = async (req, res) => {
             monthlyPayment: monthlyPayment || null,
             gracePeriodMonths: gracePeriodMonths || 0,
             penaltyRate: penaltyRate || 0,
+            linkedUserId: linkedUserId || null,
+            syncStatus: linkedUserId ? 'pending' : 'none'
         });
 
         invalidatePrefixes('debt');
         const io = req.app.get('io');
-        if (io) io.to(`user:${req.userId}`).emit('new_debt', debt);
+        if (io) {
+            io.to(`user:${req.userId}`).emit('new_debt', debt);
+            if (linkedUserId) {
+                // Notify the friend via Socket
+                io.to(`user:${linkedUserId.toString()}`).emit('new_debt_request', debt);
+                io.to(`user:${linkedUserId.toString()}`).emit('notification_received');
+            }
+        }
+
+        if (linkedUserId) {
+            const senderUser = await mongoose.model('User').findById(req.userId).select('name avatarUrl');
+            // Create persistent Notification for the receiver
+            await Notification.create({
+                user: linkedUserId,
+                type: 'debt_request',
+                title: 'New Debt Request',
+                message: `${senderUser?.name || 'Someone'} sent you a debt request for ₱${amount.toLocaleString()}.`,
+                data: {
+                    debtId: debt._id,
+                    senderId: req.userId,
+                    senderName: senderUser?.name,
+                    senderAvatar: senderUser?.avatarUrl,
+                    amount: amount,
+                    direction: direction
+                }
+            }).then(n => {
+                if (io) io.to(`user:${linkedUserId}`).emit('new_notification', n);
+            });
+        }
 
         res.status(201).json(debt);
     } catch (err) {
@@ -356,10 +403,83 @@ const logPayment = async (req, res) => {
         }
 
         await debt.save();
-
         invalidatePrefixes('debt');
-
         if (io) io.to(`user:${req.userId}`).emit('update_debt', debt);
+
+        // ── P2P Linked Debt Synchronization ───────────────────────
+        if (debt.syncStatus === 'linked' && debt.linkedDebtId && debt.linkedUserId) {
+            const friendDebt = await Debt.findById(debt.linkedDebtId).populate('user', 'name');
+            if (friendDebt) {
+                // Log payment on friend's debt
+                const friendPayment = await DebtPayment.create({
+                    debt: friendDebt._id,
+                    user: friendDebt.user._id,
+                    amount,
+                    note: `Payment synced from ${req.user.name}`,
+                    wallet: null // Received in HAND by default
+                });
+
+                // Update friend's debt status
+                friendDebt.amountPaid = Math.min(friendDebt.amount, (friendDebt.amountPaid || 0) + amount);
+                if (friendDebt.amountPaid >= friendDebt.amount) {
+                    friendDebt.status = 'settled';
+                } else if (friendDebt.amountPaid > 0) {
+                    friendDebt.status = 'partial';
+                }
+                await friendDebt.save();
+
+                // Log Transaction for friend's HAND balance
+                const friendTxType = friendDebt.direction === 'owed_by_me' ? 'expense' : 'income';
+                const friendTxDesc = friendDebt.direction === 'owed_by_me' 
+                    ? `Paid debt to ${friendDebt.personName}`
+                    : `Received debt payment from ${friendDebt.personName}`;
+
+                const friendBalanceAgg = await Transaction.aggregate([
+                    { $match: { user: new mongoose.Types.ObjectId(friendDebt.user._id), wallet: null } },
+                    { $group: { _id: '$type', total: { $sum: '$amount' } } },
+                ]);
+                let friendCurrentBalance = 0;
+                friendBalanceAgg.forEach(r => {
+                    if (r._id === 'income') friendCurrentBalance += r.total;
+                    if (r._id === 'expense') friendCurrentBalance -= r.total;
+                });
+
+                const friendTx = await Transaction.create({
+                    user: friendDebt.user._id,
+                    type: friendTxType,
+                    amount,
+                    description: friendTxDesc,
+                    category: 'Debt Repayment',
+                    categoryIcon: 'check-circle',
+                    categoryColor: '#8b5cf6',
+                    date: new Date(),
+                    note: encrypt(`Payment synced from ${req.user.name}`),
+                    runningBalance: friendTxType === 'income' ? (friendCurrentBalance + amount) : (friendCurrentBalance - amount),
+                    relatedId: friendDebt._id,
+                    relatedType: 'Debt',
+                    wallet: null
+                });
+
+                if (io) {
+                    io.to(`user:${friendDebt.user._id.toString()}`).emit('update_debt', friendDebt);
+                    const friendFullTx = await Transaction.findById(friendTx._id).populate('wallet', 'name type color').lean();
+                    io.to(`user:${friendDebt.user._id.toString()}`).emit('new_transaction', decryptNote(friendFullTx));
+                    io.to(`user:${friendDebt.user._id.toString()}`).emit('wallet_updated'); // Trigger HAND balance refresh
+                    
+                    // Create persistent notification for the recipient
+                    await Notification.create({
+                        user: friendDebt.user._id,
+                        type: 'debt_payment',
+                        title: 'Debt Payment Received',
+                        message: `${req.user.name} has paid you ₱${amount.toLocaleString()}.`,
+                        data: { debtId: friendDebt._id, senderAvatar: req.user.avatarUrl }
+                    }).then(n => {
+                        io.to(`user:${n.user.toString()}`).emit('new_notification', n);
+                    });
+                }
+            }
+        }
+        // ─────────────────────────────────────────────────────────
 
         res.status(201).json({
             payment,
@@ -435,5 +555,90 @@ const sendDebtReminder = async (req, res) => {
         res.status(500).json({ error: 'Failed to send reminder.' });
     }
 };
+// ─────────────────────────────────────────────────────────────────────────────
+//  POST /api/debts/:id/respond
+//  Accept or reject a P2P debt request
+// ─────────────────────────────────────────────────────────────────────────────
+const respondDebtRequest = async (req, res) => {
+    try {
+        const { status } = req.body; // 'linked' (accepted) or 'rejected'
+        if (!['linked', 'rejected'].includes(status)) {
+            return res.status(400).json({ error: 'Invalid status. Use linked or rejected.' });
+        }
 
-module.exports = { getDebts, createDebt, updateDebt, deleteDebt, logPayment, getPayments, sendDebtReminder };
+        // The request ID is the ID of the original debt created by the OTHER user,
+        // which has linkedUserId = req.userId and syncStatus = 'pending'
+        const originalDebt = await Debt.findOne({ _id: req.params.id, linkedUserId: req.userId, syncStatus: 'pending' }).populate('user', 'name');
+        if (!originalDebt) return res.status(404).json({ error: 'Debt request not found or already processed.' });
+
+        const io = req.app.get('io');
+        originalDebt.syncStatus = status;
+
+        if (status === 'rejected') {
+            await originalDebt.save();
+            // Cleanup notification
+            await Notification.deleteMany({ 'data.debtId': new mongoose.Types.ObjectId(req.params.id) });
+            
+            if (io) io.to(`user:${originalDebt.user._id}`).emit('debt_request_rejected', originalDebt);
+            return res.json({ message: 'Debt request rejected.' });
+        }
+
+        // If accepted, we must create the counterpart debt for the CURRENT user
+        const counterpartDirection = originalDebt.direction === 'owed_to_me' ? 'owed_by_me' : 'owed_to_me';
+        
+        const myDebt = await Debt.create({
+            user: req.userId,
+            direction: counterpartDirection,
+            personName: originalDebt.user.name,
+            amount: originalDebt.amount,
+            description: originalDebt.description,
+            dateBorrowed: originalDebt.dateBorrowed,
+            dueDate: originalDebt.dueDate,
+            isInstallment: originalDebt.isInstallment,
+            monthlyPayment: originalDebt.monthlyPayment,
+            gracePeriodMonths: originalDebt.gracePeriodMonths,
+            penaltyRate: originalDebt.penaltyRate,
+            linkedUserId: originalDebt.user._id,
+            linkedDebtId: originalDebt._id,
+            syncStatus: 'linked'
+        });
+
+        // Update the original debt to link back
+        originalDebt.linkedDebtId = myDebt._id;
+        await originalDebt.save();
+
+        // Cleanup notification
+        await Notification.deleteMany({ 'data.debtId': new mongoose.Types.ObjectId(req.params.id) });
+
+        invalidatePrefixes('debt');
+        if (io) {
+            // Notify original sender it was accepted and updated
+            io.to(`user:${originalDebt.user._id}`).emit('debt_request_accepted', originalDebt);
+            // Notify me that a new debt was created in my account
+            io.to(`user:${req.userId}`).emit('new_debt', myDebt);
+            // Signal notification cleanup
+            io.to(`user:${req.userId}`).emit('notification_deleted', { debtId: req.params.id });
+        }
+
+        // Create notification for the SENDER to let them know it was accepted
+        const receiverUser = await mongoose.model('User').findById(req.userId).select('name avatarUrl');
+        await Notification.create({
+            user: originalDebt.user._id,
+            type: 'debt_accepted',
+            title: 'Debt Request Accepted',
+            message: `${receiverUser?.name || 'Your friend'} accepted your debt request for ₱${originalDebt.amount.toLocaleString()}.`,
+            data: { debtId: originalDebt._id, senderAvatar: receiverUser?.avatarUrl }
+        }).then(n => {
+            if (io) {
+                io.to(`user:${n.user.toString()}`).emit('new_notification', n);
+            }
+        });
+
+        res.json({ message: 'Debt request accepted successfully.', debt: myDebt });
+    } catch (err) {
+        console.error('[DEBT] respondDebtRequest error:', err.message);
+        res.status(500).json({ error: 'Failed to respond to debt request.' });
+    }
+};
+
+module.exports = { getDebts, createDebt, updateDebt, deleteDebt, logPayment, getPayments, sendDebtReminder, respondDebtRequest };

@@ -87,7 +87,7 @@ const EXTENDED_COLORS = [
 const isValidHex = (hex) => /^#([0-9A-Fa-f]{3}|[0-9A-Fa-f]{6})$/.test(hex);
 
 export default function AddSavingsGoalScreen({ navigation }) {
-    const { COLORS } = useTheme();
+    const COLORS = useTheme(state => state.COLORS);
     const styles = getStyles(COLORS);
 
     const [name, setName] = useState('');

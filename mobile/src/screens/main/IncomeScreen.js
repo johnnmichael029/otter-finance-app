@@ -5,7 +5,7 @@ import { useTheme } from '../../context/ThemeContext';
 import { spacing } from '../../theme/colors';
 
 export default function IncomeScreen() {
-    const { COLORS } = useTheme();
+    const COLORS = useTheme(state => state.COLORS);
     return (
         <SafeAreaView style={[styles.safe, { backgroundColor: COLORS.background }]}>
             <View style={styles.container}>

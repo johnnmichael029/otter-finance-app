@@ -1,6 +1,9 @@
 const Transaction = require('../models/transactionModel');
 const Budget = require('../models/budgetModel');
 const Wallet = require('../models/walletModel');
+const User = require('../models/userModel');
+const SavingsGoal = require('../models/savingsGoalModel');
+const SavingsTransfer = require('../models/savingsTransferModel');
 const Notification = require('../models/Notification');
 const { invalidatePrefixes } = require('../utils/cache');
 const { encrypt, decryptNote } = require('../utils/encryption');
@@ -44,6 +47,8 @@ const getTransactions = async (req, res) => {
                 .limit(parseInt(limit))
                 .populate('wallet', 'name type color')
                 .populate('sourceWallet', 'name type color')
+                .populate('relatedId', 'name color icon')
+                .populate('sourceRelatedId', 'name color icon')
                 .lean(),
             Transaction.countDocuments(filter),
         ]);
@@ -159,6 +164,15 @@ const getSummary = async (req, res) => {
             if (r._id === 'expense') netBalance -= r.total;
         });
 
+        // Subtract money transferred from HAND to a physical wallet
+        const handDeductionsAgg = await Transaction.aggregate([
+            { $match: { user: new mongoose.Types.ObjectId(req.userId), paymentSource: 'HAND', wallet: { $ne: null }, isArchived: { $ne: true } } },
+            { $group: { _id: null, total: { $sum: '$amount' } } }
+        ]);
+        if (handDeductionsAgg.length > 0) {
+            netBalance -= handDeductionsAgg[0].total;
+        }
+
         // Convert to Percentages for chart (relative to max in that range)
         const maxVal = Math.max(...incomeDist, ...expenseDist, 100); 
         const normalize = (dist) => dist.map(v => Math.round((v / maxVal) * 100));
@@ -187,7 +201,8 @@ const createTransaction = async (req, res) => {
             description, date, note,
             currency, originalAmount, exchangeRate, attachment,
             walletId, walletDeductAmount,
-            sourceWalletId, sourceWalletDeductAmount
+            sourceWalletId, sourceWalletDeductAmount,
+            sourceType   // 'savings_balance' | 'hand' | undefined
         } = req.body;
 
         if (!type || !amount || !category) {
@@ -205,6 +220,15 @@ const createTransaction = async (req, res) => {
             if (r._id === 'income') currentBalance += val;
             if (r._id === 'expense') currentBalance -= val;
         });
+
+        // Subtract money transferred from HAND to a physical wallet
+        const handDeductionsAgg = await Transaction.aggregate([
+            { $match: { user: req.userId ? new mongoose.Types.ObjectId(req.userId) : null, paymentSource: 'HAND', wallet: { $ne: null }, isArchived: { $ne: true } } },
+            { $group: { _id: null, total: { $sum: '$amount' } } }
+        ]);
+        if (handDeductionsAgg.length > 0) {
+            currentBalance -= handDeductionsAgg[0].total;
+        }
 
         const safeAmount = parseFloat(amount) || 0;
         // Running balance only matters for HAND transactions if this is a HAND transaction
@@ -230,7 +254,13 @@ const createTransaction = async (req, res) => {
             wallet: walletId || null,
             sourceWallet: sourceWalletId || null,
             sourceWalletAmount: null,
-            sourceWalletCurrency: null
+            sourceWalletCurrency: null,
+            // Store the source type label for display in history
+            paymentSource: sourceType === 'savings_balance'
+                ? 'Savings Balance'
+                : sourceWalletId
+                    ? null  // will be set from sourceWallet name
+                    : (sourceType === 'hand' ? 'HAND' : 'External Source'),
         });
 
         // ── Feature: SOURCE WALLET Deduction (for Income/Transfer logic) ──
@@ -257,8 +287,72 @@ const createTransaction = async (req, res) => {
             }
         }
 
+        // ── Feature: HAND as Source ───────────────────────────────
+        if (sourceType === 'hand') {
+            // Hand balance is dynamically computed, we just emit the updated event for frontend
+            // (we'll emit it at the end of the request)
+        }
+
+        // ── Feature: SAVINGS BALANCE as Source ───────────────────────────────
+        if (sourceType === 'savings_balance') {
+            const masterPot = await SavingsGoal.findOne({ user: req.userId, name: 'Savings Balance' });
+            if (masterPot) {
+                if (masterPot.currentAmount < safeAmount) {
+                    // Insufficient savings — still proceed but don't go negative
+                    masterPot.currentAmount = 0;
+                } else {
+                    masterPot.currentAmount -= safeAmount;
+                }
+                await masterPot.save();
+
+                transaction.sourceRelatedType = 'SavingsGoal';
+                transaction.sourceRelatedId = masterPot._id;
+                await transaction.save();
+
+                // Log in savings transfer history so it appears in the savings screen
+                const xfer = await SavingsTransfer.create({
+                    user: req.userId,
+                    direction: 'from_savings',
+                    amount: safeAmount,
+                    goal: masterPot._id,
+                    goalName: masterPot.name,
+                    wallet: walletId || null,
+                    walletAmount: walletDeductAmount != null ? Math.abs(parseFloat(walletDeductAmount)) : undefined,
+                    note: `Wallet Top-up: ${category}`,
+                    runningBalance: masterPot.currentAmount,
+                });
+
+                if (io) {
+                    io.to(`user:${req.userId}`).emit('update_savings_goal', masterPot);
+                    io.to(`user:${req.userId}`).emit('new_savings_transfer', xfer);
+                }
+            }
+        }
+
         // ── Feature: Wallet Balance Sync (Destination) ──────────────────────────
-        if (walletId) {
+        if (!walletId) {
+            // Update HAND balance (Dynamically computed)
+            const handAgg = await Transaction.aggregate([
+                { $match: { user: new mongoose.Types.ObjectId(req.userId), wallet: null, isArchived: { $ne: true } } },
+                { $group: { _id: '$type', total: { $sum: '$amount' } } }
+            ]);
+            let handBalance = 0;
+            handAgg.forEach(r => {
+                if (r._id === 'income') handBalance += r.total;
+                if (r._id === 'expense') handBalance -= r.total;
+            });
+
+            // Subtract money transferred from HAND to a physical wallet
+            const handDeductionsAgg = await Transaction.aggregate([
+                { $match: { user: new mongoose.Types.ObjectId(req.userId), paymentSource: 'HAND', wallet: { $ne: null }, isArchived: { $ne: true } } },
+                { $group: { _id: null, total: { $sum: '$amount' } } }
+            ]);
+            if (handDeductionsAgg.length > 0) {
+                handBalance -= handDeductionsAgg[0].total;
+            }
+
+            if (io) io.to(`user:${req.userId}`).emit('wallet_updated', { _id: 'main', balance: handBalance });
+        } else {
             const wallet = await Wallet.findOne({ _id: walletId, userId: req.userId });
             if (wallet) {
                 const fiatTypes = ['Debit', 'Credit', 'Cash', 'E-Wallet'];
@@ -309,6 +403,7 @@ const createTransaction = async (req, res) => {
         }
 
         invalidatePrefixes('transaction');
+        invalidatePrefixes('savings');
 
         // ── Feature #7: Budget Alerter ──────────────────────────────
         if (type === 'expense') {
@@ -355,6 +450,7 @@ const updateTransaction = async (req, res) => {
         }
 
         invalidatePrefixes('transaction');
+        invalidatePrefixes('savings');
 
         const decrypted = decryptNote(transaction.toObject());
 
@@ -384,43 +480,131 @@ const deleteTransaction = async (req, res) => {
             return res.status(404).json({ error: 'Transaction not found.' });
         }
 
-        // ── Feature: Wallet Balance Reversal Sync ──────────────────
+        // Block manual revert for Debt transactions
+        if (transaction.relatedType === 'Debt') {
+            return res.status(400).json({ error: 'Debt-related transactions cannot be reverted from history. Please manage them in the Debt screen.' });
+        }
+
+        // ── Feature: Wallet Balance Reversal Sync (Smart Revert) ──
+        const io = req.app.get('io');
+        const user = await User.findById(req.userId);
+
+        // 1. Revert Destination Wallet
         if (transaction.wallet) {
             const wallet = await Wallet.findOne({ _id: transaction.wallet, userId: req.userId });
             if (wallet) {
                 const isCredit = wallet.type === 'Credit';
-                const amount = transaction.amount;
+                const revAmount = transaction.walletAmount != null ? transaction.walletAmount : transaction.amount;
                 
-                // REVERSE the logic
                 if (isCredit) {
-                    // If we delete a Credit expense, the owed balance DECREASES
-                    if (transaction.type === 'expense') {
-                        wallet.balance -= amount;
-                    } else {
-                        wallet.balance += amount;
-                    }
+                    if (transaction.type === 'expense') wallet.balance -= revAmount;
+                    else wallet.balance += revAmount;
                 } else {
-                    // Normal wallet: deleting an expense adds money back
-                    if (transaction.type === 'expense') {
-                        wallet.balance += amount;
-                    } else {
-                        wallet.balance -= amount;
-                    }
+                    if (transaction.type === 'expense') wallet.balance += revAmount;
+                    else wallet.balance -= revAmount;
                 }
 
                 if (!isCredit && wallet.balance < 0) wallet.balance = 0;
                 await wallet.save();
+                if (io) io.to(`user:${req.userId}`).emit('wallet_updated', wallet.toObject());
+            }
+        } else {
+            // Revert "HAND" (User Balance) - Hand balance is dynamically aggregated.
+            // It will be re-calculated below and emitted.
+        }
 
-                const io = req.app.get('io');
+        // 2. Revert Source Wallet (for Transfers/Income Sources)
+        if (transaction.sourceWallet) {
+            const sWallet = await Wallet.findOne({ _id: transaction.sourceWallet, userId: req.userId });
+            if (sWallet) {
+                const srcRevAmount = transaction.sourceWalletAmount != null ? transaction.sourceWalletAmount : transaction.amount;
+                sWallet.balance += srcRevAmount;
+                await sWallet.save();
+                if (io) io.to(`user:${req.userId}`).emit('wallet_updated', sWallet.toObject());
+            }
+        } else if (transaction.sourceWalletAmount || transaction.paymentSource === 'HAND') {
+            // This would be the case if "HAND" was used as a source wallet
+            // Dynamically computed, no need to modify user.balance
+        }
+
+        // 3. Revert Savings Goal (if linked)
+        if (transaction.relatedType === 'SavingsGoal' && transaction.relatedId) {
+            const goal = await SavingsGoal.findOne({ _id: transaction.relatedId, user: req.userId });
+            if (goal) {
+                // If it was an expense (to savings), we remove money from goal
+                // If it was income (from savings), we add money back to goal
+                if (transaction.type === 'expense') {
+                    goal.currentAmount = Math.max(0, goal.currentAmount - transaction.amount);
+                } else {
+                    goal.currentAmount += transaction.amount;
+                }
+                await goal.save();
+
+                // Delete associated SavingsTransfer record to clean up history
+                // We try to find it by related criteria since we don't have its ID directly on the transaction
+                await SavingsTransfer.deleteOne({
+                    user: req.userId,
+                    goal: goal._id,
+                    amount: transaction.amount,
+                    createdAt: { $gte: new Date(transaction.createdAt.getTime() - 5000), $lte: new Date(transaction.createdAt.getTime() + 5000) }
+                });
+
                 if (io) {
-                    io.to(`user:${req.userId}`).emit('wallet_updated', wallet.toObject());
+                    io.to(`user:${req.userId}`).emit('update_savings_goal', goal);
+                    io.to(`user:${req.userId}`).emit('delete_savings_transfer', { goalId: goal._id, amount: transaction.amount });
                 }
             }
         }
 
-        invalidatePrefixes('transaction');
+        // 4. Revert Source Savings Goal (if linked)
+        if (transaction.sourceRelatedType === 'SavingsGoal' && transaction.sourceRelatedId) {
+            const sGoal = await SavingsGoal.findOne({ _id: transaction.sourceRelatedId, user: req.userId });
+            if (sGoal) {
+                // Since this was a source goal, money ALWAYS left it originally.
+                // Reverting it means we MUST add it back, regardless of transaction type.
+                sGoal.currentAmount += transaction.amount;
+                await sGoal.save();
 
-        const io = req.app.get('io');
+                // Delete associated SavingsTransfer record to clean up history
+                await SavingsTransfer.deleteOne({
+                    user: req.userId,
+                    goal: sGoal._id,
+                    amount: transaction.amount,
+                    createdAt: { $gte: new Date(transaction.createdAt.getTime() - 5000), $lte: new Date(transaction.createdAt.getTime() + 5000) }
+                });
+
+                if (io) {
+                    io.to(`user:${req.userId}`).emit('update_savings_goal', sGoal);
+                    io.to(`user:${req.userId}`).emit('delete_savings_transfer', { goalId: sGoal._id, amount: transaction.amount });
+                }
+            }
+        }
+
+        // Re-calculate and emit dynamic HAND balance
+        const handAgg = await Transaction.aggregate([
+            { $match: { user: new mongoose.Types.ObjectId(req.userId), wallet: null, isArchived: { $ne: true } } },
+            { $group: { _id: '$type', total: { $sum: '$amount' } } }
+        ]);
+        let handBalance = 0;
+        handAgg.forEach(r => {
+            if (r._id === 'income') handBalance += r.total;
+            if (r._id === 'expense') handBalance -= r.total;
+        });
+
+        // Subtract money transferred from HAND to a physical wallet
+        const handDeductionsAgg = await Transaction.aggregate([
+            { $match: { user: new mongoose.Types.ObjectId(req.userId), paymentSource: 'HAND', wallet: { $ne: null }, isArchived: { $ne: true } } },
+            { $group: { _id: null, total: { $sum: '$amount' } } }
+        ]);
+        if (handDeductionsAgg.length > 0) {
+            handBalance -= handDeductionsAgg[0].total;
+        }
+
+        if (io) io.to(`user:${req.userId}`).emit('wallet_updated', { _id: 'main', balance: handBalance });
+
+        invalidatePrefixes('transaction');
+        invalidatePrefixes('savings');
+
         if (io) {
             io.to(`user:${req.userId}`).emit('delete_transaction', { _id: transaction._id });
         }
@@ -700,6 +884,7 @@ const archiveTransaction = async (req, res) => {
         await transaction.save();
 
         invalidatePrefixes('transaction');
+        invalidatePrefixes('savings');
 
         const io = req.app.get('io');
         if (io) {

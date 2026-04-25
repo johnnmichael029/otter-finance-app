@@ -13,7 +13,7 @@ import { spacing, radius } from '../../theme/colors';
 
 export default function BiometricLockScreen() {
     const { authenticate, biometricType, isLocked } = useBiometric();
-    const { COLORS } = useTheme();
+    const COLORS = useTheme(state => state.COLORS);
     const { logout } = useAuth();
 
     const [error, setError] = useState('');

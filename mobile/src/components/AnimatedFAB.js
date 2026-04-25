@@ -30,7 +30,7 @@ const AnimatedFAB = ({ navigation, isSavingsMode }) => {
     const hoverExpense = useRef(new Animated.Value(1)).current;
     const hoverGoal = useRef(new Animated.Value(1)).current;
 
-    const { COLORS } = useTheme();
+    const COLORS = useTheme(state => state.COLORS);
     const { hapticsEnabled, savingsFabStyle } = useAuth();
     
     // Apply modal preference universally across all tabs

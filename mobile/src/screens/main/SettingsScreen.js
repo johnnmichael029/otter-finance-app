@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import {
     View, Text, StyleSheet, TouchableOpacity,
     Switch, ScrollView, Alert, ActivityIndicator,
-    TextInput
+    TextInput, Image
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -12,12 +12,14 @@ import { useTheme } from '../../context/ThemeContext';
 import { useAuth } from '../../context/AuthContext';
 import { useFinanceStore } from '../../store/financeStore';
 import { spacing, radius } from '../../theme/colors';
+import { API_BASE } from '../../store/authStore';
 import {
     get2FAStatus, toggle2FA, getCurrencyList,
     updateProfile as apiUpdateProfile, getTransactions,
     changePassword as apiChangePassword,
     wipeData as apiWipeData,
-    deleteAccount as apiDeleteAccount
+    deleteAccount as apiDeleteAccount,
+    getProfile as apiGetProfile
 } from '../../api/api';
 import { triggerHaptic } from '../../utils/haptics';
 import * as FileSystem from 'expo-file-system/legacy';
@@ -28,9 +30,11 @@ import CustomAlertModal from '../../components/CustomAlertModal';
 import VerifyIdentityModal from '../../components/VerifyIdentityModal';
 
 export default function SettingsScreen({ navigation }) {
-    const { COLORS, isDarkMode, toggleTheme } = useTheme();
+    const COLORS = useTheme(state => state.COLORS);
+    const isDarkMode = useTheme(state => state.isDarkMode);
+    const toggleTheme = useTheme(state => state.toggleTheme);
     const { userInfo, updateLocalUser, logout, hapticsEnabled, toggleHaptics, savingsFabStyle, toggleSavingsFabStyle } = useAuth();
-    
+
 
     const [currencyModalVisible, setCurrencyModalVisible] = useState(false);
     const [currencyList, setCurrencyList] = useState([]);
@@ -70,11 +74,15 @@ export default function SettingsScreen({ navigation }) {
     const [twoFAModal, setTwoFAModal] = useState({ visible: false, title: '', message: '', type: 'info' });
 
     useEffect(() => {
-        fetch2FAStatus();
+        fetchInitialData();
     }, []);
 
-    const fetch2FAStatus = async () => {
+    const fetchInitialData = async () => {
         try {
+            // Refresh user info to ensure createdAt and other fields are up to date
+            const fullProfile = await apiGetProfile();
+            await updateLocalUser(fullProfile);
+
             const res = await get2FAStatus();
             setTwoFAEnabled(res.twoFactorEnabled);
 
@@ -418,15 +426,32 @@ export default function SettingsScreen({ navigation }) {
             <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 80 }}>
                 {/* Profile card */}
                 <LinearGradient colors={['#E91E8C', '#7b0f4e']} style={styles.profileCard} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }}>
-                    <View style={styles.avatarCircle}>
-                        <Text style={styles.avatarText}>
-                            {userInfo?.name?.charAt(0)?.toUpperCase() || '?'}
-                        </Text>
-                    </View>
-                    <View>
-                        <Text style={styles.profileName}>{userInfo?.name || 'OTTER User'}</Text>
-                        <Text style={styles.profileEmail}>{userInfo?.email || ''}</Text>
-                    </View>
+                    <TouchableOpacity onPress={() => navigation.navigate('ProfileScreen')} style={{ flexDirection: 'row', alignItems: 'center', flex: 1 }}>
+                        <View style={styles.avatarCircle}>
+                            {userInfo?.avatarUrl ? (
+                                <Image
+                                    source={{ uri: userInfo.avatarUrl.startsWith('http') ? userInfo.avatarUrl : `${API_BASE.replace('/api', '')}/${userInfo.avatarUrl}` }}
+                                    style={styles.avatarImg}
+                                />
+                            ) : (
+                                <Text style={styles.avatarText}>
+                                    {userInfo?.name?.charAt(0)?.toUpperCase() || '?'}
+                                </Text>
+                            )}
+                        </View>
+                        <View style={{ flex: 1 }}>
+                            <Text style={styles.profileName}>{userInfo?.name || 'OTTER User'}</Text>
+                            <Text style={styles.profileEmail}>
+                                {userInfo?.otterTag ? userInfo.otterTag : userInfo?.email || ''}
+                            </Text>
+                            <Text style={styles.profileJoined}>
+                                Member since {userInfo?.createdAt ? new Date(userInfo.createdAt).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' }) : '—'}
+                            </Text>
+                        </View>
+                        <View style={{ backgroundColor: 'rgba(255,255,255,0.2)', borderRadius: 20, padding: 6 }}>
+                            <Feather name="chevron-right" size={18} color="#fff" />
+                        </View>
+                    </TouchableOpacity>
                 </LinearGradient>
 
                 {/* ── General Settings ─────────────────────────────────────── */}
@@ -652,9 +677,16 @@ export default function SettingsScreen({ navigation }) {
                     />
                 </View>
 
-                {/* ── Sign Out ─────────────────────────────────────────────── */}
+                {/* ── Account ──────────────────────────────────────────────── */}
                 <View style={[styles.card, { backgroundColor: COLORS.surface, marginTop: 12 }]}>
                     <SectionHeader title="ACCOUNT" icon="account-circle" />
+                    <SettingRow
+                        icon="account-edit"
+                        label="My Profile"
+                        sublabel={userInfo?.otterTag ? `Tag: ${userInfo.otterTag}` : 'Set your @OtterTag and personal info'}
+                        right={<Feather name="chevron-right" size={18} color={COLORS.textMuted} />}
+                        onPress={() => navigation.navigate('ProfileScreen')}
+                    />
                     <SettingRow
                         icon="logout"
                         iconColor={COLORS.danger}
@@ -925,10 +957,14 @@ const styles = StyleSheet.create({
         width: 52, height: 52, borderRadius: 26,
         backgroundColor: 'rgba(255,255,255,0.25)',
         justifyContent: 'center', alignItems: 'center',
+        marginRight: 14,
+        overflow: 'hidden',
     },
+    avatarImg: { width: '100%', height: '100%' },
     avatarText: { fontSize: 22, fontWeight: '900', color: '#fff' },
     profileName: { fontSize: 16, fontWeight: '800', color: '#fff' },
     profileEmail: { fontSize: 12, color: 'rgba(255,255,255,0.6)', marginTop: 2 },
+    profileJoined: { fontSize: 10, color: 'rgba(255,255,255,0.4)', marginTop: 4, fontWeight: '600' },
     card: {
         marginHorizontal: spacing.lg, borderRadius: radius.xl,
         overflow: 'hidden', paddingTop: 4, paddingBottom: 4,

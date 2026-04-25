@@ -1,5 +1,7 @@
 const User = require('../models/userModel');
 const { convertUserFinances } = require('../services/currencyConversionService');
+const fs = require('fs');
+const path = require('path');
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  GET /api/users/me
@@ -11,9 +13,11 @@ const getProfile = async (req, res) => {
             _id: req.user._id,
             name: req.user.name,
             email: req.user.email,
+            otterTag: req.user.otterTag,
             currency: req.user.currency,
             avatarUrl: req.user.avatarUrl,
             isOnboarded: req.user.isOnboarded,
+            occupation: req.user.occupation,
             pushToken: req.user.pushToken,
             createdAt: req.user.createdAt,
         });
@@ -26,12 +30,15 @@ const getProfile = async (req, res) => {
 // ─────────────────────────────────────────────────────────────────────────────
 const updateProfile = async (req, res) => {
     try {
-        const { name, currency, avatarUrl, isOnboarded, occupation } = req.body;
+        const { name, currency, avatarUrl, isOnboarded, occupation, otterTag } = req.body;
         const updates = {};
         if (name) updates.name = name;
         if (avatarUrl !== undefined) updates.avatarUrl = avatarUrl;
         if (isOnboarded !== undefined) updates.isOnboarded = isOnboarded;
         if (occupation) updates.occupation = occupation;
+        if (otterTag) {
+            updates.otterTag = otterTag.startsWith('@') ? otterTag.toLowerCase() : `@${otterTag.toLowerCase()}`;
+        }
 
         // ── Handle Currency Migration ──────────────────────────────────────────
         if (currency && currency !== req.user.currency) {
@@ -59,6 +66,9 @@ const updateProfile = async (req, res) => {
 
         res.json(user);
     } catch (err) {
+        if (err.code === 11000 && err.keyPattern && err.keyPattern.otterTag) {
+            return res.status(400).json({ error: 'This Otter Tag is already taken. Please choose another one.' });
+        }
         console.error('[USER] updateProfile error:', err.message);
         res.status(500).json({ error: 'Failed to update profile.' });
     }
@@ -87,11 +97,14 @@ const savePushToken = async (req, res) => {
 
 const completeOnboarding = async (req, res) => {
     try {
-        const { name, currency, occupation } = req.body;
+        const { name, currency, occupation, otterTag } = req.body;
         const updates = { isOnboarded: true };
 
         if (name) updates.name = name;
         if (occupation) updates.occupation = occupation;
+        if (otterTag) {
+            updates.otterTag = otterTag.startsWith('@') ? otterTag.toLowerCase() : `@${otterTag.toLowerCase()}`;
+        }
 
         // ── Handle Currency Migration ──────────────────────────────────────────
         // If they already have data (legacy user) and choose a different currency
@@ -114,8 +127,30 @@ const completeOnboarding = async (req, res) => {
 
         res.json(user);
     } catch (err) {
+        if (err.code === 11000 && err.keyPattern && err.keyPattern.otterTag) {
+            return res.status(400).json({ error: 'This Otter Tag is already taken. Please choose another one.' });
+        }
         console.error('[USER] completeOnboarding error:', err.message);
         res.status(500).json({ error: 'Failed to complete onboarding.' });
+    }
+};
+
+const checkTagAvailability = async (req, res) => {
+    try {
+        const { tag } = req.query;
+        if (!tag) return res.status(400).json({ error: 'Tag is required.' });
+
+        const formattedTag = tag.startsWith('@') ? tag.toLowerCase() : `@${tag.toLowerCase()}`;
+        
+        const existing = await User.findOne({ 
+            otterTag: formattedTag,
+            _id: { $ne: req.userId } // exclude current user if they are checking their own tag
+        });
+
+        res.json({ available: !existing });
+    } catch (err) {
+        console.error('[USER] checkTagAvailability error:', err.message);
+        res.status(500).json({ error: 'Failed to check availability.' });
     }
 };
 
@@ -224,6 +259,38 @@ const deleteAccount = async (req, res) => {
     }
 };
 
+const uploadAvatar = async (req, res) => {
+    try {
+        if (!req.file) {
+            return res.status(400).json({ error: 'Please upload an image.' });
+        }
+
+        const user = await User.findById(req.userId);
+        
+        // Delete old avatar if it exists and is local
+        if (user.avatarUrl && user.avatarUrl.startsWith('uploads/')) {
+            const oldPath = path.join(__dirname, '..', user.avatarUrl);
+            if (fs.existsSync(oldPath)) {
+                fs.unlinkSync(oldPath);
+            }
+        }
+
+        // Save relative path to DB
+        // Use forward slashes for URL consistency
+        const relativePath = req.file.path.replace(/\\/g, '/');
+        user.avatarUrl = relativePath;
+        await user.save();
+
+        res.json({ 
+            message: 'Avatar updated successfully.',
+            avatarUrl: relativePath 
+        });
+    } catch (err) {
+        console.error('[USER] uploadAvatar error:', err.message);
+        res.status(500).json({ error: 'Failed to upload avatar.' });
+    }
+};
+
 module.exports = { 
     getProfile, 
     updateProfile, 
@@ -231,5 +298,7 @@ module.exports = {
     completeOnboarding, 
     changePassword, 
     wipeFinancialData, 
-    deleteAccount 
+    deleteAccount,
+    uploadAvatar,
+    checkTagAvailability
 };

@@ -17,7 +17,8 @@ import { spacing, radius, colors } from '../../theme/colors';
 const screenWidth = Dimensions.get('window').width;
 
 export default function AnalyticsScreen({ navigation }) {
-    const { COLORS, isDarkMode } = useTheme();
+    const COLORS = useTheme(state => state.COLORS);
+    const isDarkMode = useTheme(state => state.isDarkMode);
     const styles = getStyles(COLORS);
     const [data, setData] = useState(null);
     const [loading, setLoading] = useState(true);

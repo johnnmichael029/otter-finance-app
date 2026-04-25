@@ -11,6 +11,7 @@ const {
     logPayment,
     getPayments,
     sendDebtReminder,
+    respondDebtRequest
 } = require('../controllers/debtController');
 
 // All debt routes require authentication
@@ -36,5 +37,8 @@ router.get('/:id/payments', getPayments);
 
 // POST /api/debts/:id/remind — send push notification reminder
 router.post('/:id/remind', sendDebtReminder);
+
+// POST /api/debts/:id/respond — accept/reject a P2P debt request
+router.post('/:id/respond', respondDebtRequest);
 
 module.exports = router;

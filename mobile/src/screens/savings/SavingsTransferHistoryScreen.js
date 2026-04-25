@@ -2,17 +2,18 @@ import React, { useState, useCallback, useEffect } from 'react';
 import {
     View, Text, StyleSheet, TouchableOpacity,
     ActivityIndicator, RefreshControl, Modal, TouchableWithoutFeedback,
-    TextInput
+    TextInput, Alert
 } from 'react-native';
 import { FlashList } from '@shopify/flash-list';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Feather } from '@expo/vector-icons';
 import { useTheme } from '../../context/ThemeContext';
 import { useAuth } from '../../context/AuthContext';
-import { getSavingsTransfers } from '../../api/api';
+import { getSavingsTransfers, deleteTransaction } from '../../api/api';
 import { spacing, radius } from '../../theme/colors';
 import Skeleton from '../../components/Skeleton';
 import { useDebounce } from '../../utils/debounce';
+import CustomAlertModal from '../../components/CustomAlertModal';
 
 const formatCurrency = (amount, currency = 'PHP') =>
     new Intl.NumberFormat('en-PH', { style: 'currency', currency }).format(amount);
@@ -36,7 +37,7 @@ const formatDate = (dateString) => {
 };
 
 export default function SavingsTransferHistoryScreen({ navigation }) {
-    const { COLORS } = useTheme();
+    const COLORS = useTheme(state => state.COLORS);
     const { userInfo } = useAuth();
     const styles = getStyles(COLORS);
 
@@ -48,6 +49,9 @@ export default function SavingsTransferHistoryScreen({ navigation }) {
     const [hasMore, setHasMore] = useState(true);
     const [activeTab, setActiveTab] = useState('All');
     const [search, setSearch] = useState('');
+    const [alertConfig, setAlertConfig] = useState({
+        visible: false, title: '', message: '', type: 'confirm', onConfirm: () => { }
+    });
     const debouncedSearch = useDebounce(search, 400);
 
     // Modal State
@@ -58,7 +62,7 @@ export default function SavingsTransferHistoryScreen({ navigation }) {
         setLoading(true);
         try {
             const params = { limit: 20, page: 1 };
-            if (activeTab === 'In') params.type = 'in'; // Assuming backend handles this or we filter client side if not
+            if (activeTab === 'In') params.type = 'in';
             if (activeTab === 'Out') params.type = 'out';
 
             const res = await getSavingsTransfers(params);
@@ -73,7 +77,33 @@ export default function SavingsTransferHistoryScreen({ navigation }) {
         }
     }, [activeTab]);
 
-    useEffect(() => { load(); }, [load]);
+    useEffect(() => {
+        load();
+
+        // Register Socket Listeners
+        const { getSocket } = require('../../utils/socket');
+        const socket = getSocket();
+        
+        if (socket) {
+            const handleDelete = (data) => {
+                // Remove the transfer from the list instantly
+                setTransfers(prev => prev.filter(t => 
+                    !(t.goal === data.goalId && t.amount === data.amount)
+                ));
+            };
+            const handleUpdate = () => load(); // Refresh list on goal updates
+
+            socket.on('delete_savings_transfer', handleDelete);
+            socket.on('update_savings_goal', handleUpdate);
+            socket.on('new_savings_transfer', handleUpdate);
+
+            return () => {
+                socket.off('delete_savings_transfer', handleDelete);
+                socket.off('update_savings_goal', handleUpdate);
+                socket.off('new_savings_transfer', handleUpdate);
+            };
+        }
+    }, [load]);
 
     const fetchMore = async () => {
         if (!hasMore || loadingMore) return;
@@ -130,6 +160,40 @@ export default function SavingsTransferHistoryScreen({ navigation }) {
         const icon = isDeposit ? 'plus-circle' : 'minus-circle';
         const label = t.direction === 'to_savings' ? 'Saved to Pot' : (isGoal ? 'Goal Transfer' : (t.direction === 'income' ? 'Savings Income' : 'Withdrawal'));
 
+        const handleLongPress = () => {
+            if (!t.relatedTransaction) {
+                return setAlertConfig({
+                    visible: true,
+                    title: 'Notice',
+                    message: 'This record cannot be reverted automatically.',
+                    type: 'info',
+                    onConfirm: () => setAlertConfig(p => ({ ...p, visible: false }))
+                });
+            }
+
+            setAlertConfig({
+                visible: true,
+                title: 'Smart Revert',
+                message: `Undo this transfer of ${formatCurrency(t.amount, userInfo?.currency)}? All balances will be restored.`,
+                type: 'confirm',
+                onConfirm: async () => {
+                    try {
+                        setAlertConfig(p => ({ ...p, visible: false }));
+                        const txId = typeof t.relatedTransaction === 'object' ? t.relatedTransaction._id : t.relatedTransaction;
+                        await deleteTransaction(txId);
+                    } catch (e) {
+                        setAlertConfig({
+                            visible: true,
+                            title: 'Error',
+                            message: 'Failed to revert transaction: ' + e.message,
+                            type: 'error',
+                            onConfirm: () => setAlertConfig(p => ({ ...p, visible: false }))
+                        });
+                    }
+                }
+            });
+        };
+
         return (
             <TouchableOpacity
                 style={[styles.row, { backgroundColor: COLORS.surface }]}
@@ -138,6 +202,7 @@ export default function SavingsTransferHistoryScreen({ navigation }) {
                     setSelectedTransfer(t);
                     setModalVisible(true);
                 }}
+                onLongPress={handleLongPress}
             >
                 <View style={[styles.rowIcon, { backgroundColor: color + '15' }]}>
                     <Feather name={icon} size={18} color={color} />
@@ -333,6 +398,15 @@ export default function SavingsTransferHistoryScreen({ navigation }) {
                     </View>
                 </TouchableWithoutFeedback>
             </Modal>
+
+            <CustomAlertModal
+                visible={alertConfig.visible}
+                onClose={() => setAlertConfig(p => ({ ...p, visible: false }))}
+                title={alertConfig.title}
+                message={alertConfig.message}
+                type={alertConfig.type}
+                onConfirm={alertConfig.onConfirm}
+            />
         </SafeAreaView>
     );
 }

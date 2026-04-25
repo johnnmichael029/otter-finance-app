@@ -58,17 +58,31 @@ export const logDebtPayment = (id, data) =>
 export const getDebtPayments = (id) =>
     axios.get(`${API_BASE}/debts/${id}/payments`).then(r => r.data);
 
+export const remindDebt = (id) =>
+    axios.post(`${API_BASE}/debts/${id}/remind`).then(r => r.data);
+
+export const respondDebtRequest = (id, status) =>
+    axios.post(`${API_BASE}/debts/${id}/respond`, { status }).then(r => r.data);
+
 export const getProfile = () =>
     axios.get(`${API_BASE}/users/me`).then(r => r.data);
 
 export const updateProfile = (data) =>
     axios.patch(`${API_BASE}/users/me`, data).then(r => r.data);
 
+export const uploadAvatar = (formData) =>
+    axios.post(`${API_BASE}/users/avatar`, formData, {
+        headers: { 'Content-Type': 'multipart/form-data' }
+    }).then(r => r.data);
+
 export const savePushToken = (pushToken) =>
     axios.post(`${API_BASE}/users/push-token`, { pushToken }).then(r => r.data);
 
 export const completeOnboarding = (data) =>
     axios.post(`${API_BASE}/users/complete-onboarding`, data).then(r => r.data);
+
+export const checkTagAvailability = (tag) =>
+    axios.get(`${API_BASE}/users/check-tag`, { params: { tag } }).then(r => r.data);
 
 // ── Security & Data Management ──────────────────────────────────────────────
 
@@ -267,4 +281,32 @@ export const updateCategory = (id, data) =>
 
 export const deleteCategory = (id) =>
     axios.delete(`${API_BASE}/categories/${id}`).then(r => r.data);
+
+// ── Friends & Connections ─────────────────────────────────────────────────────
+
+export const searchFriends = (q) =>
+    axios.get(`${API_BASE}/friends/search`, { params: { q } }).then(r => r.data);
+
+export const sendFriendRequest = (receiverId) =>
+    axios.post(`${API_BASE}/friends/request`, { receiverId }).then(r => r.data);
+
+export const getFriendRequests = () =>
+    axios.get(`${API_BASE}/friends/requests`).then(r => r.data);
+
+export const respondFriendRequest = (requestId, status) =>
+    axios.post(`${API_BASE}/friends/respond`, { requestId, status }).then(r => r.data);
+
+export const getFriends = () =>
+    axios.get(`${API_BASE}/friends`).then(r => r.data);
+
+// ── Chat ──────────────────────────────────────────────────────────────────────
+
+export const getConversation = (friendId, page = 1) =>
+    axios.get(`${API_BASE}/chat/${friendId}`, { params: { page } }).then(r => r.data);
+
+export const sendMessage = (friendId, content) =>
+    axios.post(`${API_BASE}/chat/${friendId}/send`, { content }).then(r => r.data);
+
+export const markAsRead = (friendId) =>
+    axios.patch(`${API_BASE}/chat/${friendId}/read`).then(r => r.data);
 

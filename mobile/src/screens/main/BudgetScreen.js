@@ -57,7 +57,7 @@ const PRESET_CATEGORIES = [
 ];
 
 export default function BudgetScreen() {
-    const { COLORS } = useTheme();
+    const COLORS = useTheme(state => state.COLORS);
     const { userInfo } = useAuth();
     const styles = getStyles(COLORS);
 
@@ -112,7 +112,28 @@ export default function BudgetScreen() {
         spent: b.spent || 0
     }));
 
-    useEffect(() => { load(); }, [load, selectedMonth]);
+    useEffect(() => {
+        load();
+
+        // Register Socket Listeners for Real-time Budget Progress Updates
+        const { getSocket } = require('../../utils/socket');
+        const socket = getSocket();
+        
+        if (socket) {
+            const handleRefresh = () => {
+                console.log('[SOCKET] Budget refresh triggered');
+                load();
+            };
+            
+            socket.on('new_transaction', handleRefresh);
+            socket.on('delete_transaction', handleRefresh);
+
+            return () => {
+                socket.off('new_transaction', handleRefresh);
+                socket.off('delete_transaction', handleRefresh);
+            };
+        }
+    }, [load, selectedMonth]);
 
     const handleSave = async () => {
         const cat = useCustom ? form.customCategory.trim() : form.category;

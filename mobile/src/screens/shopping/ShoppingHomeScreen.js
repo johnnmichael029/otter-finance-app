@@ -24,7 +24,7 @@ const PM_ICONS = { cash: 'cash', gcash: 'cellphone', card: 'credit-card', other:
 const STATUS_COLORS = { completed: '#22c55e', cancelled: '#ef4444', active: '#f59e0b' };
 
 export default function ShoppingHomeScreen({ navigation }) {
-    const { COLORS } = useTheme();
+    const COLORS = useTheme(state => state.COLORS);
     const { userInfo } = useAuth();
     const styles = getStyles(COLORS);
 

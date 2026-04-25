@@ -125,7 +125,7 @@ const WalletSelector = ({
                     return (
                         <TouchableOpacity
                             key={wallet._id}
-                            onPress={() => onSelect(wallet)}
+                            onPress={() => isSelected ? onSelect(null) : onSelect(wallet)}
                             style={[
                                 styles.card,
                                 {

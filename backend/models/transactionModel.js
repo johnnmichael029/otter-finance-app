@@ -97,6 +97,16 @@ const transactionSchema = new mongoose.Schema({
         enum: ['Debt', 'SavingsGoal', null],
         default: null,
     },
+    sourceRelatedId: {
+        type: mongoose.Schema.Types.ObjectId,
+        refPath: 'sourceRelatedType',
+        default: null,
+    },
+    sourceRelatedType: {
+        type: String,
+        enum: ['Debt', 'SavingsGoal', null],
+        default: null,
+    },
 
     attachment: {
         type: String, // URL/Path to the receipt photo
@@ -128,6 +138,10 @@ const transactionSchema = new mongoose.Schema({
         default: null,
     },
     sourceWalletCurrency: {
+        type: String,
+        default: null,
+    },
+    paymentSource: {
         type: String,
         default: null,
     },

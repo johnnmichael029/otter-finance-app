@@ -14,7 +14,7 @@ const PIN_LENGTH = 6;
 
 export default function PinSetupScreen({ navigation, route }) {
     const { setupPin } = useSecurity();
-    const { COLORS } = useTheme();
+    const COLORS = useTheme(state => state.COLORS);
 
     // 'enter' → 'confirm' → 'done'
     const [step, setStep] = useState('enter');

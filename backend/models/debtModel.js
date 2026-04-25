@@ -90,6 +90,23 @@ const debtSchema = new mongoose.Schema({
         default: false,
     },
 
+    // ── Multiplayer / P2P Linked Debts ────────────────────────────────────────
+    linkedUserId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User',
+        default: null,
+    },
+    linkedDebtId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Debt',
+        default: null,
+    },
+    syncStatus: {
+        type: String,
+        enum: ['none', 'pending', 'linked', 'rejected'],
+        default: 'none',
+    },
+
 }, { timestamps: true });
 
 // ── Virtual: outstanding principal (before interest) ──────────────────────────

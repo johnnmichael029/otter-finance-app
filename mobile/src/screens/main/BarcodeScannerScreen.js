@@ -16,7 +16,7 @@ const OPEN_FOOD_API = 'https://world.openfoodfacts.org/api/v0/product/';
 const UPC_API = 'https://api.upcitemdb.com/prod/trial/lookup?upc=';
 
 export default function BarcodeScannerScreen({ navigation }) {
-    const { COLORS } = useTheme();
+    const COLORS = useTheme(state => state.COLORS);
     const [permission, requestPermission] = useCameraPermissions();
     const [scanned, setScanned] = useState(false);
     const [loading, setLoading] = useState(false);

@@ -39,7 +39,7 @@ const COLORS_PALETTE = [
 ];
 
 export default function ManageCategoriesScreen({ navigation }) {
-    const { COLORS } = useTheme();
+    const COLORS = useTheme(state => state.COLORS);
     const styles = getStyles(COLORS);
 
     const [categories, setCategories] = useState([]);

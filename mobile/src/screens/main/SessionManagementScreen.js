@@ -12,7 +12,7 @@ import { spacing, radius } from '../../theme/colors';
 import CustomAlertModal from '../../components/CustomAlertModal';
 
 export default function SessionManagementScreen({ navigation }) {
-    const { COLORS } = useTheme();
+    const COLORS = useTheme(state => state.COLORS);
     const [sessions, setSessions] = useState([]);
     const [loading, setLoading] = useState(true);
     const [revokingId, setRevokingId] = useState(null);

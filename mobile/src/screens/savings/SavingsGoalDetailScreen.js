@@ -39,7 +39,8 @@ const getDaysLeft = (deadline) => {
 
 export default function SavingsGoalDetailScreen({ route, navigation }) {
     const { goal: initialGoal } = route.params;
-    const { COLORS, isDarkMode } = useTheme();
+    const COLORS = useTheme(state => state.COLORS);
+    const isDarkMode = useTheme(state => state.isDarkMode);
     const { userInfo } = useAuth();
     const styles = getStyles(COLORS);
 

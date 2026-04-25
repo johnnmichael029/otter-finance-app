@@ -26,26 +26,34 @@ const PAYMENT_METHODS = [
 
 export default function ShoppingCheckoutScreen({ route, navigation }) {
     const { session, items, total, budgetNum, label } = route.params;
-    const { COLORS } = useTheme();
+    const COLORS = useTheme(state => state.COLORS);
     const { userInfo } = useAuth();
     const wallets = useFinanceStore(state => state.wallets);
     const cryptoPrices = useFinanceStore(state => state.cryptoPrices);
     const styles = getStyles(COLORS);
 
-    // Track selected wallet as full object for smart conversion
-    const [selectedWallet, setSelectedWallet] = useState(wallets[0] || null);
+    // null = HAND (main balance), 'savings_balance' = Savings Pot, wallet object = specific wallet
+    const [selectedWallet, setSelectedWallet] = useState(null); // default: HAND
     const [paymentMethod, setPaymentMethod] = useState('gcash');
     const [loading, setLoading] = useState(false);
     const [alertConfig, setAlertConfig] = useState({ visible: false, title: '', message: '', type: 'confirm', onConfirm: () => { } });
 
-    const source = selectedWallet?._id || null;
+    // source sent to backend:
+    // null / undefined → main balance (HAND)
+    // 'savings_balance' → savings master pot
+    // wallet._id string → specific wallet
+    const source = selectedWallet === null
+        ? null                          // HAND
+        : selectedWallet === 'savings_balance'
+            ? 'savings_balance'         // Savings Pot
+            : selectedWallet?._id;      // Wallet ObjectId
 
     const pct = budgetNum > 0 ? Math.min((total / budgetNum) * 100, 100) : 0;
     const budgetColor = pct >= 100 ? '#ef4444' : pct >= 80 ? '#f59e0b' : '#22c55e';
 
     const handleConfirm = async () => {
-        // Balance pre-check before checkout
-        if (selectedWallet) {
+        // Balance pre-check before checkout (only for specific wallets)
+        if (selectedWallet !== null && selectedWallet !== 'savings_balance') {
             if (!hasEnoughBalance(selectedWallet, total, cryptoPrices)) {
                 setAlertConfig({
                     visible: true,
@@ -60,7 +68,7 @@ export default function ShoppingCheckoutScreen({ route, navigation }) {
 
         // Calculate native deduct amount for crypto wallets
         let walletDeductAmount = null;
-        if (selectedWallet) {
+        if (selectedWallet !== null && selectedWallet !== 'savings_balance') {
             const deduct = calcNativeDeduct(selectedWallet, total, cryptoPrices);
             walletDeductAmount = deduct?.nativeAmount ?? null;
         }
@@ -74,7 +82,11 @@ export default function ShoppingCheckoutScreen({ route, navigation }) {
                 walletDeductAmount,
             });
 
-            const walletName = selectedWallet?.name || 'your wallet';
+            const walletName = selectedWallet === null
+                ? 'your main balance (HAND)'
+                : selectedWallet === 'savings_balance'
+                    ? 'your Savings Balance'
+                    : selectedWallet?.name || 'your wallet';
             setAlertConfig({
                 visible: true,
                 title: '🎉 Shopping Done!',
@@ -178,8 +190,58 @@ export default function ShoppingCheckoutScreen({ route, navigation }) {
 
                 {/* Deduction Source */}
                 <View style={styles.sectionPad}>
-                    <Text style={[styles.sectionTitle, { color: COLORS.text }]}>Deduct From Wallet</Text>
+                    <Text style={[styles.sectionTitle, { color: COLORS.text }]}>Deduct From</Text>
                     <View style={styles.sourceList}>
+
+                        {/* ── HAND (Main Balance) ── */}
+                        <TouchableOpacity
+                            style={[styles.sourceCard, {
+                                backgroundColor: COLORS.surface,
+                                borderColor: selectedWallet === null ? '#E91E8C' : COLORS.border,
+                                borderWidth: selectedWallet === null ? 2 : 1,
+                            }]}
+                            onPress={() => setSelectedWallet(null)}
+                            activeOpacity={0.8}
+                        >
+                            <View style={[styles.sourceIcon, { backgroundColor: '#E91E8C20' }]}>
+                                <MaterialCommunityIcons name="hand-coin-outline" size={22} color="#E91E8C" />
+                            </View>
+                            <View style={{ flex: 1 }}>
+                                <Text style={[styles.sourceLabel, { color: COLORS.text }]}>HAND</Text>
+                                <Text style={[styles.sourceSub, { color: COLORS.textMuted }]}>Main Balance</Text>
+                            </View>
+                            {selectedWallet === null && (
+                                <View style={[styles.checkDot, { backgroundColor: '#E91E8C' }]}>
+                                    <Feather name="check" size={10} color="#fff" />
+                                </View>
+                            )}
+                        </TouchableOpacity>
+
+                        {/* ── Savings Balance ── */}
+                        <TouchableOpacity
+                            style={[styles.sourceCard, {
+                                backgroundColor: COLORS.surface,
+                                borderColor: selectedWallet === 'savings_balance' ? '#8b5cf6' : COLORS.border,
+                                borderWidth: selectedWallet === 'savings_balance' ? 2 : 1,
+                            }]}
+                            onPress={() => setSelectedWallet('savings_balance')}
+                            activeOpacity={0.8}
+                        >
+                            <View style={[styles.sourceIcon, { backgroundColor: '#8b5cf620' }]}>
+                                <MaterialCommunityIcons name="piggy-bank-outline" size={22} color="#8b5cf6" />
+                            </View>
+                            <View style={{ flex: 1 }}>
+                                <Text style={[styles.sourceLabel, { color: COLORS.text }]}>Savings Balance</Text>
+                                <Text style={[styles.sourceSub, { color: COLORS.textMuted }]}>Master savings pot</Text>
+                            </View>
+                            {selectedWallet === 'savings_balance' && (
+                                <View style={[styles.checkDot, { backgroundColor: '#8b5cf6' }]}>
+                                    <Feather name="check" size={10} color="#fff" />
+                                </View>
+                            )}
+                        </TouchableOpacity>
+
+                        {/* ── Wallets ── */}
                         {wallets.map(w => {
                             const isSelected = selectedWallet?._id === w._id;
                             const insufficient = !hasEnoughBalance(w, total, cryptoPrices);
@@ -201,7 +263,7 @@ export default function ShoppingCheckoutScreen({ route, navigation }) {
                                         borderWidth: isSelected || insufficient ? 2 : 1,
                                         opacity: insufficient ? 0.65 : 1,
                                     }]}
-                                    onPress={() => setSelectedWallet(w)}
+                                    onPress={() => isSelected ? setSelectedWallet(null) : setSelectedWallet(w)}
                                     activeOpacity={0.8}
                                 >
                                     <View style={[styles.sourceIcon, { backgroundColor: w.color + '20' }]}>

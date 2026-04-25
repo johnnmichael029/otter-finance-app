@@ -126,8 +126,8 @@ const requestNotifPermission = async () => {
     return status === 'granted';
 };
 
-export default function RecurringBillsScreen() {
-    const { COLORS } = useTheme();
+export default function RecurringBillsScreen({ navigation }) {
+    const COLORS = useTheme(state => state.COLORS);
     const { userInfo } = useAuth();
     const styles = getStyles(COLORS);
 

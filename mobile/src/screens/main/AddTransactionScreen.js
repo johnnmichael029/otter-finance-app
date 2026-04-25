@@ -56,7 +56,7 @@ const DynamicIcon = ({ name, size, color, style }) => {
 
 export default function AddTransactionScreen({ navigation, route }) {
     const { type = 'expense', prefillData = null } = route.params || {};
-    const { COLORS } = useTheme();
+    const COLORS = useTheme(state => state.COLORS);
     const { setShouldIgnoreLock } = useSecurity();
 
     const [amount, setAmount] = useState(prefillData?.price ? String(prefillData.price) : '');
@@ -64,6 +64,7 @@ export default function AddTransactionScreen({ navigation, route }) {
     const [category, setCategory] = useState(null);
     const [selectedWallet, setSelectedWallet] = useState(null);   // Destination wallet (locked if passed from Wallet screen)
     const [sourceWallet, setSourceWallet] = useState(null);       // source wallet object (for income)
+    const [sourceType, setSourceType] = useState('none');         // 'none' | 'hand' | 'savings_balance' | 'wallet'
     const [isLoading, setIsLoading] = useState(false);
 
     // If we came from the Wallet Screen, pre-set the destination wallet
@@ -341,6 +342,7 @@ export default function AddTransactionScreen({ navigation, route }) {
                 walletDeductAmount,
                 sourceWalletId: sourceWallet?._id || null,
                 sourceWalletDeductAmount,
+                sourceType: sourceWallet ? 'wallet' : sourceType, // 'hand' | 'savings_balance' | 'wallet'
             };
 
             await createTransaction(txData);
@@ -492,14 +494,98 @@ export default function AddTransactionScreen({ navigation, route }) {
                     {isIncome && (
                         <View style={styles.section}>
                             <Text style={[styles.sectionTitle, { color: COLORS.textMuted }]}>
-                                SOURCE WALLET (DEDUCT FROM)
+                                SOURCE (DEDUCT FROM)
                             </Text>
+
+                            {/* ── Virtual source: HAND, Savings, & External ── */}
+                            <View style={{ flexDirection: 'row', gap: 10, marginBottom: 10 }}>
+                                {/* ── Virtual source: No Deduction (External Cash) ── */}
+                                <TouchableOpacity
+                                    style={[styles.sourceChip, {
+                                        borderColor: sourceType === 'none' && !sourceWallet ? COLORS.text : COLORS.border,
+                                        borderWidth: sourceType === 'none' && !sourceWallet ? 2 : 1,
+                                        backgroundColor: COLORS.surface,
+                                        flex: 1,
+                                    }]}
+                                    onPress={() => { setSourceType('none'); setSourceWallet(null); }}
+                                    activeOpacity={0.8}
+                                >
+                                    <Feather name="globe" size={18} color={COLORS.text} />
+                                    <View style={{ flex: 1 }}>
+                                        <Text style={[styles.sourceChipLabel, { color: COLORS.text }]}>Cash / Other</Text>
+                                        <Text style={[styles.sourceChipSub, { color: COLORS.textMuted }]}>No deduction</Text>
+                                    </View>
+                                    {sourceType === 'none' && !sourceWallet && (
+                                        <View style={[styles.sourceCheckDot, { backgroundColor: COLORS.text }]}>
+                                            <Feather name="check" size={9} color={COLORS.background} />
+                                        </View>
+                                    )}
+                                </TouchableOpacity>
+
+                                {/* Hide HAND source if destination is already HAND */}
+                                {selectedWallet !== null && (
+                                    <TouchableOpacity
+                                        style={[styles.sourceChip, {
+                                            borderColor: sourceType === 'hand' && !sourceWallet ? '#E91E8C' : COLORS.border,
+                                            borderWidth: sourceType === 'hand' && !sourceWallet ? 2 : 1,
+                                            backgroundColor: COLORS.surface,
+                                            flex: 1,
+                                        }]}
+                                        onPress={() => { setSourceType('hand'); setSourceWallet(null); }}
+                                        activeOpacity={0.8}
+                                    >
+                                        <MaterialCommunityIcons name="hand-coin-outline" size={18} color="#E91E8C" />
+                                        <View style={{ flex: 1 }}>
+                                            <Text style={[styles.sourceChipLabel, { color: COLORS.text }]}>HAND</Text>
+                                            <Text style={[styles.sourceChipSub, { color: COLORS.textMuted }]}>Main Balance</Text>
+                                        </View>
+                                        {sourceType === 'hand' && !sourceWallet && (
+                                            <View style={[styles.sourceCheckDot, { backgroundColor: '#E91E8C' }]}>
+                                                <Feather name="check" size={9} color="#fff" />
+                                            </View>
+                                        )}
+                                    </TouchableOpacity>
+                                )}
+
+                                {/* ── Virtual source: Savings Balance ── */}
+                                <TouchableOpacity
+                                    style={[styles.sourceChip, {
+                                        borderColor: sourceType === 'savings_balance' && !sourceWallet ? '#8b5cf6' : COLORS.border,
+                                        borderWidth: sourceType === 'savings_balance' && !sourceWallet ? 2 : 1,
+                                        backgroundColor: COLORS.surface,
+                                        flex: 1,
+                                    }]}
+                                    onPress={() => { setSourceType('savings_balance'); setSourceWallet(null); }}
+                                    activeOpacity={0.8}
+                                >
+                                    <MaterialCommunityIcons name="piggy-bank-outline" size={18} color="#8b5cf6" />
+                                    <View style={{ flex: 1 }}>
+                                        <Text style={[styles.sourceChipLabel, { color: COLORS.text }]}>Savings</Text>
+                                        <Text style={[styles.sourceChipSub, { color: COLORS.textMuted }]}>Balance</Text>
+                                    </View>
+                                    {sourceType === 'savings_balance' && !sourceWallet && (
+                                        <View style={[styles.sourceCheckDot, { backgroundColor: '#8b5cf6' }]}>
+                                            <Feather name="check" size={9} color="#fff" />
+                                        </View>
+                                    )}
+                                </TouchableOpacity>
+                            </View>
+
+                            {/* ── Wallet Selector ── */}
                             <WalletSelector
                                 selectedWalletId={sourceWallet?._id}
-                                onSelect={(w) => setSourceWallet(sourceWallet?._id === w?._id ? null : w)}
+                                onSelect={(w) => {
+                                    if (sourceWallet?._id === w?._id) {
+                                        setSourceWallet(null);
+                                        setSourceType('none');
+                                    } else {
+                                        setSourceWallet(w);
+                                        setSourceType('wallet');
+                                    }
+                                }}
                                 COLORS={COLORS}
                                 amountPHP={convertedPreview !== null ? convertedPreview : parseFloat(amount) || 0}
-                                isExpense={true} // It behaves as an expense for the source wallet
+                                isExpense={true}
                                 excludeId={selectedWallet?._id}
                             />
                         </View>
@@ -518,8 +604,21 @@ export default function AddTransactionScreen({ navigation, route }) {
                                 amountPHP={convertedPreview !== null ? convertedPreview : parseFloat(amount) || 0}
                                 isExpense={true}
                             />
+                            <Text style={{ fontSize: 10, color: COLORS.textMuted, marginTop: 6, fontStyle: 'italic', paddingHorizontal: 4 }}>
+                                * If no wallet is selected, it will automatically deduct from HAND.
+                            </Text>
                         </View>
                     )}
+
+                    {/* Note shown only for Income / Add Balance */}
+                    {isIncome && (
+                        <View style={styles.section}>
+                            <Text style={{ fontSize: 10, color: COLORS.text, fontStyle: 'italic', paddingHorizontal: 4 }}>
+                                * If no source wallet is selected, it means you are adding income/balance with no deduction from any wallet.
+                            </Text>
+                        </View>
+                    )}
+
 
                     {/* Category Picker */}
                     <View style={styles.section}>
@@ -797,5 +896,18 @@ const styles = StyleSheet.create({
     currencyItem: { flexDirection: 'row', alignItems: 'center', gap: 16, padding: 12, borderRadius: radius.lg },
     itemFlag: { fontSize: 28 },
     itemCode: { fontSize: 16, fontWeight: '800' },
-    itemName: { fontSize: 12, fontWeight: '600' }
+    itemName: { fontSize: 12, fontWeight: '600' },
+
+    // Source chip styles (HAND / Savings Balance virtual source cards)
+    sourceChip: {
+        flexDirection: 'row', alignItems: 'center', gap: 8,
+        padding: 12, borderRadius: 14, borderWidth: 1,
+        position: 'relative', overflow: 'hidden',
+    },
+    sourceChipLabel: { fontSize: 13, fontWeight: '800' },
+    sourceChipSub: { fontSize: 10, fontWeight: '600', marginTop: 1 },
+    sourceCheckDot: {
+        width: 16, height: 16, borderRadius: 8,
+        justifyContent: 'center', alignItems: 'center',
+    },
 });

@@ -12,6 +12,7 @@ const savingsTransferSchema = new mongoose.Schema({
     walletCurrency: { type: String },
     note: { type: String, default: '' },
     runningBalance: { type: Number }, // Snapshot of goal balance after transfer
+    relatedTransaction: { type: mongoose.Schema.Types.ObjectId, ref: 'Transaction' },
 }, { timestamps: true });
 
 module.exports = mongoose.model('SavingsTransfer', savingsTransferSchema);

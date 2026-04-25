@@ -28,7 +28,9 @@ const REDIRECT_URI = AuthSession.makeRedirectUri({
 
 export default function LoginScreen({ navigation }) {
     const { login, socialLogin, isLoading } = useAuth();
-    const { COLORS, toggleTheme, isDarkMode } = useTheme();
+    const COLORS = useTheme(state => state.COLORS);
+    const toggleTheme = useTheme(state => state.toggleTheme);
+    const isDarkMode = useTheme(state => state.isDarkMode);
     const [lastBackPressed, setLastBackPressed] = useState(0);
 
     // ── Double Tap to Exit ──
@@ -62,7 +64,7 @@ export default function LoginScreen({ navigation }) {
         // For Standalone Build
         androidClientId: '368902982049-7t1l2u3m97780l8ffkhejcu1i5o1p6q3.apps.googleusercontent.com', 
         clientId: '368902982049-1d7rsbq19pip9hmd3imrv6j5e3pcj3dt.apps.googleusercontent.com',
-        redirectUri: 'https://auth.expo.io/@yamashiis029-organization/otter',
+        redirectUri: REDIRECT_URI,
         responseType: 'id_token',
     }, {
         useProxy: true
@@ -248,8 +250,6 @@ export default function LoginScreen({ navigation }) {
                                     style={[styles.socialBtn, { backgroundColor: COLORS.surface, borderColor: COLORS.border }]}
                                     onPress={() => {
                                         if (request) {
-                                            request.redirectUri = 'https://auth.expo.io/@yamashiis029-organization/otter';
-                                            request.responseType = 'id_token';
                                             promptAsync({ useProxy: true });
                                         }
                                     }}

@@ -10,9 +10,10 @@ import { Feather, MaterialCommunityIcons, Ionicons } from '@expo/vector-icons';
 import { Swipeable } from 'react-native-gesture-handler';
 import { useTheme } from '../../context/ThemeContext';
 import { useAuth, API_BASE } from '../../context/AuthContext';
-import { getTransactions, archiveTransaction as archiveTxApi } from '../../api/api';
+import { getTransactions, archiveTransaction as archiveTxApi, deleteTransaction } from '../../api/api';
 import { spacing, radius } from '../../theme/colors';
 import Skeleton from '../../components/Skeleton';
+import CustomAlertModal from '../../components/CustomAlertModal';
 import { getSocket, connectSocket } from '../../utils/socket';
 import { useDebounce } from '../../utils/debounce';
 import { useFinanceStore } from '../../store/financeStore';
@@ -68,7 +69,7 @@ const getIconColor = (tx, COLORS) => {
 const TABS = ['All', 'Income', 'Expense', 'Ledger', 'Archive'];
 
 const TransactionsScreen = () => {
-    const { COLORS } = useTheme();
+    const COLORS = useTheme(state => state.COLORS);
     const { userInfo } = useAuth();
     const styles = getStyles(COLORS);
 
@@ -82,6 +83,9 @@ const TransactionsScreen = () => {
     const [search, setSearch] = useState('');
     const debouncedSearch = useDebounce(search, 400);
     const [selectedTx, setSelectedTx] = useState(null);
+    const [revertModalVisible, setRevertModalVisible] = useState(false);
+    const [revertingTx, setRevertingTx] = useState(null);
+    const [infoAlert, setInfoAlert] = useState({ visible: false, title: '', message: '', type: 'info' });
 
     const typeFilter = activeTab === 'Income' ? 'income' : activeTab === 'Expense' ? 'expense' : '';
     const isArchiveView = activeTab === 'Archive';
@@ -184,6 +188,19 @@ const TransactionsScreen = () => {
         } catch (e) {
             console.error('Archive failed:', e);
             load(); // Revert on failure
+        }
+    };
+
+    const handleRevertConfirm = async () => {
+        if (!revertingTx) return;
+        try {
+            const txId = revertingTx._id;
+            setRevertingTx(null);
+            setRevertModalVisible(false);
+            await deleteTransaction(txId);
+            // List will update via socket handleDeleted already in this file
+        } catch (e) {
+            console.error('Revert failed:', e);
         }
     };
 
@@ -319,7 +336,25 @@ const TransactionsScreen = () => {
                                     friction={2}
                                     containerStyle={{ borderRadius: radius.md, marginBottom: spacing.xs }}
                                 >
-                                    <TouchableOpacity style={[styles.txRow, { backgroundColor: COLORS.surface, marginBottom: 0 }]} onPress={() => setSelectedTx(tx)} activeOpacity={0.7}>
+                                    <TouchableOpacity 
+                                        style={[styles.txRow, { backgroundColor: COLORS.surface, marginBottom: 0 }]} 
+                                        onPress={() => setSelectedTx(tx)} 
+                                        activeOpacity={0.7}
+                                        onLongPress={() => {
+                                            Vibration.vibrate(60);
+                                            if (tx.relatedType === 'Debt') {
+                                                setInfoAlert({
+                                                    visible: true,
+                                                    title: 'Cannot Revert Debt',
+                                                    message: 'Debt transactions cannot be reverted from here. To undo a payment, please manage it within the Debt Tracker screen.',
+                                                    type: 'info'
+                                                });
+                                                return;
+                                            }
+                                            setRevertingTx(tx);
+                                            setRevertModalVisible(true);
+                                        }}
+                                    >
                                         <View style={[styles.txIcon, { backgroundColor: getIconColor(tx, COLORS) + '20' }]}>
                                             <IconRenderer name={getIconName(tx)} size={16} color={getIconColor(tx, COLORS)} />
                                         </View>
@@ -357,9 +392,27 @@ const TransactionsScreen = () => {
                             );
                         }
                     }}
-                    ListFooterComponent={loadingMore && <ActivityIndicator size="small" color={COLORS.primary} style={{ marginVertical: 16 }} />}
+                ListFooterComponent={loadingMore && <ActivityIndicator size="small" color={COLORS.primary} style={{ marginVertical: 16 }} />}
                 />
             )}
+
+            <CustomAlertModal
+                visible={revertModalVisible}
+                onClose={() => setRevertModalVisible(false)}
+                onConfirm={handleRevertConfirm}
+                title="Revert Transaction"
+                message={`Are you sure you want to undo this ${revertingTx?.type || 'transaction'}? This will restore your wallet balances and permanently delete the record.`}
+                type="confirm"
+                confirmText="Revert"
+            />
+
+            <CustomAlertModal
+                visible={infoAlert.visible}
+                onClose={() => setInfoAlert({ ...infoAlert, visible: false })}
+                title={infoAlert.title}
+                message={infoAlert.message}
+                type={infoAlert.type}
+            />
 
             <Modal visible={!!selectedTx} transparent animationType="fade" onRequestClose={() => setSelectedTx(null)}>
                 <TouchableWithoutFeedback onPress={() => setSelectedTx(null)}>
@@ -398,8 +451,12 @@ const TransactionsScreen = () => {
                                                     <View style={[styles.walletBadge, { backgroundColor: ((selectedTx.type === 'income' ? selectedTx.sourceWallet?.color : selectedTx.wallet?.color) || COLORS.primary) + '20' }]}>
                                                         <Text style={[styles.walletBadgeText, { color: (selectedTx.type === 'income' ? selectedTx.sourceWallet?.color : selectedTx.wallet?.color) || COLORS.primary }]}>
                                                             {selectedTx.type === 'income' 
-                                                                ? (selectedTx.sourceWallet ? selectedTx.sourceWallet.name : 'External Source')
-                                                                : (selectedTx.wallet ? selectedTx.wallet.name : 'HAND')
+                                                                ? (selectedTx.sourceWallet ? selectedTx.sourceWallet.name : (selectedTx.paymentSource || 'External Source'))
+                                                                : (selectedTx.sourceRelatedType === 'SavingsGoal' 
+                                                                    ? 'Internal Transfer'
+                                                                    : (selectedTx.relatedType === 'SavingsGoal'
+                                                                        ? 'Savings Balance'
+                                                                        : (selectedTx.wallet ? selectedTx.wallet.name : 'HAND')))
                                                             }
                                                         </Text>
                                                     </View>

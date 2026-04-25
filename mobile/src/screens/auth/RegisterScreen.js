@@ -15,7 +15,9 @@ const otterIcon = require('../../../assets/icon/otter.png');
 
 export default function RegisterScreen({ navigation }) {
     const { register, isLoading } = useAuth();
-    const { COLORS, toggleTheme, isDarkMode } = useTheme();
+    const COLORS = useTheme(state => state.COLORS);
+    const toggleTheme = useTheme(state => state.toggleTheme);
+    const isDarkMode = useTheme(state => state.isDarkMode);
     const [name, setName] = useState('');
     const [email, setEmail] = useState('');
     const [password, setPassword] = useState('');

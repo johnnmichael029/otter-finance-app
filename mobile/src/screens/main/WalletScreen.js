@@ -224,7 +224,7 @@ const InsightsPanel = ({ wallets, prices, hideVal, COLORS }) => {
 
 // ─── Screen ───────────────────────────────────────────────────────────────────
 export default function WalletScreen({ navigation }) {
-    const { COLORS } = useTheme();
+    const COLORS = useTheme(state => state.COLORS);
     const wallets = useFinanceStore(state => state.wallets);
     const fetchWallets = useFinanceStore(state => state.fetchWallets);
     const isLoadingWallets = useFinanceStore(state => state.isLoadingWallets);

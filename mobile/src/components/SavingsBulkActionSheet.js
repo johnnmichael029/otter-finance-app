@@ -6,7 +6,7 @@ import { spacing, radius } from '../theme/colors';
 import BottomSheetModal from './BottomSheetModal';
 
 const SavingsBulkActionSheet = ({ visible, onClose, onAction }) => {
-    const { COLORS } = useTheme();
+    const COLORS = useTheme(state => state.COLORS);
     const styles = getStyles(COLORS);
 
     const BulkOption = ({ icon, color, title, subtitle, onPress, isMCI = false }) => (

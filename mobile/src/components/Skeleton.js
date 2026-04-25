@@ -4,7 +4,7 @@ import { useTheme } from '../context/ThemeContext';
 import { radius } from '../theme/colors';
 
 const Skeleton = ({ width, height, borderRadius = radius.md, style }) => {
-    const { COLORS } = useTheme();
+    const COLORS = useTheme(state => state.COLORS);
     const fadeAnim = useRef(new Animated.Value(0.3)).current;
 
     useEffect(() => {

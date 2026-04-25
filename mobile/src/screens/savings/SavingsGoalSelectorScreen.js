@@ -27,7 +27,7 @@ const IconRenderer = ({ name, family, size, color }) => {
 
 export default function SavingsGoalSelectorScreen({ route, navigation }) {
     const action = route.params?.action || 'deposit'; // 'deposit', 'income', 'move_from', 'move_to'
-    const { COLORS } = useTheme();
+    const COLORS = useTheme(state => state.COLORS);
     const { userInfo } = useAuth();
     const [goals, setGoals] = useState([]);
     const [loading, setLoading] = useState(true);

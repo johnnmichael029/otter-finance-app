@@ -8,6 +8,7 @@ import { Feather, MaterialCommunityIcons } from '@expo/vector-icons';
 import { Camera, CameraView } from 'expo-camera';
 import { useTheme } from '../../context/ThemeContext';
 import { useAuth } from '../../context/AuthContext';
+import { useSecurity } from '../../context/SecurityContext';
 import {
     createShoppingSession, updateShoppingCart, lookupShoppingBarcode, cancelShopping, createShoppingTemplate
 } from '../../api/api';
@@ -26,8 +27,9 @@ const UPC_API = 'https://api.upcitemdb.com/prod/trial/lookup?upc=';
 let scanDebounce = null;
 
 export default function ShoppingSessionScreen({ route, navigation }) {
-    const { COLORS } = useTheme();
+    const COLORS = useTheme(state => state.COLORS);
     const { userInfo } = useAuth();
+    const { setShouldIgnoreLock } = useSecurity();
     const styles = getStyles(COLORS);
 
     // ── Session State ────────────────────────────────────────────
@@ -116,20 +118,33 @@ export default function ShoppingSessionScreen({ route, navigation }) {
         }
 
         const templateItems = route.params?.templateItems;
-        if (templateItems) {
-            setItems(templateItems);
-            if (route.params?.templateLabel) {
-                setLabel(route.params.templateLabel);
-            }
-            if (route.params?.templateBudget) {
-                setBudget(String(route.params.templateBudget));
-            }
+        if (templateItems && templateItems.length > 0) {
+            // Ensure each item has required fields and reset quantities to 1
+            const cleaned = templateItems.map(i => ({
+                barcode: i.barcode || '',
+                name: i.name,
+                price: i.price || 0,
+                quantity: i.quantity || 1,
+            }));
+            setItems(cleaned);
         }
-    }, [route.params]);
+        if (route.params?.templateLabel) setLabel(route.params.templateLabel);
+        if (route.params?.templateBudget) setBudget(String(route.params.templateBudget));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [route.params?.resumeSession, route.params?.templateItems, route.params?.templateLabel, route.params?.templateBudget]);
 
     // ── Camera Permission ────────────────────────────────────────
     useEffect(() => {
-        Camera.requestCameraPermissionsAsync().then(({ status }) => setHasPermission(status === 'granted'));
+        // Temporarily ignore auto-lock during permission dialog.
+        // In production builds, the OS permission dialog briefly puts the app
+        // into an 'inactive' state which would incorrectly trigger the AppLock.
+        setShouldIgnoreLock(true);
+        Camera.requestCameraPermissionsAsync()
+            .then(({ status }) => setHasPermission(status === 'granted'))
+            .finally(() => {
+                // Small delay to ensure AppState has settled back to 'active'
+                setTimeout(() => setShouldIgnoreLock(false), 1000);
+            });
     }, []);
 
     // ── Scanner Animation ────────────────────────────────────────
@@ -390,6 +405,10 @@ export default function ShoppingSessionScreen({ route, navigation }) {
         try {
             const s = await createShoppingSession({ label, budget: budgetNum });
             setSession(s);
+            // If there were pre-loaded template items, sync them to the new session immediately
+            if (items.length > 0) {
+                await updateShoppingCart(s._id, items).catch(() => {});
+            }
             setSetupDone(true);
         } catch (e) {
             console.warn(e);

@@ -18,7 +18,7 @@ const formatCurrency = (amount, currency = 'PHP') =>
     new Intl.NumberFormat('en-PH', { style: 'currency', currency }).format(amount || 0);
 
 export default function ShoppingTemplatesScreen({ navigation }) {
-    const { COLORS } = useTheme();
+    const COLORS = useTheme(state => state.COLORS);
     const { userInfo } = useAuth();
     const styles = getStyles(COLORS);
 

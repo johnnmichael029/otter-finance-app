@@ -4,6 +4,7 @@ const SavingsGoal = require('../models/savingsGoalModel');
 const SavingsTransfer = require('../models/savingsTransferModel');
 const Wallet = require('../models/walletModel');
 const Transaction = require('../models/transactionModel');
+const User = require('../models/userModel');
 const mongoose = require('mongoose');
 const { invalidatePrefixes } = require('../utils/cache');
 const { encrypt, decryptNote } = require('../utils/encryption');
@@ -191,6 +192,14 @@ const checkoutSession = async (req, res) => {
                         if (io) io.to(`user:${req.userId}`).emit('wallet_updated', wallet.toObject());
                     }
                 }
+            } else {
+                // Update HAND balance
+                const user = await User.findById(req.userId);
+                if (user) {
+                    user.balance -= total;
+                    await user.save();
+                    if (io) io.to(`user:${req.userId}`).emit('wallet_updated', { _id: 'main', balance: user.balance });
+                }
             }
 
             const fullTx = await Transaction.findById(tx._id).populate('wallet', 'name type color').lean();
@@ -225,6 +234,7 @@ const checkoutSession = async (req, res) => {
         session.note = note || '';
         await session.save();
 
+        invalidatePrefixes('transaction');
         invalidatePrefixes('shopping');
         if (io) io.to(`user:${req.userId}`).emit('update_shopping_session', session);
 

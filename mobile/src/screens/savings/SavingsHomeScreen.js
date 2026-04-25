@@ -2,7 +2,7 @@ import React, { useState, useCallback, useEffect, useRef } from 'react';
 import {
     View, Text, StyleSheet, TouchableOpacity, FlatList, ScrollView,
     ActivityIndicator, RefreshControl, Animated, Image, Modal, TouchableWithoutFeedback,
-    BackHandler, ToastAndroid, Platform
+    BackHandler, ToastAndroid, Platform, Alert
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
@@ -11,7 +11,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { useTheme } from '../../context/ThemeContext';
 import { useAuth } from '../../context/AuthContext';
 import { useFinanceStore } from '../../store/financeStore';
-import { getSavingsGoals, getSavingsTransfers, bulkSavingsAction } from '../../api/api';
+import { getSavingsGoals, getSavingsTransfers, bulkSavingsAction, deleteTransaction } from '../../api/api';
 import { spacing, radius, typography } from '../../theme/colors';
 import { getSocket, connectSocket } from '../../utils/socket';
 import Skeleton from '../../components/Skeleton';
@@ -248,6 +248,41 @@ export default function SavingsHomeScreen({ navigation, route }) {
         const isDeposit = item.direction === 'to_savings' || item.direction === 'income' || item.direction === 'transfer_goal';
         const color = isDeposit ? '#22c55e' : '#f59e0b';
         const icon = isDeposit ? 'plus-circle' : 'minus-circle';
+
+        const handleRevert = () => {
+            if (!item.relatedTransaction) {
+                return setAlertConfig({
+                    visible: true,
+                    title: 'Notice',
+                    message: 'This record cannot be reverted automatically.',
+                    type: 'info',
+                    onConfirm: () => setAlertConfig(p => ({ ...p, visible: false }))
+                });
+            }
+
+            setAlertConfig({
+                visible: true,
+                title: 'Smart Revert',
+                message: `Undo this transfer of ${formatCurrency(item.amount, userInfo?.currency)}? All balances will be restored.`,
+                type: 'confirm',
+                onConfirm: async () => {
+                    try {
+                        setAlertConfig(p => ({ ...p, visible: false }));
+                        const txId = typeof item.relatedTransaction === 'object' ? item.relatedTransaction._id : item.relatedTransaction;
+                        await deleteTransaction(txId);
+                    } catch (e) {
+                        setAlertConfig({
+                            visible: true,
+                            title: 'Error',
+                            message: 'Failed to revert: ' + e.message,
+                            type: 'error',
+                            onConfirm: () => setAlertConfig(p => ({ ...p, visible: false }))
+                        });
+                    }
+                }
+            });
+        };
+
         return (
             <TouchableOpacity
                 key={item._id}
@@ -257,6 +292,7 @@ export default function SavingsHomeScreen({ navigation, route }) {
                     setSelectedTransfer(item);
                     setTransferModalVisible(true);
                 }}
+                onLongPress={handleRevert}
             >
                 <View style={[styles.activityIcon, { backgroundColor: color + '15' }]}>
                     <Feather name={icon} size={16} color={color} />

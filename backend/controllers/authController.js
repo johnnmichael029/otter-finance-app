@@ -104,6 +104,9 @@ const register = async (req, res) => {
                 currency: user.currency,
                 avatarUrl: user.avatarUrl,
                 isOnboarded: user.isOnboarded,
+                otterTag: user.otterTag,
+                occupation: user.occupation,
+                createdAt: user.createdAt,
             }
         });
     } catch (err) {
@@ -232,6 +235,9 @@ const login = async (req, res) => {
                 avatarUrl: user.avatarUrl,
                 pushToken: user.pushToken,
                 isOnboarded: user.isOnboarded,
+                otterTag: user.otterTag,
+                occupation: user.occupation,
+                createdAt: user.createdAt,
             }
         });
 
@@ -425,6 +431,7 @@ const googleLogin = async (req, res) => {
                 pushToken: user.pushToken,
                 isOnboarded: user.isOnboarded,
                 occupation: user.occupation,
+                createdAt: user.createdAt,
             }
         });
     } catch (err) {
@@ -501,7 +508,7 @@ async function verify2FA(req, res) {
 
         res.json({
             accessToken, refreshToken,
-            user: { _id: user._id, name: user.name, email: user.email, currency: user.currency, avatarUrl: user.avatarUrl, pushToken: user.pushToken, isOnboarded: user.isOnboarded },
+            user: { _id: user._id, name: user.name, email: user.email, currency: user.currency, avatarUrl: user.avatarUrl, pushToken: user.pushToken, isOnboarded: user.isOnboarded, otterTag: user.otterTag, occupation: user.occupation, createdAt: user.createdAt },
         });
     } catch (err) {
         console.error('[2FA] Verify error:', err.message);

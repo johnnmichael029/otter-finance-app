@@ -34,7 +34,7 @@ const Cursor = () => {
 };
 
 export default function ForgotPasswordScreen({ navigation }) {
-    const { COLORS } = useTheme();
+    const COLORS = useTheme(state => state.COLORS);
 
     // ── Steps: 0 (Email), 1 (OTP), 2 (Reset Password) ──
     const [step, setStep] = useState(0);

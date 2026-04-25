@@ -41,7 +41,7 @@ const formatCurrency = (amount, currency = 'PHP') =>
 
 export default function SavingsTransferScreen({ route, navigation }) {
     const { goal: initialGoal, direction: initialDirection, isIncome, sourceGoal: initialSource, isDirect, fromSavings } = route.params;
-    const { COLORS } = useTheme();
+    const COLORS = useTheme(state => state.COLORS);
     const { userInfo } = useAuth();
     const styles = getStyles(COLORS);
 

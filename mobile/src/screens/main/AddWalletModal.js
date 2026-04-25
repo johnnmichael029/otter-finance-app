@@ -28,7 +28,7 @@ const ACCOUNT_TYPES = [
 ];
 
 export default function AddWalletModal({ visible, onClose }) {
-    const { COLORS } = useTheme();
+    const COLORS = useTheme(state => state.COLORS);
     const { fetchWallets } = useFinanceStore();
 
     const slideAnim = useRef(new Animated.Value(SCREEN_HEIGHT)).current;

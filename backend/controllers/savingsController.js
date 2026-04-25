@@ -85,21 +85,21 @@ const completeGoal = async (req, res) => {
 
             const ledgerTx = await Transaction.create({
                 user: req.userId, type: 'income', amount: amountToProcess, category: 'Savings',
-                categoryIcon: goal.icon, categoryColor: goal.color, description: `Goal Returned: ${goal.name}`, 
+                categoryIcon: goal.icon, categoryColor: goal.color, description: `Goal Returned: ${goal.name}`,
                 note: 'Goal ended, funds back to wallet.', date: new Date(),
                 runningBalance: currentBalance + amountToProcess
             });
             if (io) io.to(`user:${req.userId}`).emit('new_transaction', ledgerTx);
 
             transferRecord = await SavingsTransfer.create({
-                user: req.userId, direction: 'from_savings', amount: amountToProcess, 
+                user: req.userId, direction: 'from_savings', amount: amountToProcess,
                 goal: goal._id, goalName: goal.name, note: 'Returned to wallet.',
                 runningBalance: 0
             });
         } else if (mode === 'spend') {
             // Spend (Visual log only in Savings History, no double deduction in Wallet)
             transferRecord = await SavingsTransfer.create({
-                user: req.userId, direction: 'spent_from_savings', amount: amountToProcess, 
+                user: req.userId, direction: 'spent_from_savings', amount: amountToProcess,
                 goal: goal._id, goalName: goal.name, note: `Successfully utilized for ${goal.name}! 🎉`,
                 runningBalance: 0
             });
@@ -125,7 +125,7 @@ const completeGoal = async (req, res) => {
             data: { goalId: goal._id }
         }).then(n => {
             if (io) io.to(`user:${req.userId}`).emit('new_notification', n);
-        }).catch(() => {});
+        }).catch(() => { });
 
         res.json(goal);
     } catch (err) {
@@ -196,7 +196,7 @@ const deleteGoal = async (req, res) => {
         // If goal has funds, transfer back to Master Pot
         if (goal.currentAmount > 0) {
             let masterPot = await SavingsGoal.findOne({ user: req.userId, name: 'Savings Balance' });
-            
+
             // Safety: Create Master Pot if somehow missing
             if (!masterPot) {
                 masterPot = await SavingsGoal.create({
@@ -228,7 +228,7 @@ const deleteGoal = async (req, res) => {
         }
 
         await goal.deleteOne();
-        
+
         invalidatePrefixes('savings');
 
         // Emit real-time event
@@ -258,10 +258,11 @@ const transfer = async (req, res) => {
         if (isNaN(amt) || amt <= 0) return res.status(400).json({ error: 'Invalid amount.' });
 
         const io = req.app.get('io');
+        let ledgerTx;
 
         if (direction === 'to_savings') {
             if (goal.isCompleted) return res.status(400).json({ error: 'Goal is already completed.' });
-            
+
             let walletId = sourceWalletId || null;
             let currentHandBalance = 0;
             let targetWallet = null;
@@ -280,7 +281,7 @@ const transfer = async (req, res) => {
                 // If it's crypto/stocks, the 'amount' from frontend is PHP, we need to know the 'walletDeductAmount' (units)
                 // OR we can calculate here if we have the rate. For now, let's look for 'walletDeductAmount' in body
                 const nativeAmount = (isCrypto || isStocks)
-                    ? (req.body.walletDeductAmount != null ? Math.abs(parseFloat(req.body.walletDeductAmount)) : amt) 
+                    ? (req.body.walletDeductAmount != null ? Math.abs(parseFloat(req.body.walletDeductAmount)) : amt)
                     : amt;
 
                 if (isCredit) {
@@ -312,23 +313,31 @@ const transfer = async (req, res) => {
                 if (amt > currentHandBalance) return res.status(400).json({ error: `Insufficient balance (₱${currentHandBalance.toFixed(2)})` });
             }
 
+            let sourceName = 'HAND';
+            if (walletId) {
+                const sWallet = await Wallet.findById(walletId);
+                sourceName = sWallet ? sWallet.name : 'Wallet';
+            }
+
             goal.currentAmount += amt;
 
             // 2. Create Ledger Transaction (Expense: Savings)
-            const ledgerTx = await Transaction.create({
-                user: req.userId, 
-                type: 'expense', 
-                amount: amt, 
+            ledgerTx = await Transaction.create({
+                user: req.userId,
+                type: 'expense',
+                amount: amt,
                 category: 'Savings',
-                categoryIcon: goal.icon, 
-                categoryColor: goal.color, 
-                description: `To Savings: ${goal.name}`, 
-                note: note || '', 
+                categoryIcon: goal.icon,
+                categoryColor: goal.color,
+                description: `${sourceName} → ${goal.name}`,
+                note: note || '',
                 date: new Date(),
                 runningBalance: walletId ? currentHandBalance : (currentHandBalance - amt),
                 wallet: walletId,
                 walletAmount: req.body.nativeAmount || null,
-                walletCurrency: req.body.nativeCurrency || null
+                walletCurrency: req.body.nativeCurrency || null,
+                relatedId: goal._id,
+                relatedType: 'SavingsGoal'
             });
 
             if (io) {
@@ -336,11 +345,13 @@ const transfer = async (req, res) => {
                 if (!walletId) {
                     io.to(`user:${req.userId}`).emit('wallet_updated', { _id: 'main', balance: currentHandBalance - amt });
                 }
+                io.to(`user:${req.userId}`).emit('update_savings_goal', goal);
+                io.to(`user:${req.userId}`).emit('new_savings_transfer', { goalId: goal._id });
             }
 
         } else if (direction === 'from_savings') {
             if (amt > goal.currentAmount) return res.status(400).json({ error: 'Insufficient savings.' });
-            
+
             let walletId = sourceWalletId || null;
             let currentHandBalance = 0;
             let targetWallet = null;
@@ -381,23 +392,30 @@ const transfer = async (req, res) => {
                 });
             }
 
+            let destName = 'HAND';
+            if (walletId && targetWallet) destName = targetWallet.name;
+
             goal.currentAmount -= amt;
             // Record as income in main ledger
-            const ledgerTx = await Transaction.create({
+            ledgerTx = await Transaction.create({
                 user: req.userId, type: 'income', amount: amt, category: 'Savings',
-                categoryIcon: goal.icon, categoryColor: goal.color, description: `From Savings: ${goal.name}`, 
-                note: note || '', 
+                categoryIcon: goal.icon, categoryColor: goal.color, description: `${goal.name} → ${destName}`,
+                note: note || '',
                 date: new Date(),
                 runningBalance: walletId ? currentHandBalance : (currentHandBalance + amt),
                 wallet: walletId,
                 walletAmount: req.body.nativeAmount || null,
-                walletCurrency: req.body.nativeCurrency || null
+                walletCurrency: req.body.nativeCurrency || null,
+                relatedId: goal._id,
+                relatedType: 'SavingsGoal'
             });
             if (io) {
                 io.to(`user:${req.userId}`).emit('new_transaction', ledgerTx);
                 if (!walletId) {
                     io.to(`user:${req.userId}`).emit('wallet_updated', { _id: 'main', balance: currentHandBalance + amt });
                 }
+                io.to(`user:${req.userId}`).emit('update_savings_goal', goal);
+                io.to(`user:${req.userId}`).emit('new_savings_transfer', { goalId: goal._id });
             }
 
         } else if (direction === 'income') {
@@ -414,12 +432,21 @@ const transfer = async (req, res) => {
             });
 
             goal.currentAmount += amt;
-            const ledgerTx = await Transaction.create({
-                user: req.userId, type: 'income', amount: amt, category: 'Savings Interest',
+            ledgerTx = await Transaction.create({
+                user: req.userId,
+                type: 'income',
+                amount: amt,
+                category: 'Savings Interest',
                 categoryIcon: 'trending-up', categoryColor: '#8b5cf6', description: `Savings Interest: ${goal.name}`, note, date: new Date(),
-                runningBalance: mainIncBalance + amt
+                runningBalance: mainIncBalance + amt,
+                relatedId: goal._id,
+                relatedType: 'SavingsGoal'
             });
-            if (io) io.to(`user:${req.userId}`).emit('new_transaction', ledgerTx);
+            if (io) {
+                io.to(`user:${req.userId}`).emit('new_transaction', ledgerTx);
+                io.to(`user:${req.userId}`).emit('update_savings_goal', goal);
+                io.to(`user:${req.userId}`).emit('new_savings_transfer', { goalId: goal._id });
+            }
 
         } else if (direction === 'transfer_goal') {
             if (!sourceGoalId) return res.status(400).json({ error: 'sourceGoalId required for goal transfer.' });
@@ -431,7 +458,32 @@ const transfer = async (req, res) => {
             await sourceGoal.save();
 
             goal.currentAmount += amt;
-            if (io) io.to(`user:${req.userId}`).emit('update_savings_goal', sourceGoal);
+
+            // 2. Create Ledger Transaction for History/Revert Support
+            ledgerTx = await Transaction.create({
+                user: req.userId,
+                type: 'expense',
+                amount: amt,
+                category: 'Savings Transfer',
+                categoryIcon: 'repeat',
+                categoryColor: '#8b5cf6',
+                description: `Goal Transfer: ${sourceGoal.name} → ${goal.name}`,
+                note: note || '',
+                date: new Date(),
+                runningBalance: 0,
+                relatedId: goal._id,
+                relatedType: 'SavingsGoal',
+                sourceRelatedId: sourceGoal._id,
+                sourceRelatedType: 'SavingsGoal'
+            });
+
+            if (io) {
+                io.to(`user:${req.userId}`).emit('new_transaction', ledgerTx);
+                io.to(`user:${req.userId}`).emit('update_savings_goal', sourceGoal);
+                io.to(`user:${req.userId}`).emit('update_savings_goal', goal);
+                io.to(`user:${req.userId}`).emit('new_savings_transfer', { goalId: goal._id });
+                io.to(`user:${req.userId}`).emit('new_savings_transfer', { goalId: sourceGoal._id });
+            }
 
         } else {
             return res.status(400).json({ error: 'Invalid direction.' });
@@ -445,42 +497,45 @@ const transfer = async (req, res) => {
         let transferRecord;
         if (direction === 'transfer_goal') {
             const sourceGoal = await SavingsGoal.findById(sourceGoalId);
-            
+
             // Only log withdrawal for source if it's NOT the Master Pot (keeps Master Pot history clean for wallet moves only)
             if (sourceGoal && sourceGoal.targetAmount > 0) {
                 await SavingsTransfer.create({
-                    user: req.userId, 
-                    direction: 'from_savings', 
-                    amount: amt, 
-                    goal: sourceGoalId, 
-                    goalName: sourceGoal?.name || 'Source Goal', 
+                    user: req.userId,
+                    direction: 'from_savings',
+                    amount: amt,
+                    goal: sourceGoalId,
+                    goalName: sourceGoal?.name || 'Source Goal',
                     note: note || `Transfer to ${goal.name}`,
-                    runningBalance: sourceGoal.currentAmount
+                    runningBalance: sourceGoal.currentAmount,
+                    relatedTransaction: ledgerTx._id
                 });
             }
 
             // Target Goal Record (Deposit)
             transferRecord = await SavingsTransfer.create({
-                user: req.userId, 
-                direction: 'transfer_goal', 
-                amount: amt, 
-                goal: goal._id, 
-                goalName: goal.name, 
+                user: req.userId,
+                direction: 'transfer_goal',
+                amount: amt,
+                goal: goal._id,
+                goalName: goal.name,
                 note: note || `Transfer from ${sourceGoal?.name || 'Savings'}`,
-                runningBalance: goal.currentAmount
+                runningBalance: goal.currentAmount,
+                relatedTransaction: ledgerTx._id
             });
         } else {
             transferRecord = await SavingsTransfer.create({
-                user: req.userId, 
-                direction, 
-                amount: amt, 
-                goal: goal._id, 
-                goalName: goal.name, 
+                user: req.userId,
+                direction,
+                amount: amt,
+                goal: goal._id,
+                goalName: goal.name,
                 note: note || '',
                 runningBalance: goal.currentAmount,
                 wallet: sourceWalletId || null,
                 walletAmount: req.body.nativeAmount || null,
-                walletCurrency: req.body.nativeCurrency || null
+                walletCurrency: req.body.nativeCurrency || null,
+                relatedTransaction: ledgerTx._id
             });
         }
 
@@ -508,7 +563,7 @@ const transfer = async (req, res) => {
                     data: { goalId: goal._id, type: 'target_reached' }
                 }).then(n => {
                     if (io) io.to(`user:${req.userId}`).emit('new_notification', n);
-                }).catch(() => {});
+                }).catch(() => { });
             }
         }
 
@@ -534,7 +589,7 @@ const getTransfers = async (req, res) => {
 
         const skip = (parseInt(page) - 1) * parseInt(limit);
         const [transfers, total] = await Promise.all([
-            SavingsTransfer.find(filter).sort({ createdAt: -1 }).skip(skip).limit(parseInt(limit)).populate('wallet').lean(),
+            SavingsTransfer.find(filter).sort({ createdAt: -1 }).skip(skip).limit(parseInt(limit)).populate('wallet').populate('relatedTransaction').lean(),
             SavingsTransfer.countDocuments(filter),
         ]);
         res.json({ transfers, total });
@@ -549,7 +604,7 @@ const bulkAction = async (req, res) => {
         const { action } = req.body; // 'sweep' or 'distribute'
         const goals = await SavingsGoal.find({ user: req.userId, isCompleted: false });
         let masterPot = goals.find(g => g.name === 'Savings Balance');
-        
+
         if (!masterPot) {
             masterPot = await SavingsGoal.create({
                 user: req.userId, name: 'Savings Balance',
@@ -584,7 +639,7 @@ const bulkAction = async (req, res) => {
             if (totalToSweep > 0) {
                 masterPot.currentAmount += totalToSweep;
                 await masterPot.save();
-                
+
                 // Log for master
                 const t = await SavingsTransfer.create({
                     user: req.userId, direction: 'transfer_goal', amount: totalToSweep,
@@ -614,7 +669,7 @@ const bulkAction = async (req, res) => {
                 let share = (r.needed / totalNeeded) * available;
                 // Round to 2 decimal places
                 share = Math.floor(share * 100) / 100;
-                
+
                 if (share > 0) {
                     r.goal.currentAmount += share;
                     totalDistributed += share;

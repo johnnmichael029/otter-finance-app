@@ -2,15 +2,17 @@ import React, { useEffect, useState, useCallback, useRef } from 'react';
 import {
     View, Text, ScrollView, StyleSheet, Image,
     TouchableOpacity, RefreshControl, ActivityIndicator, Animated,
-    Modal, TouchableWithoutFeedback, BackHandler, ToastAndroid, Platform
+    Modal, TouchableWithoutFeedback, BackHandler, ToastAndroid, Platform,
+    Vibration
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
 import { useAuth } from '../../context/AuthContext';
 import { useTheme } from '../../context/ThemeContext';
+import { API_BASE } from '../../store/authStore';
 import { Feather, MaterialCommunityIcons, Ionicons } from '@expo/vector-icons';
-import { getTransactionSummary, getTransactions, getSavingsGoals, getDebts, getNotifications } from '../../api/api';
+import { getTransactionSummary, getTransactions, getSavingsGoals, getDebts, getNotifications, deleteTransaction, getFriendRequests } from '../../api/api';
 import { spacing, radius, typography, shadow, colors } from '../../theme/colors';
 import CustomAlertModal from '../../components/CustomAlertModal';
 import Skeleton from '../../components/Skeleton';
@@ -111,6 +113,7 @@ export default function HomeScreen({ navigation }) {
     const [logoutModalVisible, setLogoutModalVisible] = useState(false);
     const [dateRange, setDateRange] = useState('Week');
     const [unreadNotifCount, setUnreadNotifCount] = useState(0);
+    const [pendingRequestsCount, setPendingRequestsCount] = useState(0);
     const [lastBackPressed, setLastBackPressed] = useState(0);
 
     // ── Double Tap to Exit ──
@@ -142,6 +145,9 @@ export default function HomeScreen({ navigation }) {
     // Transaction Details Modal State
     const [selectedTx, setSelectedTx] = useState(null);
     const [txModalVisible, setTxModalVisible] = useState(false);
+    const [revertModalVisible, setRevertModalVisible] = useState(false);
+    const [revertingTx, setRevertingTx] = useState(null);
+    const [alert, setAlert] = useState({ visible: false, title: '', message: '', type: 'info' });
 
     const statsTitle = dateRange === 'Day' ? 'Today' : (dateRange === 'Week' ? 'This Week' : 'This Month');
 
@@ -185,14 +191,16 @@ export default function HomeScreen({ navigation }) {
         if (!userToken) return;
 
         try {
-            const [s, t, savRes, debtsRes, notifRes] = await Promise.all([
+            const [s, t, savRes, debtsRes, notifRes, requestsRes] = await Promise.all([
                 getTransactionSummary({ range: dateRange.toLowerCase() }),
                 getTransactions({ limit: 10, page: 1 }),
                 getSavingsGoals().catch(() => ({ totalSaved: 0 })),
                 getDebts().catch(() => ([])),
                 getNotifications().catch(() => ({ unreadCount: 0 })),
+                getFriendRequests().catch(() => ([])),
             ]);
             setUnreadNotifCount(notifRes?.unreadCount || 0);
+            setPendingRequestsCount(Array.isArray(requestsRes) ? requestsRes.length : 0);
             setSavingsTotalSaved(savRes?.totalSaved || 0);
 
             // Calculate debt totals for real net worth
@@ -248,6 +256,27 @@ export default function HomeScreen({ navigation }) {
         }
     };
 
+    const handleRevertConfirm = async () => {
+        if (!revertingTx) return;
+        try {
+            const txId = revertingTx._id;
+            setRevertingTx(null);
+            setRevertModalVisible(false);
+            setTxModalVisible(false);  // Also close the details modal if open
+            setSelectedTx(null);
+            await deleteTransaction(txId);
+            // Socket will handle the rest (removing from list, updating balance)
+        } catch (err) {
+            console.warn('[Home] Revert error:', err.message);
+            setAlert({
+                visible: true,
+                title: 'Revert Failed',
+                message: err?.response?.data?.error || 'Could not undo this transaction. Please try again.',
+                type: 'error'
+            });
+        }
+    };
+
     const handleActivityScroll = ({ nativeEvent }) => {
         const { layoutMeasurement, contentOffset, contentSize } = nativeEvent;
         const isNearEnd = layoutMeasurement.height + contentOffset.y >= contentSize.height - 40;
@@ -284,6 +313,9 @@ export default function HomeScreen({ navigation }) {
         };
 
         const handleNewTransaction = (tx) => {
+            // Defensive check: only add if it belongs to me
+            if (tx.user && tx.user.toString() !== userInfo._id.toString()) return;
+            
             setRecent(prev => {
                 const merged = [tx, ...prev];
                 const seen = new Set();
@@ -297,6 +329,7 @@ export default function HomeScreen({ navigation }) {
         };
 
         const handleUpdateTransaction = (tx) => {
+            if (tx.user && tx.user.toString() !== userInfo._id.toString()) return;
             setRecent(prev => prev.map(t => t._id === tx._id ? tx : t));
             refreshSummary();
         };
@@ -357,6 +390,22 @@ export default function HomeScreen({ navigation }) {
         socket.on('all_notifications_read', () => {
             setUnreadNotifCount(0);
         });
+        
+        socket.on('new_friend_request', () => {
+            setPendingRequestsCount(prev => prev + 1);
+        });
+
+        socket.on('friend_request_accepted', () => {
+            setPendingRequestsCount(prev => Math.max(0, prev - 1));
+        });
+
+        socket.on('friend_request_rejected', () => {
+            setPendingRequestsCount(prev => Math.max(0, prev - 1));
+        });
+
+        socket.on('friend_request_cancelled', () => {
+            setPendingRequestsCount(prev => Math.max(0, prev - 1));
+        });
 
         return () => {
             socket.off('new_transaction', handleNewTransaction);
@@ -374,6 +423,10 @@ export default function HomeScreen({ navigation }) {
             socket.off('new_notification');
             socket.off('notification_read');
             socket.off('all_notifications_read');
+            socket.off('new_friend_request');
+            socket.off('friend_request_accepted');
+            socket.off('friend_request_rejected');
+            socket.off('friend_request_cancelled');
         };
     }, [userInfo?._id, dateRange]);
 
@@ -481,10 +534,29 @@ export default function HomeScreen({ navigation }) {
             >
                 {/* Header */}
                 <View style={styles.header}>
-                    <View>
-                        <Text style={[styles.greeting, { color: COLORS.textMuted, textTransform: 'uppercase', letterSpacing: 0.5, fontSize: 11, marginBottom: 2 }]}>{currentDate}</Text>
-                        <Text style={[styles.userName, { color: COLORS.text }]}>Good day, <Text style={{ fontWeight: 'bold', color: COLORS.primary }}>{userInfo?.name?.split(' ')[0] || 'User'} 👋</Text></Text>
-                    </View>
+                    <TouchableOpacity 
+                        onPress={() => navigation.navigate('ProfileScreen')}
+                        style={styles.headerProfileWrap}
+                    >
+                        <View style={[styles.headerAvatar, { backgroundColor: COLORS.primary + '20' }]}>
+                            {userInfo?.avatarUrl ? (
+                                <Image 
+                                    source={{ uri: userInfo.avatarUrl.startsWith('http') ? userInfo.avatarUrl : `${API_BASE.replace('/api', '')}/${userInfo.avatarUrl}` }} 
+                                    style={styles.headerAvatarImg} 
+                                />
+                            ) : (
+                                <Text style={[styles.headerAvatarText, { color: COLORS.primary }]}>
+                                    {userInfo?.name?.charAt(0)?.toUpperCase() || '?'}
+                                </Text>
+                            )}
+                        </View>
+                        <View>
+                            <Text style={[styles.greeting, { color: COLORS.textMuted, textTransform: 'uppercase', letterSpacing: 0.5, fontSize: 10, marginBottom: 1 }]}>{currentDate}</Text>
+                            <Text style={[styles.userName, { color: COLORS.text }]} numberOfLines={1}>
+                                Good day, <Text style={{ fontWeight: 'bold', color: COLORS.primary }}>{userInfo?.name?.split(' ')[0] || 'User'} 👋</Text>
+                            </Text>
+                        </View>
+                    </TouchableOpacity>
                     <View style={{ flexDirection: 'row', alignItems: 'center' }}>
                         <TouchableOpacity
                             onPress={() => {
@@ -494,6 +566,18 @@ export default function HomeScreen({ navigation }) {
                             style={[{ marginRight: spacing.sm, padding: 8, backgroundColor: COLORS.primary + '20', borderRadius: 12 }]}
                         >
                             <MaterialCommunityIcons name="piggy-bank-outline" size={20} color={COLORS.primary} />
+                        </TouchableOpacity>
+
+                        <TouchableOpacity
+                            onPress={() => navigation.navigate('FriendsScreen')}
+                            style={[{ marginRight: spacing.sm, padding: 8, backgroundColor: COLORS.surface, borderRadius: 12 }]}
+                        >
+                            <Feather name="users" size={20} color={COLORS.textMuted} />
+                            {pendingRequestsCount > 0 && (
+                                <View style={[styles.badge, { backgroundColor: COLORS.primary }]}>
+                                    <Text style={styles.badgeText}>{pendingRequestsCount > 9 ? '9+' : pendingRequestsCount}</Text>
+                                </View>
+                            )}
                         </TouchableOpacity>
 
                         <TouchableOpacity
@@ -632,7 +716,7 @@ export default function HomeScreen({ navigation }) {
                             { icon: 'shopping-cart', label: 'Shopping', color: '#E91E8C', onPress: () => navigation.navigate('ShoppingHome') },
                             { icon: 'credit-card', label: 'Debts', color: '#f59e0b', onPress: () => navigation.navigate('DebtScreen') },
                             { icon: 'dollar-sign', label: 'Convert', color: '#8b5cf6', onPress: () => navigation.navigate('CurrencyConverter') },
-                            { icon: 'repeat', label: 'Bills', color: '#22c55e', onPress: () => navigation.navigate('Bills') },
+                            { icon: 'repeat', label: 'Bills', color: '#22c55e', onPress: () => navigation.navigate('RecurringBills') },
                             { icon: 'maximize', label: 'Scanner', color: '#06b6d4', onPress: () => navigation.navigate('BarcodeScanner') },
                             { icon: 'grid', label: 'View All', color: '#6b7280', onPress: () => navigation.navigate('AllServices') },
                         ].map((action) => (
@@ -675,6 +759,20 @@ export default function HomeScreen({ navigation }) {
                                     onPress={() => {
                                         setSelectedTx(tx);
                                         setTxModalVisible(true);
+                                    }}
+                                    onLongPress={() => {
+                                        Vibration.vibrate(60);
+                                        if (tx.relatedType === 'Debt') {
+                                            setAlert({
+                                                visible: true,
+                                                title: 'Cannot Revert Debt',
+                                                message: 'Debt transactions cannot be reverted from here. To undo a payment, please manage it within the Debt Tracker screen.',
+                                                type: 'info'
+                                            });
+                                            return;
+                                        }
+                                        setRevertingTx(tx);
+                                        setRevertModalVisible(true);
                                     }}
                                 >
                                     <View style={[styles.txIconWrapper, { backgroundColor: getIconColor(tx, COLORS) + '20' }]}>
@@ -733,6 +831,28 @@ export default function HomeScreen({ navigation }) {
                 confirmText="Sign Out"
             />
 
+            <CustomAlertModal
+                visible={revertModalVisible}
+                onClose={() => setRevertModalVisible(false)}
+                onConfirm={handleRevertConfirm}
+                title="Revert Transaction"
+                message={revertingTx?.relatedType === 'Debt' 
+                    ? "You can revert back this Debt transaction. This will undo the payment and restore the remaining balance of the debt."
+                    : `Are you sure you want to undo this ${revertingTx?.type || 'transaction'}? This will restore your wallet balances and permanently delete the record.`
+                }
+                type="confirm"
+                confirmText="Revert"
+            />
+
+            <CustomAlertModal
+                visible={alert.visible}
+                onClose={() => setAlert({ ...alert, visible: false })}
+                onConfirm={() => setAlert({ ...alert, visible: false })}
+                title={alert.title}
+                message={alert.message}
+                type={alert.type}
+            />
+
             {/* Transaction Detail Modal */}
             <Modal
                 visible={txModalVisible}
@@ -777,11 +897,15 @@ export default function HomeScreen({ navigation }) {
                                                     <Text style={[styles.modalDetailLabel, { color: COLORS.textMuted }]}>
                                                         {selectedTx.type === 'income' ? 'Payment Source' : 'Payment Source'}
                                                     </Text>
-                                                    <View style={[styles.walletBadge, { backgroundColor: ((selectedTx.type === 'income' ? selectedTx.sourceWallet?.color : selectedTx.wallet?.color) || COLORS.primary) + '20' }]}>
-                                                        <Text style={[styles.walletBadgeText, { color: (selectedTx.type === 'income' ? selectedTx.sourceWallet?.color : selectedTx.wallet?.color) || COLORS.primary }]}>
+                                                    <View style={[styles.walletBadge, { backgroundColor: ((selectedTx.type === 'income' ? selectedTx.sourceWallet?.color : (selectedTx.sourceRelatedType === 'SavingsGoal' ? selectedTx.sourceRelatedId?.color : selectedTx.wallet?.color)) || COLORS.primary) + '20' }]}>
+                                                        <Text style={[styles.walletBadgeText, { color: (selectedTx.type === 'income' ? selectedTx.sourceWallet?.color : (selectedTx.sourceRelatedType === 'SavingsGoal' ? selectedTx.sourceRelatedId?.color : selectedTx.wallet?.color)) || COLORS.primary }]}>
                                                             {selectedTx.type === 'income' 
-                                                                ? (selectedTx.sourceWallet ? selectedTx.sourceWallet.name : 'External Source')
-                                                                : (selectedTx.wallet ? selectedTx.wallet.name : 'HAND')
+                                                                ? (selectedTx.sourceWallet ? selectedTx.sourceWallet.name : (selectedTx.paymentSource || 'External Source'))
+                                                                : (selectedTx.sourceRelatedType === 'SavingsGoal' 
+                                                                    ? 'Internal Transfer'
+                                                                    : (selectedTx.relatedType === 'SavingsGoal'
+                                                                        ? 'Savings Balance'
+                                                                        : (selectedTx.wallet ? selectedTx.wallet.name : 'HAND')))
                                                             }
                                                         </Text>
                                                     </View>
@@ -906,6 +1030,18 @@ const styles = StyleSheet.create({
     txDate: { fontSize: 10, marginTop: 2 },
     txBalance: { fontSize: 9, fontWeight: '700', marginTop: 1, opacity: 0.8 },
     activityScroll: { maxHeight: 280 },
+    header: {
+        flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+        paddingHorizontal: 24, paddingTop: 12, paddingBottom: 16,
+    },
+    headerProfileWrap: { flexDirection: 'row', alignItems: 'center', flex: 1, marginRight: 12 },
+    headerAvatar: { 
+        width: 40, height: 40, borderRadius: 12, marginRight: 12, 
+        justifyContent: 'center', alignItems: 'center', overflow: 'hidden' 
+    },
+    headerAvatarImg: { width: '100%', height: '100%' },
+    headerAvatarText: { fontSize: 16, fontWeight: '900' },
+    userName: { fontSize: 15 },
     viewAllBtn: {
         flexDirection: 'row',
         alignItems: 'center',
@@ -937,8 +1073,8 @@ const styles = StyleSheet.create({
     walletBadgeText: { fontSize: 11, fontWeight: '800' },
     badge: {
         position: 'absolute',
-        top: 4,
-        right: 4,
+        top: 2,
+        right: 2,
         minWidth: 16,
         paddingHorizontal: 2,
         height: 16,
@@ -946,7 +1082,7 @@ const styles = StyleSheet.create({
         justifyContent: 'center',
         alignItems: 'center',
         borderWidth: 1.5,
-        borderColor: 'white'
+        borderColor: 'transparent'
     },
     badgeText: {
         color: 'white',

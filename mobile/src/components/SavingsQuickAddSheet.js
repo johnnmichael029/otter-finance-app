@@ -8,7 +8,7 @@ import BottomSheetModal from './BottomSheetModal';
 import { getTransactionSummary, getSavingsGoals } from '../api/api';
 
 const SavingsQuickAddSheet = ({ visible, onClose, navigation, activeGoals = [] }) => {
-    const { COLORS } = useTheme();
+    const COLORS = useTheme(state => state.COLORS);
     const { userInfo } = useAuth();
     const styles = getStyles(COLORS);
 

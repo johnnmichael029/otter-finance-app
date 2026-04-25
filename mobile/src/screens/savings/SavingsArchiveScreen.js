@@ -24,7 +24,7 @@ const IconRenderer = ({ name, family, size, color }) => {
 };
 
 export default function SavingsArchiveScreen({ navigation }) {
-    const { COLORS } = useTheme();
+    const COLORS = useTheme(state => state.COLORS);
     const { userInfo } = useAuth();
     const [goals, setGoals] = useState([]);
     const [loading, setLoading] = useState(true);

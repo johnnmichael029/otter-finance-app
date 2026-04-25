@@ -168,6 +168,11 @@ export const useFinanceStore = create(
                     wallets: state.wallets.map(w => w._id === updatedWallet._id ? { ...w, ...updatedWallet } : w)
                 }));
             },
+            deleteTransactionSync: (transactionId) => {
+                set((state) => ({
+                    transactions: state.transactions.filter(tx => tx._id !== transactionId)
+                }));
+            },
         }),
         {
             name: 'otter-finance-storage',

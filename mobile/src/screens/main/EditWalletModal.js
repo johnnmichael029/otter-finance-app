@@ -12,7 +12,7 @@ import * as api from '../../api/api';
 const { height: SCREEN_HEIGHT } = Dimensions.get('window');
 
 export default function EditWalletModal({ visible, wallet, onClose }) {
-    const { COLORS } = useTheme();
+    const COLORS = useTheme(state => state.COLORS);
     const { fetchWallets } = useFinanceStore();
 
     const slideAnim = useRef(new Animated.Value(SCREEN_HEIGHT)).current;

@@ -9,7 +9,7 @@ import { spacing, radius } from '../theme/colors';
 const { height: SCREEN_HEIGHT } = Dimensions.get('window');
 
 const BottomSheetModal = ({ visible, onClose, children }) => {
-    const { COLORS } = useTheme();
+    const COLORS = useTheme(state => state.COLORS);
     const slideAnim = useRef(new Animated.Value(SCREEN_HEIGHT)).current;
     const fadeAnim = useRef(new Animated.Value(0)).current;
     const [renderModal, setRenderModal] = useState(false);

@@ -17,7 +17,7 @@ const RESEND_COOLDOWN = 60; // seconds
 export default function TwoFAScreen({ route, navigation }) {
     const { tempToken, maskedEmail } = route.params;
     const { _finalize2FALogin } = useAuth();
-    const { COLORS } = useTheme();
+    const COLORS = useTheme(state => state.COLORS);
 
     const [otp, setOtp] = useState('');
     const [error, setError] = useState('');

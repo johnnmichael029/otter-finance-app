@@ -20,6 +20,13 @@ const userSchema = new mongoose.Schema({
         lowercase: true,
         trim: true,
     },
+    otterTag: {
+        type: String,
+        unique: true,
+        sparse: true, // sparse because existing users won't have it initially
+        lowercase: true,
+        trim: true,
+    },
     password: {
         type: String,
         // Password is only required for local accounts (not social login)
@@ -37,6 +44,10 @@ const userSchema = new mongoose.Schema({
         type: String,
         default: null,
     },
+    friends: [{
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User'
+    }],
 
     // ── Push Notifications ────────────────────────────────────────────────────
     // Stored after Expo issues a push token on the device
