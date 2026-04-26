@@ -115,6 +115,131 @@ const register = async (req, res) => {
     }
 };
 
+// ─────────────────────────────────────────────────────────────────────────────
+//  POST /api/auth/request-register-otp
+// ─────────────────────────────────────────────────────────────────────────────
+const requestRegisterOTP = async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+        return res.status(400).json({ error: errors.array()[0].msg });
+    }
+
+    try {
+        const { name, email, password } = req.body;
+
+        const existing = await User.findOne({ email: email.toLowerCase().trim() });
+        if (existing) {
+            return res.status(409).json({ error: 'An account with this email already exists.' });
+        }
+
+        // Generate 6-digit code
+        const otp = String(Math.floor(100000 + Math.random() * 900000));
+        
+        // Hash it for the JWT payload so the raw OTP isn't sent back to the client
+        const otpHash = crypto.createHash('sha256').update(otp).digest('hex');
+
+        // Create a temporary token containing the registration data
+        const tempToken = jwt.sign(
+            { name, email: email.toLowerCase().trim(), password, otpHash, type: 'register_pending' },
+            process.env.JWT_SECRET,
+            { expiresIn: '10m' }
+        );
+
+        // Send Email
+        const emailContent = `
+            <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e1e1e1; border-radius: 10px;">
+                <h2 style="color: #E91E8C; text-align: center;">Verify Your Email</h2>
+                <p>Hello <strong>${name}</strong>,</p>
+                <p>Welcome to Otter Finance! Use the verification code below to complete your registration:</p>
+                <div style="background-color: #fce7f3; padding: 20px; text-align: center; border-radius: 8px; margin: 20px 0;">
+                    <span style="font-size: 32px; font-weight: bold; letter-spacing: 5px; color: #B0146A;">${otp}</span>
+                </div>
+                <p style="color: #6b7280; font-size: 13px;">This code is valid for <strong>10 minutes</strong>. If you did not request this, please ignore this email.</p>
+                <hr style="border: 0; border-top: 1px solid #eeeeee; margin: 20px 0;">
+                <p style="text-align: center; color: #9ca3af; font-size: 12px;">Otter Finance App &bull; Securely Managing Your Raft</p>
+            </div>
+        `;
+
+        await sendEmail({
+            to: email,
+            subject: `[Otter] Registration Verification Code: ${otp}`,
+            html: emailContent,
+        });
+
+        res.json({ tempToken, message: 'Verification code sent.' });
+    } catch (err) {
+        console.error('[AUTH] Request Register OTP error:', err.message);
+        res.status(500).json({ error: 'Failed to send verification code.' });
+    }
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  POST /api/auth/verify-register-otp
+// ─────────────────────────────────────────────────────────────────────────────
+const verifyRegisterOTP = async (req, res) => {
+    try {
+        const { tempToken, otp } = req.body;
+        if (!tempToken || !otp) return res.status(400).json({ error: 'Token and code are required.' });
+
+        const decoded = jwt.verify(tempToken, process.env.JWT_SECRET);
+        if (decoded.type !== 'register_pending') {
+            return res.status(400).json({ error: 'Invalid token type.' });
+        }
+
+        const hashedInput = crypto.createHash('sha256').update(otp).digest('hex');
+        if (hashedInput !== decoded.otpHash) {
+            return res.status(401).json({ error: 'Invalid verification code. Please try again.' });
+        }
+
+        const { name, email, password } = decoded;
+
+        // Double check if exists (in case they clicked verify twice or someone else registered)
+        const existing = await User.findOne({ email });
+        if (existing) {
+            return res.status(409).json({ error: 'An account with this email already exists.' });
+        }
+
+        const user = await User.create({ name, email, password });
+
+        // Issue tokens
+        const accessToken = signAccessToken(user._id);
+        const refreshToken = signRefreshToken(user._id);
+
+        // Create session
+        const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+        user.sessions.push({
+            tokenHash: hashToken(refreshToken),
+            deviceInfo: req.headers['x-device-info'] || 'Unknown Device',
+            platform: req.headers['x-platform'] || 'mobile',
+            ipAddress: req.ip,
+            expiresAt,
+        });
+        await user.save();
+
+        res.status(201).json({
+            accessToken,
+            refreshToken,
+            user: {
+                _id: user._id,
+                name: user.name,
+                email: user.email,
+                currency: user.currency,
+                avatarUrl: user.avatarUrl,
+                isOnboarded: user.isOnboarded,
+                otterTag: user.otterTag,
+                occupation: user.occupation,
+                createdAt: user.createdAt,
+            }
+        });
+    } catch (err) {
+        if (err.name === 'TokenExpiredError') {
+            return res.status(401).json({ error: 'Verification session expired. Please register again.' });
+        }
+        console.error('[AUTH] Verify Register OTP error:', err.message);
+        res.status(500).json({ error: 'Verification failed.' });
+    }
+};
+
 // ───────────────────────────────────────────────────────────────────────────────────
 //  POST /api/auth/login
 // ───────────────────────────────────────────────────────────────────────────────────
@@ -441,7 +566,7 @@ const googleLogin = async (req, res) => {
 };
 
 module.exports = { 
-    register, login, refresh, logout, logoutAll, 
+    register, requestRegisterOTP, verifyRegisterOTP, login, refresh, logout, logoutAll, 
     getSessions, revokeSession, verify2FA, resend2FA, 
     toggle2FA, verifyPassword, googleLogin,
     forgotPassword, verifyResetCode, resetPassword

@@ -17,7 +17,7 @@ const transactionSchema = new mongoose.Schema({
     // ── Core Fields ───────────────────────────────────────────────────────────
     type: {
         type: String,
-        enum: ['expense', 'income'],
+        enum: ['expense', 'income', 'transfer'],
         required: [true, 'Transaction type is required.'],
     },
     amount: {
@@ -61,6 +61,10 @@ const transactionSchema = new mongoose.Schema({
         trim: true,
         default: '',
     },
+    tags: [{
+        type: String,
+        trim: true
+    }],
 
     // ── Multi-Currency Support ────────────────────────────────────────────────
     // `amount`         → always in the user's BASE currency (e.g. PHP) — used for all math

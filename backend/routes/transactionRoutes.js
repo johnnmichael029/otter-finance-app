@@ -11,6 +11,7 @@ const {
     deleteTransaction,
     getAnalytics,
     archiveTransaction,
+    emptyArchives
 } = require('../controllers/transactionController');
 
 // All transaction routes require authentication
@@ -36,5 +37,8 @@ router.delete('/:id', deleteTransaction);
 
 // PATCH /api/transactions/:id/archive — toggle archive status
 router.patch('/:id/archive', archiveTransaction);
+
+// DELETE /api/transactions/archive/empty - delete all archived transactions
+router.delete('/archive/empty', emptyArchives);
 
 module.exports = router;

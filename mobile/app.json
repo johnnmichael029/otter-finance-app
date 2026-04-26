@@ -24,6 +24,17 @@
       },
       "edgeToEdgeEnabled": true,
       "package": "com.otter.finance",
+      "primaryColor": "#E91E8C",
+      "statusBar": {
+        "backgroundColor": "#0d0d1a",
+        "barStyle": "light-content"
+      },
+      "navigationBar": {
+        "backgroundColor": "#0d0d1a",
+        "barStyle": "light-content"
+      },
+      "softwareKeyboardLayoutMode": "resize",
+      "googleServicesFile": "./google-services.json",
       "permissions": [
         "INTERNET",
         "ACCESS_NETWORK_STATE",

@@ -84,7 +84,7 @@ export const useAuthStore = create((set, get) => ({
     register: async (name, email, password) => {
         set({ isLoading: true });
         try {
-            await axios.post(`${API_BASE}/auth/register`, {
+            const res = await axios.post(`${API_BASE}/auth/request-register-otp`, {
                 name, email, password, source: 'mobile'
             }, {
                 headers: {
@@ -92,6 +92,26 @@ export const useAuthStore = create((set, get) => ({
                     'X-Device-Info': `${Platform.OS === 'ios' ? 'Apple Device' : 'Android Device'}`
                 }
             });
+            return { success: true, tempToken: res.data.tempToken };
+        } catch (err) {
+            return { success: false, message: err.response?.data?.error || err.message };
+        } finally {
+            set({ isLoading: false });
+        }
+    },
+
+    verifyRegister: async (tempToken, otp) => {
+        set({ isLoading: true });
+        try {
+            const res = await axios.post(`${API_BASE}/auth/verify-register-otp`, {
+                tempToken, otp
+            }, {
+                headers: {
+                    'X-Platform': Platform.OS,
+                    'X-Device-Info': `${Platform.OS === 'ios' ? 'Apple Device' : 'Android Device'}`
+                }
+            });
+            await get()._persistSession(res.data);
             return { success: true };
         } catch (err) {
             return { success: false, message: err.response?.data?.error || err.message };

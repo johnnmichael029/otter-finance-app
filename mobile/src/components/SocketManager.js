@@ -17,6 +17,7 @@ const SocketManager = () => {
 
         connectSocket(userInfo._id);
         const socket = getSocket();
+        const { debouncedRefreshSummary, debouncedRefreshSavings, debouncedRefreshDebts } = useFinanceStore.getState();
 
         // ── WALLET UPDATES ──
         const handleWalletUpdate = (wallet) => {
@@ -28,29 +29,26 @@ const SocketManager = () => {
         const handleNewTransaction = (tx) => {
             console.log('[SOCKET] New transaction:', tx.description);
             addTransactionSync(tx);
-            // Also refresh summary since it depends on totals
-            fetchTransactionSummary('week', true);
+            debouncedRefreshSummary('week');
         };
 
         const handleTransactionDelete = (data) => {
             console.log('[SOCKET] Transaction deleted:', data._id);
-            // Remove from list instantly
             useFinanceStore.getState().deleteTransactionSync(data._id);
-            // Refresh summary and wallets to be safe
-            fetchTransactionSummary('week', true);
-            useFinanceStore.getState().fetchWallets(true);
+            debouncedRefreshSummary('week');
         };
 
         // ── SAVINGS UPDATES ──
         const handleSavingsUpdate = () => {
             console.log('[SOCKET] Savings updated, refreshing...');
-            fetchSavings(true);
+            debouncedRefreshSavings();
+            debouncedRefreshSummary('week');
         };
 
         // ── DEBT UPDATES ──
         const handleDebtUpdate = () => {
             console.log('[SOCKET] Debt updated, refreshing...');
-            fetchDebts(true);
+            debouncedRefreshDebts();
         };
 
         socket.on('wallet_updated', handleWalletUpdate);

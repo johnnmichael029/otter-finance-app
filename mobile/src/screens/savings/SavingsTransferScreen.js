@@ -67,13 +67,33 @@ export default function SavingsTransferScreen({ route, navigation }) {
             try {
                 // Fetch Main Balance
                 const summary = await getTransactionSummary({ range: 'all' });
-                setMainBalance(summary?.balance || 0);
+                setMainBalance(summary?.netBalance || 0);
 
                 // Fetch "Savings Balance" goal
                 const res = await getSavingsGoals();
                 const master = res.goals?.find(g => g.name === 'Savings Balance');
                 if (master) {
                     setSavingsPot(master);
+                    
+                    // Always refresh goal/sourceGoal/targetGoal if they match the master or the specific goalId
+                    if (goal?._id === master._id || goal?.name === 'Savings Balance') setGoal(master);
+                    else if (goal?._id) {
+                        const freshGoal = res.goals?.find(g => g._id === goal._id);
+                        if (freshGoal) setGoal(freshGoal);
+                    }
+
+                    if (sourceGoal?._id === master._id || sourceGoal?.name === 'Savings Balance') setSourceGoal(master);
+                    else if (sourceGoal?._id) {
+                        const freshSource = res.goals?.find(g => g._id === sourceGoal._id);
+                        if (freshSource) setSourceGoal(freshSource);
+                    }
+
+                    if (targetGoal?._id === master._id || targetGoal?.name === 'Savings Balance') setTargetGoal(master);
+                    else if (targetGoal?._id) {
+                        const freshTarget = res.goals?.find(g => g._id === targetGoal._id);
+                        if (freshTarget) setTargetGoal(freshTarget);
+                    }
+
                     if (isDirect && !goal) setGoal(master);
                     
                     // SMART DEFAULTS: 
@@ -125,19 +145,25 @@ export default function SavingsTransferScreen({ route, navigation }) {
             }
         };
         fetchData();
-    }, [isDirect, goal, initialDirection, initialSource, fromSavings]);
+    }, [isDirect, initialDirection, initialSource, fromSavings]);
 
     // REAL-TIME SOCKET UPDATES FOR BALANCE
     useEffect(() => {
         if (!userInfo?._id) return;
         connectSocket(userInfo._id);
         const socket = getSocket();
+        const refreshTimeout = { current: null };
 
-        const refreshBalance = () => {
-            getTransactionSummary({ range: 'all' })
-                .then(s => setMainBalance(s?.balance || 0))
-                .catch(() => { });
+        const debouncedRefresh = () => {
+            if (refreshTimeout.current) clearTimeout(refreshTimeout.current);
+            refreshTimeout.current = setTimeout(() => {
+                getTransactionSummary({ range: 'all' })
+                    .then(s => setMainBalance(s?.netBalance || 0))
+                    .catch(() => { });
+            }, 300);
         };
+
+        const handleBalanceChange = () => debouncedRefresh();
 
         const handleGoalUpdate = (updatedGoal) => {
             if (goal?._id === updatedGoal._id) setGoal(updatedGoal);
@@ -146,18 +172,19 @@ export default function SavingsTransferScreen({ route, navigation }) {
             if (savingsPot?._id === updatedGoal._id) setSavingsPot(updatedGoal);
         };
 
-        socket.on('new_transaction', refreshBalance);
-        socket.on('update_transaction', refreshBalance);
-        socket.on('delete_transaction', refreshBalance);
+        socket.on('new_transaction', handleBalanceChange);
+        socket.on('update_transaction', handleBalanceChange);
+        socket.on('delete_transaction', handleBalanceChange);
         socket.on('wallet_updated', (w) => {
             if (w._id === 'main') setMainBalance(w.balance);
         });
         socket.on('update_savings_goal', handleGoalUpdate);
 
         return () => {
-            socket.off('new_transaction', refreshBalance);
-            socket.off('update_transaction', refreshBalance);
-            socket.off('delete_transaction', refreshBalance);
+            if (refreshTimeout.current) clearTimeout(refreshTimeout.current);
+            socket.off('new_transaction', handleBalanceChange);
+            socket.off('update_transaction', handleBalanceChange);
+            socket.off('delete_transaction', handleBalanceChange);
             socket.off('wallet_updated');
             socket.off('update_savings_goal', handleGoalUpdate);
         };
@@ -177,19 +204,27 @@ export default function SavingsTransferScreen({ route, navigation }) {
     useEffect(() => {
         if (goal) {
             const updated = goal.name === 'Savings Balance' ? storeMaster : storeGoals.find(g => g._id === goal._id);
-            if (updated) setGoal(updated);
+            if (updated && updated.currentAmount !== goal.currentAmount) {
+                setGoal(updated);
+            }
         }
         if (sourceGoal) {
             const updated = sourceGoal.name === 'Savings Balance' ? storeMaster : storeGoals.find(g => g._id === sourceGoal._id);
-            if (updated) setSourceGoal(updated);
+            if (updated && updated.currentAmount !== sourceGoal.currentAmount) {
+                setSourceGoal(updated);
+            }
         }
         if (targetGoal) {
             const updated = targetGoal.name === 'Savings Balance' ? storeMaster : storeGoals.find(g => g._id === targetGoal._id);
-            if (updated) setTargetGoal(updated);
+            if (updated && updated.currentAmount !== targetGoal.currentAmount) {
+                setTargetGoal(updated);
+            }
         }
         if (savingsPot) {
             const updated = savingsPot.name === 'Savings Balance' ? storeMaster : storeGoals.find(g => g._id === savingsPot._id);
-            if (updated) setSavingsPot(updated);
+            if (updated && updated.currentAmount !== savingsPot.currentAmount) {
+                setSavingsPot(updated);
+            }
         }
     }, [storeGoals, storeMaster]);
 
@@ -293,7 +328,7 @@ export default function SavingsTransferScreen({ route, navigation }) {
             });
 
             // Re-fetch balance immediately after success to update UI
-            getTransactionSummary({ range: 'all' }).then(s => setMainBalance(s?.balance || 0)).catch(() => { });
+            getTransactionSummary({ range: 'all' }).then(s => setMainBalance(s?.netBalance || 0)).catch(() => { });
 
             showAlert('success', 'Success!', `${formatCurrency(amt, userInfo?.currency)} moved successfully.`);
         } catch (err) {

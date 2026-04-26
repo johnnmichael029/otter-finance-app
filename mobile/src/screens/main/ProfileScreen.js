@@ -8,6 +8,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { Feather, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useTheme } from '../../context/ThemeContext';
 import { useAuth } from '../../context/AuthContext';
+import { useSecurity } from '../../context/SecurityContext';
 import { spacing, radius } from '../../theme/colors';
 import { updateProfile as apiUpdateProfile, uploadAvatar as apiUploadAvatar, checkTagAvailability, getProfile as apiGetProfile } from '../../api/api';
 import { API_BASE } from '../../store/authStore';
@@ -17,6 +18,7 @@ import * as ImagePicker from 'expo-image-picker';
 export default function ProfileScreen({ navigation }) {
     const COLORS = useTheme(state => state.COLORS);
     const { userInfo, updateLocalUser } = useAuth();
+    const { setShouldIgnoreLock } = useSecurity();
 
     // Editable form state seeded from current user info
     const [name, setName] = useState(userInfo?.name || '');
@@ -91,45 +93,54 @@ export default function ProfileScreen({ navigation }) {
     }, [otterTag, editing]);
 
     const handlePickImage = async () => {
-        const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-        if (status !== 'granted') {
-            showAlert('error', 'Permission Denied', 'We need permission to access your photos.');
-            return;
-        }
-
-        const result = await ImagePicker.launchImageLibraryAsync({
-            mediaTypes: ['images'],
-            allowsEditing: true,
-            aspect: [1, 1],
-            quality: 0.6,
-        });
-
-        if (!result.canceled) {
-            setSaving(true);
-            try {
-                const asset = result.assets[0];
-                const formData = new FormData();
-
-                // Construct file object for FormData
-                const filename = asset.uri.split('/').pop();
-                const match = /\.(\w+)$/.exec(filename);
-                const type = match ? `image/${match[1]}` : `image`;
-
-                formData.append('avatar', {
-                    uri: Platform.OS === 'ios' ? asset.uri.replace('file://', '') : asset.uri,
-                    name: filename,
-                    type,
-                });
-
-                const res = await apiUploadAvatar(formData);
-                await updateLocalUser({ avatarUrl: res.avatarUrl });
-                showAlert('success', 'Success', 'Profile picture updated!');
-            } catch (err) {
-                console.error('[Profile] Upload error:', err);
-                showAlert('error', 'Upload Failed', 'Failed to upload image. Please try again.');
-            } finally {
-                setSaving(false);
+        setShouldIgnoreLock(true);
+        try {
+            const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+            if (status !== 'granted') {
+                showAlert('error', 'Permission Denied', 'We need permission to access your photos.');
+                setShouldIgnoreLock(false);
+                return;
             }
+
+            const result = await ImagePicker.launchImageLibraryAsync({
+                mediaTypes: ['images'],
+                allowsEditing: true,
+                aspect: [1, 1],
+                quality: 0.6,
+            });
+
+            if (!result.canceled) {
+                setSaving(true);
+                try {
+                    const asset = result.assets[0];
+                    const formData = new FormData();
+
+                    // Construct file object for FormData
+                    const filename = asset.uri.split('/').pop();
+                    const match = /\.(\w+)$/.exec(filename);
+                    const type = match ? `image/${match[1]}` : `image`;
+
+                    formData.append('avatar', {
+                        uri: Platform.OS === 'ios' ? asset.uri.replace('file://', '') : asset.uri,
+                        name: filename,
+                        type,
+                    });
+
+                    const res = await apiUploadAvatar(formData);
+                    await updateLocalUser({ avatarUrl: res.avatarUrl });
+                    showAlert('success', 'Success', 'Profile picture updated!');
+                } catch (err) {
+                    console.error('[Profile] Upload error:', err);
+                    showAlert('error', 'Upload Failed', 'Failed to upload image. Please try again.');
+                } finally {
+                    setSaving(false);
+                }
+            }
+        } catch (err) {
+            console.error('Image picking error:', err);
+        } finally {
+            // Delay re-enabling the lock to allow system transitions (like Crop screen) to finish
+            setTimeout(() => setShouldIgnoreLock(false), 1000);
         }
     };
 

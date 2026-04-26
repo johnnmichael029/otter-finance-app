@@ -21,7 +21,7 @@ const SavingsQuickAddSheet = ({ visible, onClose, navigation, activeGoals = [] }
             const fetchBalances = async () => {
                 try {
                     const summary = await getTransactionSummary({ range: 'all' });
-                    setMainBalance(summary?.balance || 0);
+                    setMainBalance(summary?.netBalance || 0);
 
                     const goalsRes = await getSavingsGoals();
                     const master = goalsRes.goals?.find(g => g.name === 'Savings Balance');

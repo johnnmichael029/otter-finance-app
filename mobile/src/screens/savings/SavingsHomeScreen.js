@@ -11,7 +11,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { useTheme } from '../../context/ThemeContext';
 import { useAuth } from '../../context/AuthContext';
 import { useFinanceStore } from '../../store/financeStore';
-import { getSavingsGoals, getSavingsTransfers, bulkSavingsAction, deleteTransaction } from '../../api/api';
+import { getSavingsGoals, getSavingsTransfers, bulkSavingsAction, deleteTransaction, respondToGoalInvite, getFriends } from '../../api/api';
 import { spacing, radius, typography } from '../../theme/colors';
 import { getSocket, connectSocket } from '../../utils/socket';
 import Skeleton from '../../components/Skeleton';
@@ -43,26 +43,35 @@ export default function SavingsHomeScreen({ navigation, route }) {
     const toggleTheme = useTheme(state => state.toggleTheme);
     const isDarkMode = useTheme(state => state.isDarkMode);
     const userInfo = useAuth(state => state.userInfo);
+    const styles = getStyles(COLORS);
+    
+    // ── STORE DATA ──
+    const goalsFromStore = useFinanceStore(state => state.savingsGoals);
+    const masterPot = useFinanceStore(state => state.savingsMasterPot);
+    const isLoadingSavings = useFinanceStore(state => state.isLoadingSavings);
     const hideGlobalBalance = useFinanceStore(state => state.hideGlobalBalance);
     const setHideGlobalBalance = useFinanceStore(state => state.setHideGlobalBalance);
-    const styles = getStyles(COLORS);
+    const { debouncedRefreshAll, debouncedRefreshSavings, debouncedRefreshSummary } = useFinanceStore.getState();
 
-    // Goals State
-    const [goals, setGoals] = useState([]);
-    const [goalsPage, setGoalsPage] = useState(1);
-    const [goalsHasMore, setGoalsHasMore] = useState(true);
-    const [goalsLoading, setGoalsLoading] = useState(false);
-
-    const [masterPot, setMasterPot] = useState(null);
+    // Derived: active goals (not completed)
+    const activeGoals = goalsFromStore.filter(g => !g.isCompleted);
+    
+    // Local-only state for UI interaction
+    const [invites, setInvites] = useState([]);
+    const [history, setHistory] = useState([]); // Keep history local for now as store doesn't have a full history cache yet
     const [loading, setLoading] = useState(true);
     const [refreshing, setRefreshing] = useState(false);
-
-    // History State (Infinite Scroll)
-    const [history, setHistory] = useState([]);
-    const [historyLoading, setHistoryLoading] = useState(false);
     const [page, setPage] = useState(1);
     const [hasMore, setHasMore] = useState(true);
+    const [historyLoading, setHistoryLoading] = useState(false);
     const [lastBackPressed, setLastBackPressed] = useState(0);
+
+    // Modal & Sheet State
+    const [bulkSheetVisible, setBulkSheetVisible] = useState(false);
+    const [transferModalVisible, setTransferModalVisible] = useState(false);
+    const [selectedTransfer, setSelectedTransfer] = useState(null);
+    const [alertConfig, setAlertConfig] = useState({ visible: false, title: '', message: '', type: 'info', onConfirm: null });
+    const pulseAnim = useRef(new Animated.Value(1)).current;
 
     // ── Double Tap to Exit ──
     useFocusEffect(
@@ -90,13 +99,40 @@ export default function SavingsHomeScreen({ navigation, route }) {
         }, [lastBackPressed])
     );
 
-    // Modal State
-    const [selectedTransfer, setSelectedTransfer] = useState(null);
-    const [transferModalVisible, setTransferModalVisible] = useState(false);
-    const [bulkSheetVisible, setBulkSheetVisible] = useState(false);
-    const [alertConfig, setAlertConfig] = useState({
-        visible: false, title: '', message: '', type: 'confirm', onConfirm: () => { }
-    });
+
+    useEffect(() => {
+        Animated.loop(
+            Animated.sequence([
+                Animated.timing(pulseAnim, { toValue: 1.015, duration: 1800, useNativeDriver: true }),
+                Animated.timing(pulseAnim, { toValue: 1, duration: 1800, useNativeDriver: true }),
+            ])
+        ).start();
+    }, []);
+
+    const loadData = useCallback(async () => {
+        if (!userInfo?._id) return;
+        try {
+            setRefreshing(true);
+            await useFinanceStore.getState().refreshAll(true);
+            
+            const pendingInvites = goalsFromStore.filter(g =>
+                g.participants?.some(p => (p.user?._id || p.user) === userInfo._id && p.status === 'pending')
+            );
+            setInvites(pendingInvites);
+
+            const histRes = await getSavingsTransfers({ limit: 15, page: 1 });
+            setHistory(histRes.transfers || []);
+            setPage(2);
+            setHasMore((histRes.transfers || []).length >= 15);
+        } catch (e) {
+            console.warn('[SavingsHome] loadData error:', e.message);
+        } finally {
+            setLoading(false);
+            setRefreshing(false);
+        }
+    }, [userInfo?._id, goalsFromStore]);
+
+    useEffect(() => { loadData(); }, [loadData, userInfo?._id]);
 
     const handleBulkAction = async (actionType) => {
         setBulkSheetVisible(false);
@@ -115,6 +151,7 @@ export default function SavingsHomeScreen({ navigation, route }) {
                     setAlertConfig(p => ({ ...p, visible: false }));
                     setLoading(true);
                     await bulkSavingsAction({ action: actionType });
+                    await useFinanceStore.getState().refreshAll(true);
                     await loadData();
                 } catch (err) {
                     console.warn(err);
@@ -125,69 +162,32 @@ export default function SavingsHomeScreen({ navigation, route }) {
         });
     };
 
-    const pulseAnim = useRef(new Animated.Value(1)).current;
-
-    useEffect(() => {
-        Animated.loop(
-            Animated.sequence([
-                Animated.timing(pulseAnim, { toValue: 1.015, duration: 1800, useNativeDriver: true }),
-                Animated.timing(pulseAnim, { toValue: 1, duration: 1800, useNativeDriver: true }),
-            ])
-        ).start();
-    }, []);
-
-    const loadData = useCallback(async () => {
-        if (!userInfo?._id) return;
+    const handleInviteResponse = async (goalId, status) => {
         try {
             setRefreshing(true);
-            const goalRes = await getSavingsGoals({ page: 1, limit: 15 });
-            const allGoals = goalRes.goals || [];
-            const mainPot = allGoals.find(g => g.name === 'Savings Balance');
-
-            setMasterPot(mainPot);
-            // Hide archived goals (Completed + Emptied) from the main list
-            const activeGoals = allGoals.filter(g =>
-                g.name !== 'Savings Balance' &&
-                !(g.isCompleted && g.currentAmount === 0)
-            );
-            setGoals(activeGoals);
-            setGoalsPage(2);
-            setGoalsHasMore(goalRes.hasMore);
-
-            // Fetch wallets to ensure balances are fresh during manual refresh
-            useFinanceStore.getState().fetchWallets(true);
-
-            const histRes = await getSavingsTransfers({ limit: 15, page: 1 });
-            setHistory(histRes.transfers || []);
-            setPage(2);
-            setHasMore((histRes.transfers || []).length >= 15);
+            await respondToGoalInvite(goalId, { status });
+            setAlertConfig({
+                visible: true,
+                title: status === 'accepted' ? 'Joined! 🎉' : 'Declined',
+                message: status === 'accepted' ? 'You are now a participant in this goal.' : 'Invitation removed.',
+                type: 'success',
+                onConfirm: () => setAlertConfig(p => ({ ...p, visible: false }))
+            });
+            await useFinanceStore.getState().refreshAll(true);
+            await loadData();
         } catch (e) {
-            console.warn(e);
+            setAlertConfig({
+                visible: true, title: 'Error',
+                message: e.response?.data?.error || 'Action failed.', type: 'error',
+                onConfirm: () => setAlertConfig(p => ({ ...p, visible: false }))
+            });
         } finally {
-            setLoading(false);
             setRefreshing(false);
         }
-    }, [userInfo?._id]);
-
-    useEffect(() => { loadData(); }, [loadData, userInfo?._id]);
+    };
 
     const fetchMoreGoals = async () => {
-        if (!goalsHasMore || goalsLoading) return;
-        setGoalsLoading(true);
-        try {
-            const res = await getSavingsGoals({ page: goalsPage, limit: 15 });
-            const incoming = res.goals || [];
-            setGoals(prev => {
-                const filteredIncoming = incoming.filter(g => g.name !== 'Savings Balance');
-                const seen = new Set(prev.map(g => g._id));
-                return [...prev, ...filteredIncoming.filter(g => !seen.has(g._id))];
-            });
-            setGoalsHasMore(res.hasMore);
-            setGoalsPage(p => p + 1);
-        } catch (e) {
-        } finally {
-            setGoalsLoading(false);
-        }
+        // Now handled via global store if needed, or we keep it simple for now
     };
 
     const fetchMoreHistory = async () => {
@@ -225,24 +225,30 @@ export default function SavingsHomeScreen({ navigation, route }) {
 
     const todaysHistory = history.filter(h => isToday(h.createdAt));
 
+
+
     useEffect(() => {
         if (!userInfo?._id) return;
         connectSocket(userInfo._id);
         const socket = getSocket();
-        const handleUpdate = () => loadData();
+
+        const handleUpdate = () => {
+            debouncedRefreshSavings();
+            debouncedRefreshSummary();
+        };
+
         socket.on('new_savings_transfer', handleUpdate);
         socket.on('new_savings_goal', handleUpdate);
         socket.on('update_savings_goal', handleUpdate);
         socket.on('delete_savings_goal', handleUpdate);
+
         return () => {
             socket.off('new_savings_transfer', handleUpdate);
             socket.off('new_savings_goal', handleUpdate);
             socket.off('update_savings_goal', handleUpdate);
             socket.off('delete_savings_goal', handleUpdate);
         };
-    }, [userInfo?._id, loadData]);
-
-    const activeGoals = goals.filter(g => !g.isCompleted);
+    }, [userInfo?._id]);
 
     const renderActivityItem = (item) => {
         const isDeposit = item.direction === 'to_savings' || item.direction === 'income' || item.direction === 'transfer_goal';
@@ -316,35 +322,64 @@ export default function SavingsHomeScreen({ navigation, route }) {
         );
     };
 
-    const renderGoalCard = (goal) => {
+    const renderGoalCard = (goal, isInvite = false) => {
         const pct = goal.targetAmount > 0 ? Math.min((goal.currentAmount / goal.targetAmount) * 100, 100) : 0;
         const isComplete = goal.isCompleted || pct >= 100;
+        const isOwner = goal.user?._id === userInfo._id || goal.user === userInfo._id;
+
         return (
-            <TouchableOpacity
-                key={goal._id}
-                style={[styles.goalCard, { backgroundColor: COLORS.surface }]}
-                onPress={() => navigation.navigate('SavingsGoalDetail', { goal })}
-            >
-                <View style={styles.goalHeader}>
-                    <View style={[styles.goalIconBox, { backgroundColor: (goal.color || COLORS.primary) + '20' }]}>
-                        <IconRenderer name={goal.icon || 'target'} family={goal.family} size={20} color={goal.color || COLORS.primary} />
+            <View key={goal._id} style={[styles.goalCard, { backgroundColor: COLORS.surface }]}>
+                <TouchableOpacity
+                    activeOpacity={0.7}
+                    onPress={() => !isInvite && navigation.navigate('SavingsGoalDetail', { goal })}
+                    disabled={isInvite}
+                >
+                    <View style={styles.goalHeader}>
+                        <View style={[styles.goalIconBox, { backgroundColor: (goal.color || COLORS.primary) + '20' }]}>
+                            <IconRenderer name={goal.icon || 'target'} family={goal.family} size={20} color={goal.color || COLORS.primary} />
+                        </View>
+                        <View style={{ flex: 1 }}>
+                            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                                <Text style={[styles.goalHeaderName, { color: COLORS.text }]}>{goal.name}</Text>
+                                {goal.isShared && <Ionicons name="people" size={14} color={COLORS.primary} />}
+                            </View>
+                            <Text style={[styles.goalHeaderSub, { color: COLORS.textMuted }]}>
+                                {isInvite ? `Invited by ${goal.user?.name || 'Friend'}` : `${formatCurrency(goal.currentAmount, userInfo?.currency)} saved`}
+                            </Text>
+                        </View>
+                        {isComplete && !isInvite && <Feather name="check-circle" size={18} color="#22c55e" />}
                     </View>
-                    <View style={{ flex: 1 }}>
-                        <Text style={[styles.goalHeaderName, { color: COLORS.text }]}>{goal.name}</Text>
-                        <Text style={[styles.goalHeaderSub, { color: COLORS.textMuted }]}>
-                            {formatCurrency(goal.currentAmount, userInfo?.currency)} saved
-                        </Text>
+
+                    {!isInvite && (
+                        <>
+                            <View style={styles.barContainer}>
+                                <View style={[styles.barFill, { width: `${pct}%`, backgroundColor: goal.color || COLORS.primary }]} />
+                            </View>
+                            <View style={styles.goalFooter}>
+                                <Text style={[styles.goalPct, { color: COLORS.textMuted }]}>{Math.round(pct)}% reached</Text>
+                                <Text style={[styles.goalTarget, { color: COLORS.textMuted }]}>Target: {formatCurrency(goal.targetAmount, userInfo?.currency)}</Text>
+                            </View>
+                        </>
+                    )}
+                </TouchableOpacity>
+
+                {isInvite && (
+                    <View style={styles.inviteActions}>
+                        <TouchableOpacity
+                            style={[styles.inviteBtn, { backgroundColor: COLORS.primary }]}
+                            onPress={() => handleInviteResponse(goal._id, 'accepted')}
+                        >
+                            <Text style={styles.inviteBtnText}>Accept</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                            style={[styles.inviteBtn, { backgroundColor: COLORS.background, borderWidth: 1, borderColor: COLORS.border }]}
+                            onPress={() => handleInviteResponse(goal._id, 'rejected')}
+                        >
+                            <Text style={[styles.inviteBtnText, { color: COLORS.text }]}>Decline</Text>
+                        </TouchableOpacity>
                     </View>
-                    {isComplete && <Feather name="check-circle" size={18} color="#22c55e" />}
-                </View>
-                <View style={styles.barContainer}>
-                    <View style={[styles.barFill, { width: `${pct}%`, backgroundColor: goal.color || COLORS.primary }]} />
-                </View>
-                <View style={styles.goalFooter}>
-                    <Text style={[styles.goalPct, { color: COLORS.textMuted }]}>{Math.round(pct)}% reached</Text>
-                    <Text style={[styles.goalTarget, { color: COLORS.textMuted }]}>Target: {formatCurrency(goal.targetAmount, userInfo?.currency)}</Text>
-                </View>
-            </TouchableOpacity>
+                )}
+            </View>
         );
     };
 
@@ -414,30 +449,40 @@ export default function SavingsHomeScreen({ navigation, route }) {
         return (
             <SafeAreaView style={styles.safe}>
                 <FlatList
-                    data={goals}
-                    renderItem={({ item }) => renderGoalCard(item)}
+                    data={[
+                        ...invites.map(i => ({ ...i, isInvite: true })),
+                        ...goalsFromStore.filter(g => g.name !== 'Savings Balance')
+                    ]}
+                    renderItem={({ item }) => renderGoalCard(item, item.isInvite)}
                     keyExtractor={item => item._id}
                     ListHeaderComponent={() => (
-                        <View style={styles.topRow}>
-                            <View>
-                                <Text style={styles.headerTitle}>Savings Goals</Text>
-                                <Text style={[styles.headerSub, { color: COLORS.textMuted }]}>Showing all target pots</Text>
+                        <View>
+                            <View style={styles.topRow}>
+                                <View>
+                                    <Text style={styles.headerTitle}>Savings Goals</Text>
+                                    <Text style={[styles.headerSub, { color: COLORS.textMuted }]}>Showing all target pots</Text>
+                                </View>
+                                <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                                    <TouchableOpacity
+                                        onPress={() => navigation.navigate('SavingsArchive')}
+                                        style={[styles.themeToggle, { marginRight: spacing.sm }]}
+                                    >
+                                        <Feather name="archive" size={20} color={COLORS.textMuted} />
+                                    </TouchableOpacity>
+                                </View>
                             </View>
-                            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                                <TouchableOpacity
-                                    onPress={() => navigation.navigate('SavingsArchive')}
-                                    style={[styles.themeToggle, { marginRight: spacing.sm }]}
-                                >
-                                    <Feather name="archive" size={20} color={COLORS.textMuted} />
-                                </TouchableOpacity>
-                            </View>
+                            {invites.length > 0 && (
+                                <View style={{ marginBottom: 16 }}>
+                                    <Text style={[styles.sectionTitle, { fontSize: 16, marginBottom: 8 }]}>Pending Invitations ({invites.length})</Text>
+                                </View>
+                            )}
                         </View>
                     )}
                     contentContainerStyle={styles.flatContent}
                     refreshControl={<RefreshControl refreshing={refreshing} onRefresh={loadData} tintColor="#E91E8C" />}
                     onEndReached={fetchMoreGoals}
                     onEndReachedThreshold={0.5}
-                    ListFooterComponent={goalsLoading && <ActivityIndicator color={COLORS.primary} style={{ padding: 20 }} />}
+                    ListFooterComponent={isLoadingSavings && <ActivityIndicator color={COLORS.primary} style={{ padding: 20 }} />}
                     ListEmptyComponent={() => (
                         <View style={styles.emptyContainer}>
                             <Text style={styles.emptyEmoji}>🎯</Text>
@@ -615,7 +660,7 @@ export default function SavingsHomeScreen({ navigation, route }) {
                                                         <Text style={[styles.modalDetailLabel, { color: COLORS.textMuted }]}>Date</Text>
                                                         <Text style={[styles.modalDetailValue, { color: COLORS.text }]}>{formatDateTime(selectedTransfer.createdAt)}</Text>
                                                     </View>
-                                                    
+
                                                     {/* Payment Source — shown for deposits AND wallet withdrawals */}
                                                     {(isDeposit || selectedTransfer.direction === 'from_savings') && (
                                                         <View style={styles.modalDetailRow}>
@@ -748,4 +793,24 @@ const getStyles = (COLORS) => StyleSheet.create({
     walletBadge: { paddingHorizontal: 8, paddingVertical: 4, borderRadius: 8 },
     walletBadgeText: { fontSize: 11, fontWeight: '800' },
     txDesc: { ...typography.caption, fontStyle: 'italic' },
+    inviteActions: {
+        flexDirection: 'row',
+        gap: 10,
+        marginTop: 16,
+        paddingTop: 16,
+        borderTopWidth: 1,
+        borderTopColor: 'rgba(0,0,0,0.05)',
+    },
+    inviteBtn: {
+        flex: 1,
+        height: 40,
+        borderRadius: 10,
+        justifyContent: 'center',
+        alignItems: 'center',
+    },
+    inviteBtnText: {
+        fontSize: 13,
+        fontWeight: '800',
+        color: '#fff',
+    },
 });

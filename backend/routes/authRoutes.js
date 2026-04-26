@@ -4,7 +4,7 @@ const { body } = require('express-validator');
 const rateLimit = require('express-rate-limit');
 const requireAuth = require('../middleware/requireAuth');
 const {
-    register, login, refresh,
+    register, requestRegisterOTP, verifyRegisterOTP, login, refresh,
     logout, logoutAll,
     getSessions, revokeSession,
     verify2FA, resend2FA, toggle2FA, verifyPassword,
@@ -58,6 +58,8 @@ const loginValidators = [
 
 // Public — registration & login (rate-limited + validated)
 router.post('/register', authLimiter, registerValidators, register);
+router.post('/request-register-otp', authLimiter, registerValidators, requestRegisterOTP);
+router.post('/verify-register-otp', authLimiter, verifyRegisterOTP);
 router.post('/login',    authLimiter, loginValidators, login);
 
 // Token refresh (no auth required, validated by refresh token)

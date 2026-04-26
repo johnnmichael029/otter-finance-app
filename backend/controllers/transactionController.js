@@ -107,8 +107,7 @@ const getSummary = async (req, res) => {
                 $match: {
                     user: new mongoose.Types.ObjectId(req.userId),
                     date: { $gte: start, $lte: end },
-                    wallet: null,
-                    isArchived: { $ne: true }
+                    type: { $in: ['income', 'expense'] }
                 }
             },
             {
@@ -177,11 +176,46 @@ const getSummary = async (req, res) => {
         const maxVal = Math.max(...incomeDist, ...expenseDist, 100); 
         const normalize = (dist) => dist.map(v => Math.round((v / maxVal) * 100));
 
+        // Get Category Distributions for Pie Charts
+        const getPieData = async (type) => {
+            const data = await Transaction.aggregate([
+                {
+                    $match: {
+                        user: new mongoose.Types.ObjectId(req.userId),
+                        date: { $gte: start, $lte: end },
+                        type: type,
+                        category: { $ne: 'transfer' }
+                    }
+                },
+                {
+                    $group: {
+                        _id: '$category',
+                        total: { $sum: '$amount' },
+                        color: { $first: '$categoryColor' }
+                    }
+                },
+                { $sort: { total: -1 } }
+            ]);
+            
+            return data.map(item => ({
+                name: item._id,
+                population: item.total,
+                color: item.color || (type === 'income' ? '#22c55e' : '#ef4444'),
+                legendFontColor: '#7F7F7F',
+                legendFontSize: 12
+            }));
+        };
+
+        const expensePie = await getPieData('expense');
+        const incomePie = await getPieData('income');
+
         res.json({
             ...summary,
             netBalance, // Total wallet balance
             incomeDist: normalize(incomeDist),
-            expenseDist: normalize(expenseDist)
+            expenseDist: normalize(expenseDist),
+            expensePie,
+            incomePie
         });
     } catch (err) {
         console.error('[TRANSACTION] getSummary error:', err.message);
@@ -274,8 +308,12 @@ const createTransaction = async (req, res) => {
                     : safeAmount;
 
                 // We ALWAYS deduct from source wallet
-                sWallet.balance -= srcNativeAmount;
-                if (sWallet.type !== 'Credit' && sWallet.balance < 0) sWallet.balance = 0;
+                if (sWallet.type === 'Credit') {
+                    sWallet.balance += srcNativeAmount; // Cash advance increases debt
+                } else {
+                    sWallet.balance -= srcNativeAmount;
+                    if (sWallet.balance < 0) sWallet.balance = 0;
+                }
                 await sWallet.save();
 
                 // Save native info to transaction
@@ -287,10 +325,14 @@ const createTransaction = async (req, res) => {
             }
         }
 
-        // ── Feature: HAND as Source ───────────────────────────────
+        // ── Feature: HAND as Source — validate sufficient balance ─────────────
         if (sourceType === 'hand') {
-            // Hand balance is dynamically computed, we just emit the updated event for frontend
-            // (we'll emit it at the end of the request)
+            if (currentBalance < safeAmount) {
+                return res.status(400).json({
+                    error: `Insufficient HAND balance. You have ₱${currentBalance.toFixed(2)} but tried to use ₱${safeAmount.toFixed(2)}.`
+                });
+            }
+            // Hand balance is dynamically computed, we just emit the updated event at end of request
         }
 
         // ── Feature: SAVINGS BALANCE as Source ───────────────────────────────
@@ -298,8 +340,9 @@ const createTransaction = async (req, res) => {
             const masterPot = await SavingsGoal.findOne({ user: req.userId, name: 'Savings Balance' });
             if (masterPot) {
                 if (masterPot.currentAmount < safeAmount) {
-                    // Insufficient savings — still proceed but don't go negative
-                    masterPot.currentAmount = 0;
+                    return res.status(400).json({
+                        error: `Insufficient Savings Balance. You have ₱${masterPot.currentAmount.toFixed(2)} but tried to use ₱${safeAmount.toFixed(2)}.`
+                    });
                 } else {
                     masterPot.currentAmount -= safeAmount;
                 }
@@ -333,7 +376,7 @@ const createTransaction = async (req, res) => {
         if (!walletId) {
             // Update HAND balance (Dynamically computed)
             const handAgg = await Transaction.aggregate([
-                { $match: { user: new mongoose.Types.ObjectId(req.userId), wallet: null, isArchived: { $ne: true } } },
+                { $match: { user: new mongoose.Types.ObjectId(req.userId), wallet: null } },
                 { $group: { _id: '$type', total: { $sum: '$amount' } } }
             ]);
             let handBalance = 0;
@@ -344,7 +387,7 @@ const createTransaction = async (req, res) => {
 
             // Subtract money transferred from HAND to a physical wallet
             const handDeductionsAgg = await Transaction.aggregate([
-                { $match: { user: new mongoose.Types.ObjectId(req.userId), paymentSource: 'HAND', wallet: { $ne: null }, isArchived: { $ne: true } } },
+                { $match: { user: new mongoose.Types.ObjectId(req.userId), paymentSource: 'HAND', wallet: { $ne: null } } },
                 { $group: { _id: null, total: { $sum: '$amount' } } }
             ]);
             if (handDeductionsAgg.length > 0) {
@@ -518,7 +561,13 @@ const deleteTransaction = async (req, res) => {
             const sWallet = await Wallet.findOne({ _id: transaction.sourceWallet, userId: req.userId });
             if (sWallet) {
                 const srcRevAmount = transaction.sourceWalletAmount != null ? transaction.sourceWalletAmount : transaction.amount;
-                sWallet.balance += srcRevAmount;
+                if (sWallet.type === 'Credit') {
+                    sWallet.balance -= srcRevAmount;
+                    // Credit balance represents debt, but in this specific revert we cap at 0 to avoid negative debt if it got misaligned
+                    if (sWallet.balance < 0) sWallet.balance = 0;
+                } else {
+                    sWallet.balance += srcRevAmount;
+                }
                 await sWallet.save();
                 if (io) io.to(`user:${req.userId}`).emit('wallet_updated', sWallet.toObject());
             }
@@ -532,22 +581,17 @@ const deleteTransaction = async (req, res) => {
             const goal = await SavingsGoal.findOne({ _id: transaction.relatedId, user: req.userId });
             if (goal) {
                 // If it was an expense (to savings), we remove money from goal
-                // If it was income (from savings), we add money back to goal
-                if (transaction.type === 'expense') {
+                // If it was a transfer (internal), we also remove money from the target goal
+                if (transaction.type === 'expense' || transaction.type === 'transfer') {
                     goal.currentAmount = Math.max(0, goal.currentAmount - transaction.amount);
                 } else {
+                    // It was income (withdrawal), so we put money back into the goal
                     goal.currentAmount += transaction.amount;
                 }
                 await goal.save();
 
                 // Delete associated SavingsTransfer record to clean up history
-                // We try to find it by related criteria since we don't have its ID directly on the transaction
-                await SavingsTransfer.deleteOne({
-                    user: req.userId,
-                    goal: goal._id,
-                    amount: transaction.amount,
-                    createdAt: { $gte: new Date(transaction.createdAt.getTime() - 5000), $lte: new Date(transaction.createdAt.getTime() + 5000) }
-                });
+                await SavingsTransfer.deleteOne({ relatedTransaction: transaction._id });
 
                 if (io) {
                     io.to(`user:${req.userId}`).emit('update_savings_goal', goal);
@@ -566,12 +610,7 @@ const deleteTransaction = async (req, res) => {
                 await sGoal.save();
 
                 // Delete associated SavingsTransfer record to clean up history
-                await SavingsTransfer.deleteOne({
-                    user: req.userId,
-                    goal: sGoal._id,
-                    amount: transaction.amount,
-                    createdAt: { $gte: new Date(transaction.createdAt.getTime() - 5000), $lte: new Date(transaction.createdAt.getTime() + 5000) }
-                });
+                await SavingsTransfer.deleteOne({ relatedTransaction: transaction._id });
 
                 if (io) {
                     io.to(`user:${req.userId}`).emit('update_savings_goal', sGoal);
@@ -582,7 +621,7 @@ const deleteTransaction = async (req, res) => {
 
         // Re-calculate and emit dynamic HAND balance
         const handAgg = await Transaction.aggregate([
-            { $match: { user: new mongoose.Types.ObjectId(req.userId), wallet: null, isArchived: { $ne: true } } },
+            { $match: { user: new mongoose.Types.ObjectId(req.userId), wallet: null } },
             { $group: { _id: '$type', total: { $sum: '$amount' } } }
         ]);
         let handBalance = 0;
@@ -593,7 +632,7 @@ const deleteTransaction = async (req, res) => {
 
         // Subtract money transferred from HAND to a physical wallet
         const handDeductionsAgg = await Transaction.aggregate([
-            { $match: { user: new mongoose.Types.ObjectId(req.userId), paymentSource: 'HAND', wallet: { $ne: null }, isArchived: { $ne: true } } },
+            { $match: { user: new mongoose.Types.ObjectId(req.userId), paymentSource: 'HAND', wallet: { $ne: null } } },
             { $group: { _id: null, total: { $sum: '$amount' } } }
         ]);
         if (handDeductionsAgg.length > 0) {
@@ -622,19 +661,37 @@ const deleteTransaction = async (req, res) => {
 // ─────────────────────────────────────────────────────────────────────────────
 const getAnalytics = async (req, res) => {
     try {
+        const { range = 'THIS_MONTH', startDate, endDate } = req.query;
         const now = new Date();
         const firstDayThisMonth = new Date(now.getFullYear(), now.getMonth(), 1);
         const firstDayLastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+        
+        let dateFilter = { $gte: firstDayThisMonth }; // Default THIS_MONTH
+
+        if (range === '7D') {
+            dateFilter = { $gte: new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000) };
+        } else if (range === '30D') {
+            dateFilter = { $gte: new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000) };
+        } else if (range === 'THIS_YEAR') {
+            dateFilter = { $gte: new Date(now.getFullYear(), 0, 1) };
+        } else if (range === 'ALL_TIME') {
+            dateFilter = { $gte: new Date(0) }; // Beginning of time
+        } else if (range === 'CUSTOM' && startDate && endDate) {
+            // Include entire end date
+            const end = new Date(endDate);
+            end.setHours(23, 59, 59, 999);
+            dateFilter = { $gte: new Date(startDate), $lte: end };
+        }
+
         const firstDay6MonthsAgo = new Date(now.getFullYear(), now.getMonth() - 5, 1);
 
-        // 1. Category Breakdown (Current Month)
+        // 1. Category Breakdown (Selected Range)
         const currentMonthAgg = await Transaction.aggregate([
             {
                 $match: {
                     user: new mongoose.Types.ObjectId(req.userId),
                     type: 'expense',
-                    date: { $gte: firstDayThisMonth },
-                    isArchived: { $ne: true }
+                    date: dateFilter
                 }
             },
             {
@@ -655,13 +712,60 @@ const getAnalytics = async (req, res) => {
             legendFontSize: 12
         }));
 
-        // 2. Trend Graph (Last 6 Months)
+        // 1b. Income Breakdown (Selected Range)
+        const incomeMonthAgg = await Transaction.aggregate([
+            {
+                $match: {
+                    user: new mongoose.Types.ObjectId(req.userId),
+                    type: 'income',
+                    date: dateFilter
+                }
+            },
+            {
+                $lookup: {
+                    from: 'wallets',
+                    localField: 'sourceWallet',
+                    foreignField: '_id',
+                    as: 'sourceWalletDoc'
+                }
+            },
+            {
+                $match: {
+                    $or: [
+                        { sourceWallet: null, paymentSource: { $ne: 'HAND' } },
+                        { "sourceWalletDoc.type": "Credit" }
+                    ]
+                }
+            },
+            {
+                $group: {
+                    _id: '$category',
+                    total: { $sum: '$amount' },
+                    color: { $first: '$categoryColor' }
+                }
+            },
+            { $sort: { total: -1 } }
+        ]);
+
+        const incomePieChartData = incomeMonthAgg.map(item => ({
+            name: item._id,
+            population: item.total,
+            color: item.color || '#10b981',
+            legendFontColor: '#7F7F7F',
+            legendFontSize: 12
+        }));
+
+        // 2. Trend Graph (Full Year — 12 Months)
+        const trendYear = parseInt(req.query.trendYear) || now.getFullYear();
+        const firstDayOfTrendYear = new Date(trendYear, 0, 1);
+        const lastDayOfTrendYear = new Date(trendYear + 1, 0, 1);
+
         const trendsAgg = await Transaction.aggregate([
             {
                 $match: {
                     user: new mongoose.Types.ObjectId(req.userId),
-                    date: { $gte: firstDay6MonthsAgo },
-                    isArchived: { $ne: true }
+                    type: { $in: ['income', 'expense'] },
+                    date: { $gte: firstDayOfTrendYear, $lt: lastDayOfTrendYear }
                 }
             },
             {
@@ -676,20 +780,18 @@ const getAnalytics = async (req, res) => {
             }
         ]);
 
-        // Format Trends Data
+        // Format full 12-month Trends Data
         const monthsLabel = [];
         const expenseData = [];
         const incomeData = [];
-        
-        for (let i = 5; i >= 0; i--) {
-            const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+
+        for (let m = 1; m <= 12; m++) {
+            const d = new Date(trendYear, m - 1, 1);
             monthsLabel.push(d.toLocaleString('en-US', { month: 'short' }));
-            const m = d.getMonth() + 1;
-            const y = d.getFullYear();
-            
-            const exp = trendsAgg.find(t => t._id.month === m && t._id.year === y && t._id.type === 'expense');
-            const inc = trendsAgg.find(t => t._id.month === m && t._id.year === y && t._id.type === 'income');
-            
+
+            const exp = trendsAgg.find(t => t._id.month === m && t._id.year === trendYear && t._id.type === 'expense');
+            const inc = trendsAgg.find(t => t._id.month === m && t._id.year === trendYear && t._id.type === 'income');
+
             expenseData.push(exp ? exp.total : 0);
             incomeData.push(inc ? inc.total : 0);
         }
@@ -697,9 +799,10 @@ const getAnalytics = async (req, res) => {
         const trendData = {
             labels: monthsLabel,
             datasets: [
-                { data: expenseData, color: (opacity = 1) => `rgba(233, 30, 140, ${opacity})` }, // primary pink
-                { data: incomeData, color: (opacity = 1) => `rgba(37, 99, 235, ${opacity})` }  // blue
-            ]
+                { data: expenseData, color: (opacity = 1) => `rgba(239, 68, 68, ${opacity})` },  // red
+                { data: incomeData, color: (opacity = 1) => `rgba(34, 197, 94, ${opacity})` }    // green
+            ],
+            trendYear
         };
 
         // 3. AI Smart Insights (Last vs This month)
@@ -708,8 +811,7 @@ const getAnalytics = async (req, res) => {
                 $match: {
                     user: new mongoose.Types.ObjectId(req.userId),
                     type: 'expense',
-                    date: { $gte: firstDayLastMonth, $lt: firstDayThisMonth },
-                    isArchived: { $ne: true }
+                    date: { $gte: firstDayLastMonth, $lt: firstDayThisMonth }
                 }
             },
             {
@@ -739,12 +841,14 @@ const getAnalytics = async (req, res) => {
         }
 
         // Insight B: Velocity Check
-        const dayOfMonth = now.getDate();
-        const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
         const totalExpensesThisMonth = currentMonthAgg.reduce((sum, item) => sum + item.total, 0);
+        const totalIncomeThisMonth = incomeMonthAgg.reduce((sum, item) => sum + item.total, 0);
         const totalExpensesLastMonth = lastMonthAgg.reduce((sum, item) => sum + item.total, 0);
 
-        if (totalExpensesLastMonth > 0) {
+        const dayOfMonth = now.getDate();
+        const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+
+        if (range === 'THIS_MONTH' && totalExpensesLastMonth > 0) {
             const velocityPct = Math.round((totalExpensesThisMonth / totalExpensesLastMonth) * 100);
             const timePct = Math.round((dayOfMonth / daysInMonth) * 100);
 
@@ -756,7 +860,6 @@ const getAnalytics = async (req, res) => {
         }
 
         // Insight C: Savings Rate
-        const totalIncomeThisMonth = incomeData[5];
         if (totalIncomeThisMonth > 0) {
             const savingsRate = Math.round(((totalIncomeThisMonth - totalExpensesThisMonth) / totalIncomeThisMonth) * 100);
             if (savingsRate > 20) {
@@ -771,13 +874,14 @@ const getAnalytics = async (req, res) => {
 
         res.json({
             pieChartData,
+            incomePieChartData,
             trendData,
             insight: primaryInsight,
             insights: insights.length > 0 ? insights : ["No major patterns detected yet. Keep logging!"],
             stats: {
                 totalExpenses: totalExpensesThisMonth,
                 totalIncome: totalIncomeThisMonth,
-                avgDaily: Math.round(totalExpensesThisMonth / dayOfMonth)
+                avgDaily: Math.round(totalExpensesThisMonth / (range === 'THIS_MONTH' ? dayOfMonth : 30))
             }
         });
 
@@ -901,6 +1005,24 @@ const archiveTransaction = async (req, res) => {
     }
 };
 
+// ─────────────────────────────────────────────────────────────────────────────
+//  DELETE /api/transactions/archive/empty
+//  Delete all archived transactions permanently
+// ─────────────────────────────────────────────────────────────────────────────
+const emptyArchives = async (req, res) => {
+    try {
+        await Transaction.deleteMany({ user: req.userId, isArchived: true });
+
+        invalidatePrefixes('transaction');
+        invalidatePrefixes('savings');
+
+        res.json({ message: 'Archives emptied successfully.' });
+    } catch (err) {
+        console.error('[TRANSACTION] emptyArchives error:', err.message);
+        res.status(500).json({ error: 'Failed to empty archives.' });
+    }
+};
+
 module.exports = { 
     getTransactions, 
     getSummary, 
@@ -908,5 +1030,6 @@ module.exports = {
     updateTransaction, 
     deleteTransaction, 
     getAnalytics,
-    archiveTransaction 
+    archiveTransaction,
+    emptyArchives
 };

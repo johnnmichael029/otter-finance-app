@@ -372,7 +372,6 @@ export default function RecurringBillsScreen({ navigation }) {
 
             {/* Add Bill Modal */}
             <BottomSheetModal visible={modalVisible} onClose={() => setModalVisible(false)}>
-                <View style={styles.sheetHandle} />
                 <Text style={[styles.sheetTitle, { color: COLORS.text }]}>Add Recurring Bill</Text>
 
                 {/* Name */}

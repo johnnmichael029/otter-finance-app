@@ -6,7 +6,7 @@ import {
 import Animated, { ZoomIn, ZoomOut, Layout } from 'react-native-reanimated';
 import { Swipeable } from 'react-native-gesture-handler';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { Feather, MaterialCommunityIcons, Ionicons } from '@expo/vector-icons';
+import { Feather, MaterialCommunityIcons, Ionicons, AntDesign, FontAwesome5 } from '@expo/vector-icons';
 import { useTheme } from '../../context/ThemeContext';
 import { getCategories, createCategory, updateCategory, deleteCategory } from '../../api/api';
 import { spacing, radius, shadow } from '../../theme/colors';
@@ -21,13 +21,23 @@ const ICONS = Array.from(new Set([
     'tag', 'speaker', 'watch', 'anchor', 'box', 'cloud', 'cpu', 'database', 'droplet', 'feather',
     'flag', 'globe', 'image', 'key', 'layers', 'mic', 'package', 'paperclip',
     'phone', 'printer', 'radio', 'scissors', 'shield', 'tool', 'trash', 'umbrella', 'unlock', 'user', 'video',
-    'smile', 'piggy-bank-outline', 'account-cash'
+    'smile', 'piggy-bank-outline', 'account-cash', 'jeepney', 'car', 'train-outline', 'boat-outline', 'hospital', 'noodles', 'egg-outline',
+    'egg-fried', 'cup', 'game-controller-outline', 'controller-classic-outline', 'rice', 'steam'
 ]));
 
 const DynamicIcon = ({ name, size, color, style }) => {
-    const MCI_ICONS = ['piggy-bank-outline', 'account-cash'];
+    const MCI_ICONS = ['piggy-bank-outline', 'account-cash', 'jeepney', 'car', 'noodles', 'egg-fried', 'cup',
+        'controller-classic-outline', 'rice'];
+    const ION_ICONS = ['train-outline', 'boat-outline', 'egg-outline', 'game-controller-outline'];
+    const FA5_ICONS = ['hospital', 'steam'];
     if (MCI_ICONS.includes(name)) {
         return <MaterialCommunityIcons name={name} size={size} color={color} style={style} />;
+    }
+    else if (ION_ICONS.includes(name)) {
+        return <Ionicons name={name} size={size} color={color} style={style} />;
+    }
+    else if (FA5_ICONS.includes(name)) {
+        return <FontAwesome5 name={name} size={size} color={color} style={style} />;
     }
     return <Feather name={name} size={size} color={color} style={style} />;
 };
@@ -238,7 +248,7 @@ export default function ManageCategoriesScreen({ navigation }) {
                                         borderColor: form.icon === ix ? COLORS.primary : COLORS.border,
                                         borderWidth: 1.5
                                     }]}>
-                                    <DynamicIcon name={ix} size={20} color={form.icon === ix ? COLORS.primary : COLORS.textMuted} />
+                                    <DynamicIcon name={ix} size={18} color={form.icon === ix ? COLORS.primary : COLORS.textMuted} />
                                 </TouchableOpacity>
                             ))}
                         </View>
@@ -288,8 +298,8 @@ const getStyles = (COLORS) => StyleSheet.create({
     label: { fontSize: 11, fontWeight: '800', letterSpacing: 0.5, marginBottom: 8 },
     input: { borderWidth: 1, borderRadius: radius.lg, paddingHorizontal: 16, paddingVertical: 14, fontSize: 16, fontWeight: '700' },
     colorCircle: { width: 40, height: 40, borderRadius: 20 },
-    iconGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 5 },
-    iconSelectBtn: { width: '15%', aspectRatio: 1, borderRadius: 12, justifyContent: 'center', alignItems: 'center', borderWidth: 1.5 },
+    iconGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: spacing.sm },
+    iconSelectBtn: { width: '18%', height: 42, borderRadius: 12, justifyContent: 'center', alignItems: 'center', borderWidth: 1.5 },
     showMoreBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingVertical: 12, borderRadius: 12, borderWidth: 1, marginBottom: spacing.lg, borderStyle: 'dashed' },
     showMoreText: { fontSize: 14, fontWeight: '700' },
     saveBtn: { paddingVertical: 16, borderRadius: radius.xl, alignItems: 'center' },

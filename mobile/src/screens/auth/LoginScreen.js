@@ -62,10 +62,7 @@ export default function LoginScreen({ navigation }) {
         // For Expo Go / Personal Testing
         webClientId: '368902982049-1d7rsbq19pip9hmd3imrv6j5e3pcj3dt.apps.googleusercontent.com',
         // For Standalone Build
-        androidClientId: '368902982049-7t1l2u3m97780l8ffkhejcu1i5o1p6q3.apps.googleusercontent.com', 
-        clientId: '368902982049-1d7rsbq19pip9hmd3imrv6j5e3pcj3dt.apps.googleusercontent.com',
-        redirectUri: REDIRECT_URI,
-        responseType: 'id_token',
+        androidClientId: '368902982049-7t1l2u3m97780l8ffkhejcu1i5o1p6q3.apps.googleusercontent.com',
     });
 
     useEffect(() => {
@@ -169,7 +166,7 @@ export default function LoginScreen({ navigation }) {
                                 <TextInput
                                     style={[styles.input, { backgroundColor: COLORS.inputBackground, borderColor: COLORS.inputBorder, color: COLORS.text }]}
                                     placeholder="you@example.com"
-                                    placeholderTextColor={COLORS.textMuted}
+                                    placeholderTextColor={COLORS.textMuted + '80'}
                                     value={email}
                                     onChangeText={setEmail}
                                     keyboardType="email-address"
@@ -184,7 +181,7 @@ export default function LoginScreen({ navigation }) {
                                     <TextInput
                                         style={[styles.inputFlex, { color: COLORS.text }]}
                                         placeholder="••••••••"
-                                        placeholderTextColor={COLORS.textMuted}
+                                        placeholderTextColor={COLORS.textMuted + '80'}
                                         value={password}
                                         onChangeText={setPassword}
                                         secureTextEntry={!showPassword}

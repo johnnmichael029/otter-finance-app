@@ -2,13 +2,14 @@ import React, { useState, useEffect } from 'react';
 import {
     View, Text, StyleSheet, TouchableOpacity, ScrollView,
     TextInput, ActivityIndicator, KeyboardAvoidingView, Platform, Modal,
-    TouchableWithoutFeedback, Dimensions, Pressable
+    TouchableWithoutFeedback, Dimensions, Pressable, Image
 } from 'react-native';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Feather, Ionicons } from '@expo/vector-icons';
+import { API_BASE } from '../../store/authStore';
 import { useTheme } from '../../context/ThemeContext';
-import { createSavingsGoal, getSavingsGoals } from '../../api/api';
+import { createSavingsGoal, getSavingsGoals, getFriends } from '../../api/api';
 import CustomAlertModal from '../../components/CustomAlertModal';
 import { spacing, radius } from '../../theme/colors';
 
@@ -100,6 +101,8 @@ export default function AddSavingsGoalScreen({ navigation }) {
     const [saving, setSaving] = useState(false);
     const [alert, setAlert] = useState({ visible: false, type: 'info', title: '', message: '' });
     const [suggestions, setSuggestions] = useState([]);
+    const [friends, setFriends] = useState([]);
+    const [selectedParticipantIds, setSelectedParticipantIds] = useState([]);
 
     useEffect(() => {
         const fetchSuggestions = async () => {
@@ -112,9 +115,17 @@ export default function AddSavingsGoalScreen({ navigation }) {
                 const defaults = ['Emergency Fund', 'New Phone', 'Vacation', 'Car', 'Christmas Fund'];
                 const unique = [...new Set([...defaults, ...completed])];
                 setSuggestions(unique.slice(0, 10));
-            } catch (e) {}
+            } catch (e) { }
+        };
+        const fetchFriendsList = async () => {
+            try {
+                const res = await getFriends();
+                // Handle both object { friends: [] } and raw array [] formats
+                setFriends(Array.isArray(res) ? res : (res.friends || []));
+            } catch (e) { }
         };
         fetchSuggestions();
+        fetchFriendsList();
     }, []);
 
     // Icon section state
@@ -159,16 +170,17 @@ export default function AddSavingsGoalScreen({ navigation }) {
                 color: selectedColor,
                 deadline: deadlineDate,
                 note: note.trim(),
+                participantIds: selectedParticipantIds
             });
             showAlert('success', 'Goal Created! 🎯', `"${name}" has been added.`);
         } catch (err) {
             const errorData = err?.response?.data;
             let errorMsg = errorData?.error || 'Could not create goal.';
-            
+
             if (errorData?.details && Array.isArray(errorData.details) && errorData.details.length > 0) {
                 errorMsg = errorData.details[0].message;
             }
-            
+
             showAlert('error', 'Failed', errorMsg);
         } finally {
             setSaving(false);
@@ -217,7 +229,7 @@ export default function AddSavingsGoalScreen({ navigation }) {
                     </View>
 
                     {/* Suggestions Chips */}
-                    <View style={{ marginBottom: spacing.md }}>
+                    <View style={{ marginTop: spacing.md }}>
                         <ScrollView
                             horizontal
                             showsHorizontalScrollIndicator={false}
@@ -371,6 +383,54 @@ export default function AddSavingsGoalScreen({ navigation }) {
                         </TouchableOpacity>
                     </View>
 
+                    {/* Shared Goal Section */}
+                    {friends.length > 0 && (
+                        <>
+                            <Text style={[styles.label, { color: COLORS.textMuted }]}>SHARE WITH FRIENDS</Text>
+                            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.friendList}>
+                                {friends.map(friend => {
+                                    const isSelected = selectedParticipantIds.includes(friend._id);
+                                    return (
+                                        <TouchableOpacity
+                                            key={friend._id}
+                                            onPress={() => {
+                                                if (isSelected) {
+                                                    setSelectedParticipantIds(prev => prev.filter(id => id !== friend._id));
+                                                } else {
+                                                    setSelectedParticipantIds(prev => [...prev, friend._id]);
+                                                }
+                                            }}
+                                            style={[styles.friendChip, {
+                                                backgroundColor: isSelected ? selectedColor + '15' : COLORS.surface,
+                                                borderColor: isSelected ? selectedColor : COLORS.border
+                                            }]}
+                                        >
+                                            <View style={styles.friendAvatar}>
+                                                {friend.avatar || friend.avatarUrl ? (
+                                                    <Image
+                                                        source={{
+                                                            uri: (friend.avatar || friend.avatarUrl).startsWith('http')
+                                                                ? (friend.avatar || friend.avatarUrl)
+                                                                : `${API_BASE.replace('/api', '')}/${friend.avatar || friend.avatarUrl}`
+                                                        }}
+                                                        style={styles.avatarImg}
+                                                        resizeMode="cover"
+                                                    />
+                                                ) : (
+                                                    <Feather name="user" size={14} color={isSelected ? selectedColor : COLORS.textMuted} />
+                                                )}
+                                            </View>
+                                            <Text style={[styles.friendName, { color: isSelected ? selectedColor : COLORS.text }]} numberOfLines={1}>
+                                                {friend.name}
+                                            </Text>
+                                            {isSelected && <Feather name="check-circle" size={12} color={selectedColor} style={{ marginLeft: 4 }} />}
+                                        </TouchableOpacity>
+                                    );
+                                })}
+                            </ScrollView>
+                        </>
+                    )}
+
                     {/* Submit */}
                     <TouchableOpacity
                         onPress={handleSave}
@@ -501,4 +561,24 @@ const getStyles = (COLORS) => StyleSheet.create({
         alignItems: 'center',
     },
     suggestionText: { fontSize: 12, fontWeight: '800' },
+    friendList: { gap: 10, paddingRight: spacing.lg },
+    friendChip: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        paddingHorizontal: 12,
+        paddingVertical: 10,
+        borderRadius: 16,
+        borderWidth: 1.5
+    },
+    friendAvatar: {
+        width: 24,
+        height: 24,
+        borderRadius: 12,
+        backgroundColor: 'rgba(0,0,0,0.05)',
+        justifyContent: 'center',
+        alignItems: 'center',
+        marginRight: 8
+    },
+    friendName: { fontSize: 12, fontWeight: '700' },
+    avatarImg: { width: '100%', height: '100%', borderRadius: 12 },
 });

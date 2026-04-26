@@ -2,11 +2,12 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
     View, Text, StyleSheet, TouchableOpacity,
     ActivityIndicator, RefreshControl, Alert, FlatList,
-    Modal, TouchableWithoutFeedback
+    Modal, TouchableWithoutFeedback, Image
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Feather, Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
+import { API_BASE } from '../../store/authStore';
 import { useTheme } from '../../context/ThemeContext';
 import { useAuth } from '../../context/AuthContext';
 import { getSavingsGoals, deleteSavingsGoal, getSavingsTransfers, completeSavingsGoal } from '../../api/api';
@@ -14,6 +15,7 @@ import BottomSheetModal from '../../components/BottomSheetModal';
 import { spacing, radius, shadow } from '../../theme/colors';
 import { getSocket, connectSocket } from '../../utils/socket';
 import CustomAlertModal from '../../components/CustomAlertModal';
+import { useFinanceStore } from '../../store/financeStore';
 
 const isIonicon = (name) => name?.includes('-outline') || name?.includes('-sharp');
 
@@ -40,11 +42,16 @@ const getDaysLeft = (deadline) => {
 export default function SavingsGoalDetailScreen({ route, navigation }) {
     const { goal: initialGoal } = route.params;
     const COLORS = useTheme(state => state.COLORS);
-    const isDarkMode = useTheme(state => state.isDarkMode);
     const { userInfo } = useAuth();
     const styles = getStyles(COLORS);
 
-    const [goal, setGoal] = useState(initialGoal);
+    // ── STORE DATA ──
+    const goal = useFinanceStore(state =>
+        state.savingsGoals.find(g => g._id === initialGoal._id) ||
+        (state.savingsMasterPot?._id === initialGoal._id ? state.savingsMasterPot : initialGoal)
+    );
+    const { debouncedRefreshSavings, debouncedRefreshSummary } = useFinanceStore.getState();
+
     const [transfers, setTransfers] = useState([]);
     const [loading, setLoading] = useState(true);
     const [refreshing, setRefreshing] = useState(false);
@@ -64,18 +71,15 @@ export default function SavingsGoalDetailScreen({ route, navigation }) {
     const load = useCallback(async () => {
         try {
             setRefreshing(true);
-            const [goalsRes, transfersRes] = await Promise.all([
-                getSavingsGoals(),
-                getSavingsTransfers({ goalId: initialGoal._id, limit: 15, page: 1 }),
-            ]);
-            const updated = (goalsRes.goals || []).find(g => g._id === initialGoal._id);
-            if (updated) setGoal(updated);
+            // Refresh global savings to ensure the current goal is up to date in the store
+            await useFinanceStore.getState().refreshAll(true);
 
+            const transfersRes = await getSavingsTransfers({ goalId: initialGoal._id, limit: 15, page: 1 });
             setTransfers(transfersRes.transfers || []);
             setPage(2);
             setHasMore((transfersRes.transfers || []).length >= 15);
         } catch (e) {
-            console.warn(e.message);
+            if (e.response?.status !== 403) console.warn('[GoalDetail] load error:', e.message);
         } finally {
             setLoading(false);
             setRefreshing(false);
@@ -99,7 +103,8 @@ export default function SavingsGoalDetailScreen({ route, navigation }) {
                 setHasMore(false);
             }
         } catch (e) {
-            console.warn('[FetchMore Detail Error]:', e);
+            // Ignore 403 during deletion transitions
+            if (e.response?.status !== 403) console.warn('[FetchMore Detail Error]:', e);
         } finally {
             setLoadingMore(false);
         }
@@ -112,7 +117,12 @@ export default function SavingsGoalDetailScreen({ route, navigation }) {
         connectSocket(userInfo._id);
         const socket = getSocket();
 
-        const handleUpdate = () => { load(); };
+        const handleUpdate = () => {
+            debouncedRefreshSavings();
+            debouncedRefreshSummary();
+            // Still need to refresh local transfers history manually
+            load();
+        };
 
         socket.on('update_savings_goal', handleUpdate);
         socket.on('new_savings_transfer', handleUpdate);
@@ -127,10 +137,12 @@ export default function SavingsGoalDetailScreen({ route, navigation }) {
             socket.off('new_savings_transfer', handleUpdate);
             socket.off('delete_savings_goal');
         };
-    }, [userInfo?._id, load, initialGoal._id, navigation]);
+    }, [userInfo?._id, initialGoal._id, navigation]);
 
-    const pct = goal.targetAmount > 0 ? Math.min((goal.currentAmount / goal.targetAmount) * 100, 100) : 0;
-    const daysLeft = getDaysLeft(goal.deadline);
+    // Guard: goal may be briefly undefined during navigation transitions
+    const safeGoal = goal || initialGoal;
+    const pct = safeGoal.targetAmount > 0 ? Math.min((safeGoal.currentAmount / safeGoal.targetAmount) * 100, 100) : 0;
+    const daysLeft = getDaysLeft(safeGoal.deadline);
 
     const handleComplete = () => setCompleteModalVisible(true);
 
@@ -251,17 +263,29 @@ export default function SavingsGoalDetailScreen({ route, navigation }) {
                 {(!goal.isCompleted || goal.currentAmount > 0) ? (
                     <View style={styles.actionRow}>
                         {!goal.isCompleted && (
-                            <TouchableOpacity style={[styles.actionBtn, { backgroundColor: COLORS.primary }]} onPress={() => navigation.navigate('SavingsTransfer', { goal, direction: 'to_savings', fromSavings: true })}>
-                                <Feather name="arrow-down-circle" size={18} color="#fff" /><Text style={styles.actionBtnText}>Add Money</Text>
+                            <TouchableOpacity
+                                style={[styles.actionBtn, { backgroundColor: COLORS.primary }]}
+                                onPress={() => navigation.navigate('SavingsTransfer', { goal, direction: 'to_savings', fromSavings: true })}
+                            >
+                                <Feather name="arrow-down-circle" size={18} color="#fff" />
+                                <Text style={styles.actionBtnText}>Add Money</Text>
                             </TouchableOpacity>
                         )}
-                        <TouchableOpacity
-                            style={[goal.isCompleted ? styles.actionBtn : styles.actionBtnOutline, { backgroundColor: goal.isCompleted ? COLORS.primary : 'transparent', borderColor: COLORS.primary, marginLeft: !goal.isCompleted ? spacing.md : 0 }]}
-                            onPress={() => navigation.navigate('SavingsTransfer', { goal, direction: 'from_savings', fromSavings: true })}
-                        >
-                            <Feather name="arrow-up-circle" size={18} color={goal.isCompleted ? '#fff' : COLORS.primary} />
-                            <Text style={[styles.actionBtnText, { color: goal.isCompleted ? '#fff' : COLORS.primary }]}>Withdraw</Text>
-                        </TouchableOpacity>
+                        {/* Only owner can withdraw from shared goal */}
+                        {(goal.user?._id === userInfo._id || goal.user === userInfo._id) ? (
+                            <TouchableOpacity
+                                style={[goal.isCompleted ? styles.actionBtn : styles.actionBtnOutline, { backgroundColor: goal.isCompleted ? COLORS.primary : 'transparent', borderColor: COLORS.primary, marginLeft: !goal.isCompleted ? spacing.md : 0 }]}
+                                onPress={() => navigation.navigate('SavingsTransfer', { goal, direction: 'from_savings', fromSavings: true })}
+                            >
+                                <Feather name="arrow-up-circle" size={18} color={goal.isCompleted ? '#fff' : COLORS.primary} />
+                                <Text style={[styles.actionBtnText, { color: goal.isCompleted ? '#fff' : COLORS.primary }]}>Withdraw</Text>
+                            </TouchableOpacity>
+                        ) : (
+                            <View style={[styles.actionBtnDisabled, { marginLeft: !goal.isCompleted ? spacing.md : 0, borderColor: COLORS.border, borderWidth: 1 }]}>
+                                <Feather name="lock" size={16} color={COLORS.textMuted} />
+                                <Text style={[styles.actionBtnText, { color: COLORS.textMuted }]}>Withdraw</Text>
+                            </View>
+                        )}
                     </View>
                 ) : (
                     <View style={[styles.archivedBanner, { backgroundColor: COLORS.surface, borderColor: COLORS.border }]}>
@@ -273,6 +297,55 @@ export default function SavingsGoalDetailScreen({ route, navigation }) {
                     </View>
                 )}
             </View>
+
+            {goal.isShared && (
+                <View style={[styles.detailsCard, { backgroundColor: COLORS.surface, marginTop: -spacing.md }]}>
+                    <Text style={[styles.sectionTitle, { color: COLORS.textMuted, marginBottom: 12 }]}>PARTICIPANTS</Text>
+                    <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 12 }}>
+                        {/* Owner */}
+                        <View style={styles.participantItem}>
+                            <View style={[styles.avatarSmall, { borderColor: COLORS.primary, borderWidth: 1.5 }]}>
+                                {goal.user?.avatar || goal.user?.avatarUrl ? (
+                                    <Image
+                                        source={{
+                                            uri: (goal.user.avatar || goal.user.avatarUrl).startsWith('http')
+                                                ? (goal.user.avatar || goal.user.avatarUrl)
+                                                : `${API_BASE.replace('/api', '')}/${goal.user.avatar || goal.user.avatarUrl}`
+                                        }}
+                                        style={styles.avatarImg}
+                                        resizeMode="cover"
+                                    />
+                                ) : (
+                                    <Feather name="user" size={12} color={COLORS.text} />
+                                )}
+                                <View style={styles.ownerBadge}><Text style={styles.ownerBadgeText}>★</Text></View>
+                            </View>
+                            <Text style={[styles.participantName, { color: COLORS.text }]} numberOfLines={1}>{goal.user?.name || 'Owner'}</Text>
+                        </View>
+                        {/* Accepted Participants */}
+                        {goal.participants?.filter(p => p.status === 'accepted').map(p => (
+                            <View key={p.user?._id} style={styles.participantItem}>
+                                <View style={styles.avatarSmall}>
+                                    {p.user?.avatar || p.user?.avatarUrl ? (
+                                        <Image
+                                            source={{
+                                                uri: (p.user.avatar || p.user.avatarUrl).startsWith('http')
+                                                    ? (p.user.avatar || p.user.avatarUrl)
+                                                    : `${API_BASE.replace('/api', '')}/${p.user.avatar || p.user.avatarUrl}`
+                                            }}
+                                            style={styles.avatarImg}
+                                            resizeMode="cover"
+                                        />
+                                    ) : (
+                                        <Feather name="user" size={12} color={COLORS.text} />
+                                    )}
+                                </View>
+                                <Text style={[styles.participantName, { color: COLORS.text }]} numberOfLines={1}>{p.user?.name || 'Member'}</Text>
+                            </View>
+                        ))}
+                    </View>
+                </View>
+            )}
 
             <Text style={[styles.sectionTitle, { color: COLORS.textMuted, marginHorizontal: spacing.lg }]}>RECENT TRANSFERS</Text>
         </View>
@@ -302,6 +375,9 @@ export default function SavingsGoalDetailScreen({ route, navigation }) {
                                     <Text style={[styles.txLabel, { color: COLORS.text }]}>
                                         {t.direction === 'to_savings' ? 'Saved to Pot' : (t.direction === 'transfer_goal' ? 'Goal Transfer' : (t.direction === 'income' ? 'Savings Income' : 'Withdrawn'))}
                                     </Text>
+                                    {t.performedBy && t.performedBy?._id !== userInfo?._id && (
+                                        <Text style={[styles.contributorName, { color: COLORS.primary }]}>by {t.performedBy.name}</Text>
+                                    )}
                                     <Text style={[styles.txDate, { color: COLORS.textMuted }]}>
                                         {new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }).format(new Date(t.createdAt))}
                                     </Text>
@@ -431,11 +507,21 @@ export default function SavingsGoalDetailScreen({ route, navigation }) {
                                                     )}
 
                                                     {selectedTransfer.note ? (
-                                                        <View style={[styles.modalDetailRow, { borderBottomWidth: 0, paddingBottom: 0, marginTop: 4, alignItems: 'flex-start' }]}>
+                                                        <View style={[styles.modalDetailRow, { alignItems: 'flex-start' }]}>
                                                             <Text style={[styles.modalDetailLabel, { color: COLORS.textMuted, marginBottom: 4 }]}>Note</Text>
                                                             <Text style={[styles.modalDetailValue, { color: COLORS.text }]}>{selectedTransfer.note}</Text>
                                                         </View>
                                                     ) : null}
+
+                                                    {selectedTransfer.performedBy && (
+                                                        <View style={[styles.modalDetailRow, { borderBottomWidth: 0, paddingTop: 12 }]}>
+                                                            <Text style={[styles.modalDetailLabel, { color: COLORS.textMuted }]}>Contributor</Text>
+                                                            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                                                                <Text style={[styles.modalDetailValue, { color: COLORS.primary }]}>{selectedTransfer.performedBy.name}</Text>
+                                                                <Feather name="user" size={12} color={COLORS.primary} />
+                                                            </View>
+                                                        </View>
+                                                    )}
                                                 </View>
                                             </View>
                                         </>
@@ -516,4 +602,12 @@ const getStyles = (COLORS) => StyleSheet.create({
     modalDetailValue: { fontSize: 13, fontWeight: '700' },
     walletBadge: { paddingHorizontal: 8, paddingVertical: 4, borderRadius: 8 },
     walletBadgeText: { fontSize: 11, fontWeight: '800' },
+    participantItem: { width: 60, alignItems: 'center' },
+    avatarSmall: { width: 36, height: 36, borderRadius: 18, backgroundColor: 'rgba(0,0,0,0.05)', justifyContent: 'center', alignItems: 'center', marginBottom: 4, overflow: 'hidden' },
+    avatarImg: { width: '100%', height: '100%' },
+    participantName: { fontSize: 10, fontWeight: '700', textAlign: 'center' },
+    ownerBadge: { position: 'absolute', bottom: -2, right: -2, width: 14, height: 14, borderRadius: 7, backgroundColor: '#E91E8C', justifyContent: 'center', alignItems: 'center', borderWidth: 1.5, borderColor: '#fff' },
+    ownerBadgeText: { color: '#fff', fontSize: 8, fontWeight: '900' },
+    actionBtnDisabled: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingVertical: 14, borderRadius: radius.xl, opacity: 0.6 },
+    contributorName: { fontSize: 11, fontWeight: '700', marginTop: -2, marginBottom: 2 },
 });

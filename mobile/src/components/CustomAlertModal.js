@@ -1,5 +1,5 @@
 import React from 'react';
-import { View, Text, StyleSheet, Modal, TouchableOpacity } from 'react-native';
+import { View, Text, StyleSheet, Modal, TouchableOpacity, ActivityIndicator } from 'react-native';
 import { Ionicons, Feather } from '@expo/vector-icons';
 import { useTheme } from '../context/ThemeContext';
 
@@ -17,9 +17,18 @@ const CustomAlertModal = ({
     children,
     hideButtons = false,
     extraActions, // Array of { label, icon, onPress, danger }
+    isLoading = false, // NEW: show spinner and disable confirm button while API is working
 }) => {
     const COLORS = useTheme(state => state.COLORS);
     const styles = getStyles(COLORS);
+    const [isProcessing, setIsProcessing] = React.useState(false);
+
+    // Reset processing state when modal opens/closes
+    React.useEffect(() => {
+        if (!visible) setIsProcessing(false);
+    }, [visible]);
+
+    const showSpinner = isLoading || isProcessing;
 
     const getIcon = () => {
         switch (type) {
@@ -42,11 +51,14 @@ const CustomAlertModal = ({
             onRequestClose={onClose}
         >
             <View style={styles.overlay}>
-                <TouchableOpacity
-                    style={StyleSheet.absoluteFill}
-                    activeOpacity={1}
-                    onPress={onClose}
-                />
+                {/* Block background tap-to-close while loading */}
+                {!showSpinner && (
+                    <TouchableOpacity
+                        style={StyleSheet.absoluteFill}
+                        activeOpacity={1}
+                        onPress={onClose}
+                    />
+                )}
                 <View style={styles.alertBox}>
                     <View style={[styles.iconWrapper, { backgroundColor: icon.color + '20' }]}>
                         <Ionicons name={icon.name} size={40} color={icon.color} />
@@ -97,14 +109,25 @@ const CustomAlertModal = ({
                             <TouchableOpacity
                                 style={[
                                     styles.confirmBtn,
-                                    { backgroundColor: isConfirm ? COLORS.primary : icon.color, flex: (isConfirm && !extraBtnText) ? 1 : 0, width: (isConfirm && !extraBtnText) ? 'auto' : '100%' }
+                                    { backgroundColor: isConfirm ? COLORS.primary : icon.color, flex: (isConfirm && !extraBtnText) ? 1 : 0, width: (isConfirm && !extraBtnText) ? 'auto' : '100%', opacity: showSpinner ? 0.7 : 1 }
                                 ]}
-                                onPress={() => {
-                                    if (onConfirm) onConfirm();
-                                    onClose();
+                                onPress={async () => {
+                                    if (showSpinner) return; // Block double-tap while loading
+                                    setIsProcessing(true);
+                                    if (onConfirm) {
+                                        await onConfirm();
+                                    } else {
+                                        onClose();
+                                    }
+                                    // We don't strictly need to set processing to false here because the modal usually closes,
+                                    // but the useEffect will handle it when visible becomes false.
                                 }}
+                                disabled={showSpinner}
                             >
-                                <Text style={styles.confirmBtnText}>{confirmText}</Text>
+                                {showSpinner
+                                    ? <ActivityIndicator color="#fff" size="small" />
+                                    : <Text style={styles.confirmBtnText}>{confirmText}</Text>
+                                }
                             </TouchableOpacity>
                         </View>
                     )}

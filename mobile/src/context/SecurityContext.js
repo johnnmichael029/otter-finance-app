@@ -42,6 +42,7 @@ export const SecurityProvider = ({ children }) => {
 
     const appState = useRef(AppState.currentState);
     const lockTimer = useRef(null);
+    const ignoreLockRef = useRef(false);
 
     // ─── Boot: load persisted settings & check hardware ───────────────────────
     useEffect(() => {
@@ -85,7 +86,7 @@ export const SecurityProvider = ({ children }) => {
         const sub = AppState.addEventListener('change', (next) => {
             const isAppLockEnabled = biometricEnabled || pinEnabled;
             
-            if (next !== 'active' && isAppLockEnabled && !shouldIgnoreLock) {
+            if (next === 'background' && isAppLockEnabled && !ignoreLockRef.current) {
                 // Lock instantly when app goes to background
                 setIsLocked(true);
             }
@@ -179,6 +180,11 @@ export const SecurityProvider = ({ children }) => {
 
     const unlock = () => setIsLocked(false);
 
+    const updateIgnoreLock = useCallback((val) => {
+        ignoreLockRef.current = val;
+        setShouldIgnoreLock(val);
+    }, []);
+
     return (
         <SecurityContext.Provider value={{
             // State
@@ -196,7 +202,7 @@ export const SecurityProvider = ({ children }) => {
             toggleBiometric,
             lockNow,
             unlock,
-            setShouldIgnoreLock,
+            setShouldIgnoreLock: updateIgnoreLock,
         }}>
             {children}
         </SecurityContext.Provider>

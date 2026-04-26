@@ -5,7 +5,7 @@ import {
     Modal, TouchableWithoutFeedback, Keyboard, Alert, Image
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { Feather, MaterialIcons, MaterialCommunityIcons } from '@expo/vector-icons';
+import { Feather, MaterialIcons, MaterialCommunityIcons, Ionicons, AntDesign, FontAwesome5 } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useTheme } from '../../context/ThemeContext';
 import { radius, spacing } from '../../theme/colors';
@@ -15,6 +15,7 @@ import CustomAlertModal from '../../components/CustomAlertModal';
 import { useSecurity } from '../../context/SecurityContext';
 import { useFinanceStore } from '../../store/financeStore';
 import WalletSelector, { calcNativeDeduct, hasEnoughBalance } from '../../components/WalletSelector';
+import CalculatorSheet from '../../components/CalculatorSheet';
 
 const CATEGORIES = {
     income: [
@@ -33,22 +34,21 @@ const CATEGORIES = {
     ],
 };
 
-const EXTRA_ICONS = [
-    'tag', 'book', 'camera', 'headphones', 'monitor', 'smartphone',
-    'speaker', 'tv', 'watch', 'wifi', 'anchor', 'award', 'box',
-    'cloud', 'compass', 'cpu', 'database', 'droplet', 'feather',
-    'flag', 'globe', 'home', 'image', 'key', 'layers', 'map',
-    'mic', 'moon', 'music', 'package', 'paperclip', 'pen-tool',
-    'phone', 'printer', 'radio', 'scissors', 'shield', 'star',
-    'sun', 'tool', 'trash', 'umbrella', 'unlock', 'user', 'video',
-    'smile', 'heart', 'briefcase', 'coffee', 'truck', 'shopping-bag', 'file-text',
-    'piggy-bank-outline', 'account-cash'
-];
 
 const DynamicIcon = ({ name, size, color, style }) => {
-    const MCI_ICONS = ['piggy-bank-outline', 'account-cash'];
+    const MCI_ICONS = ['piggy-bank-outline', 'account-cash', 'jeepney', 'car', 'noodles', 'egg-fried', 'cup',
+        'controller-classic-outline'
+    ];
+    const ION_ICONS = ['train-outline', 'boat-outline', 'egg-outline', 'game-controller-outline'];
+    const FA5_ICONS = ['hospital'];
     if (MCI_ICONS.includes(name)) {
         return <MaterialCommunityIcons name={name} size={size} color={color} style={style} />;
+    }
+    if (ION_ICONS.includes(name)) {
+        return <Ionicons name={name} size={size} color={color} style={style} />;
+    }
+    if (FA5_ICONS.includes(name)) {
+        return <FontAwesome5 name={name} size={size} color={color} style={style} />;
     }
     return <Feather name={name} size={size} color={color} style={style} />;
 };
@@ -66,6 +66,7 @@ export default function AddTransactionScreen({ navigation, route }) {
     const [sourceWallet, setSourceWallet] = useState(null);       // source wallet object (for income)
     const [sourceType, setSourceType] = useState('none');         // 'none' | 'hand' | 'savings_balance' | 'wallet'
     const [isLoading, setIsLoading] = useState(false);
+    const [calculatorVisible, setCalculatorVisible] = useState(false);
 
     // If we came from the Wallet Screen, pre-set the destination wallet
     useEffect(() => {
@@ -75,6 +76,8 @@ export default function AddTransactionScreen({ navigation, route }) {
     }, [route.params?.preselectedWallet]);
 
     const cryptoPrices = useFinanceStore(state => state.cryptoPrices);
+    const savingsMasterPot = useFinanceStore(state => state.savingsMasterPot);
+    const handBalance = useFinanceStore(state => state.handBalance);
     const [alert, setAlert] = useState({ visible: false, type: 'info', title: '', message: '' });
 
     const [image, setImage] = useState(null);
@@ -129,8 +132,8 @@ export default function AddTransactionScreen({ navigation, route }) {
     }, [type]);
 
     const handlePickImage = async (useCamera = false) => {
+        setShouldIgnoreLock(true);
         try {
-            setShouldIgnoreLock(true);
             const permissionResult = useCamera
                 ? await ImagePicker.requestCameraPermissionsAsync()
                 : await ImagePicker.requestMediaLibraryPermissionsAsync();
@@ -269,6 +272,46 @@ export default function AddTransactionScreen({ navigation, route }) {
     const accentColor = isIncome ? '#22c55e' : '#ef4444';
     const gradientColors = isIncome ? ['#22c55e', '#16a34a'] : ['#ef4444', '#b91c1c'];
 
+    const handleMaxPress = () => {
+        let maxAmt = 0;
+        let isCrypto = false;
+
+        if (isIncome) {
+            // Pulling money FROM a source to HAND or Destination
+            if (sourceType === 'hand') {
+                maxAmt = handBalance;
+            } else if (sourceType === 'savings_balance') {
+                maxAmt = savingsMasterPot?.currentAmount || 0;
+            } else if (sourceType === 'wallet' && sourceWallet) {
+                if (sourceWallet.type === 'Credit') {
+                    return showAlert('info', 'No Limit', 'Credit cards do not have a maximum withdrawable balance.');
+                }
+                maxAmt = sourceWallet.balance;
+                isCrypto = sourceWallet.type === 'Crypto';
+            } else {
+                return showAlert('warning', 'No Source Selected', 'Please select a source wallet first to use the MAX feature.');
+            }
+        } else {
+            // Pulling money FROM selectedWallet (or HAND) for an Expense
+            if (!selectedWallet) {
+                maxAmt = handBalance;
+            } else {
+                if (selectedWallet.type === 'Credit') {
+                    return showAlert('info', 'No Limit', 'Credit cards do not have a maximum limit.');
+                }
+                maxAmt = selectedWallet.balance;
+                isCrypto = selectedWallet.type === 'Crypto';
+            }
+        }
+
+        if (maxAmt > 0) {
+            const formattedAmt = Number.isInteger(maxAmt) ? maxAmt.toString() : maxAmt.toFixed(isCrypto ? 8 : 2);
+            setAmount(formattedAmt);
+        } else {
+            showAlert('warning', 'Zero Balance', 'The selected source has a balance of 0.');
+        }
+    };
+
     const handleSubmit = async () => {
         if (!amount || isNaN(parseFloat(amount))) {
             return showAlert('warning', 'Missing Amount', 'Please enter a valid amount.');
@@ -277,8 +320,16 @@ export default function AddTransactionScreen({ navigation, route }) {
             return showAlert('warning', 'No Category', 'Please select a category for this transaction.');
         }
 
-        // ── Wallet balance pre-check ──────────────────────────────────
+        // ── Wallet / Savings balance pre-check ──────────────────────────────────
         const finalAmountPHPForCheck = convertedPreview !== null ? convertedPreview : parseFloat(amount);
+
+        if (isIncome && sourceType === 'savings_balance') {
+            const savingsBal = savingsMasterPot?.currentAmount || 0;
+            if (savingsBal < finalAmountPHPForCheck) {
+                return showAlert('warning', 'Insufficient Savings',
+                    `Your Savings Balance only has ₱${savingsBal.toFixed(2)}, which is not enough for this transaction.`);
+            }
+        }
         if (!isIncome && selectedWallet) {
             if (!hasEnoughBalance(selectedWallet, finalAmountPHPForCheck, cryptoPrices)) {
                 const label = selectedWallet.type === 'Crypto'
@@ -286,6 +337,17 @@ export default function AddTransactionScreen({ navigation, route }) {
                     : '₱';
                 return showAlert('warning', 'Insufficient Balance',
                     `Your ${selectedWallet.name} wallet doesn't have enough balance to cover this expense.`);
+            }
+        }
+
+        if (isIncome && selectedWallet && selectedWallet.type === 'Credit') {
+            if (selectedWallet.balance <= 0) {
+                return showAlert('warning', 'No Liabilities',
+                    `You cannot add balance to a Credit wallet that does not have any outstanding liabilities.`);
+            }
+            if (finalAmountPHPForCheck > selectedWallet.balance) {
+                return showAlert('warning', 'Overpayment Detected',
+                    `You only owe ₱${selectedWallet.balance.toFixed(2)} on this credit card. You cannot pay more than your outstanding balance.`);
             }
         }
         setIsLoading(true);
@@ -416,7 +478,12 @@ export default function AddTransactionScreen({ navigation, route }) {
 
                     {/* Amount Card */}
                     <View style={[styles.amountCard, { backgroundColor: COLORS.surface }]}>
-                        <Text style={[styles.amountLabel, { color: COLORS.textMuted }]}>AMOUNT</Text>
+                        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: spacing.sm }}>
+                            <Text style={[styles.amountLabel, { color: COLORS.textMuted, marginBottom: 0 }]}>AMOUNT</Text>
+                            <TouchableOpacity onPress={handleMaxPress} style={[styles.maxBtn, { backgroundColor: COLORS.primary + '20' }]}>
+                                <Text style={[styles.maxBtnText, { color: COLORS.primary }]}>MAX</Text>
+                            </TouchableOpacity>
+                        </View>
                         <View style={styles.amountRow}>
                             <TouchableOpacity
                                 onPress={() => setCurrencyModalVisible(true)}
@@ -426,15 +493,18 @@ export default function AddTransactionScreen({ navigation, route }) {
                                 <Text style={[styles.currencyCode, { color: COLORS.text }]}>{currency.code}</Text>
                                 <Feather name="chevron-down" size={14} color={COLORS.textMuted} />
                             </TouchableOpacity>
-                            <TextInput
-                                style={[styles.amountInput, { color: COLORS.text }]}
-                                value={amount}
-                                onChangeText={setAmount}
-                                keyboardType="decimal-pad"
-                                placeholder="0.00"
-                                placeholderTextColor={COLORS.textMuted}
-                                autoFocus
-                            />
+                            <TouchableOpacity
+                                style={{ flex: 1, paddingVertical: 4 }}
+                                onPress={() => setCalculatorVisible(true)}
+                                activeOpacity={0.7}
+                            >
+                                <Text style={[
+                                    styles.amountInput,
+                                    { color: amount ? COLORS.text : COLORS.textMuted }
+                                ]}>
+                                    {amount ? Number(amount).toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 8 }) : '0.00'}
+                                </Text>
+                            </TouchableOpacity>
                         </View>
 
                         {/* Main Transaction Conversion Preview */}
@@ -561,7 +631,9 @@ export default function AddTransactionScreen({ navigation, route }) {
                                     <MaterialCommunityIcons name="piggy-bank-outline" size={18} color="#8b5cf6" />
                                     <View style={{ flex: 1 }}>
                                         <Text style={[styles.sourceChipLabel, { color: COLORS.text }]}>Savings</Text>
-                                        <Text style={[styles.sourceChipSub, { color: COLORS.textMuted }]}>Balance</Text>
+                                        <Text style={[styles.sourceChipSub, { color: COLORS.textMuted }]}>
+                                            ₱{(savingsMasterPot?.currentAmount || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                        </Text>
                                     </View>
                                     {sourceType === 'savings_balance' && !sourceWallet && (
                                         <View style={[styles.sourceCheckDot, { backgroundColor: '#8b5cf6' }]}>
@@ -779,17 +851,31 @@ export default function AddTransactionScreen({ navigation, route }) {
                 visible={alert.visible}
                 onClose={closeAlert}
                 onConfirm={() => {
+                    // Close alert instantly to give immediate feedback
                     closeAlert();
-                    if (alert.onConfirm) {
-                        alert.onConfirm();
-                    } else if (alert.type === 'success') {
-                        navigation.goBack();
-                    }
+                    // Slight delay allows the modal to start its fade out before the heavy screen unmount
+                    setTimeout(() => {
+                        if (alert.onConfirm) {
+                            alert.onConfirm();
+                        } else if (alert.type === 'success') {
+                            navigation.goBack();
+                        }
+                    }, 50);
                 }}
                 title={alert.title}
                 message={alert.message}
                 type={alert.type}
                 confirmText={alert.type === 'confirm' ? 'Add Now' : (alert.type === 'success' ? 'Done' : 'Okay')}
+                isLoading={isLoading && alert.type === 'success'}
+            />
+
+            {/* Calculator Sheet */}
+            <CalculatorSheet
+                visible={calculatorVisible}
+                onClose={() => setCalculatorVisible(false)}
+                onConfirm={(val) => setAmount(val)}
+                initialValue={amount}
+                currencySymbol={currency.symbol}
             />
         </SafeAreaView>
     );
@@ -805,6 +891,8 @@ const styles = StyleSheet.create({
     typeTag: { marginLeft: 'auto', width: 40, height: 40, borderRadius: 12, justifyContent: 'center', alignItems: 'center' },
     amountCard: { borderRadius: radius.xl, padding: spacing.lg, marginBottom: spacing.lg },
     amountLabel: { fontSize: 11, fontWeight: '700', letterSpacing: 1, marginBottom: spacing.sm },
+    maxBtn: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: radius.sm },
+    maxBtnText: { fontSize: 10, fontWeight: '800' },
     amountRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
     currencyPicker: {
         flexDirection: 'row', alignItems: 'center', gap: 6,

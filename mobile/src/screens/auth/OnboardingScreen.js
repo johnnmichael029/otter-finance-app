@@ -186,7 +186,7 @@ export default function OnboardingScreen() {
                                 value={name}
                                 onChangeText={setName}
                                 placeholder="Enter your name"
-                                placeholderTextColor={COLORS.textMuted}
+                                placeholderTextColor={COLORS.textMuted + '80'}
                             />
 
                             <Text style={[styles.sectionLabel, { color: COLORS.textMuted, marginTop: 24 }]}>YOUR UNIQUE @OTTERTAG</Text>
@@ -204,8 +204,8 @@ export default function OnboardingScreen() {
                                     value={otterTag}
 
                                     onChangeText={(t) => setOtterTag(t.replace(/\s/g, '').toLowerCase())}
-                                    placeholder="yamashii_dev"
-                                    placeholderTextColor={COLORS.textMuted}
+                                    placeholder="otter"
+                                    placeholderTextColor={COLORS.textMuted + '80'}
                                     autoCapitalize="none"
                                 />
                                 {isTagChecking && (
@@ -270,7 +270,7 @@ export default function OnboardingScreen() {
                                         value={otherOccupation}
                                         onChangeText={setOtherOccupation}
                                         placeholder="Tell me your specific profession..."
-                                        placeholderTextColor={COLORS.textMuted}
+                                        placeholderTextColor={COLORS.textMuted + '80'}
                                         autoFocus
                                     />
                                 </Animated.View>
@@ -284,7 +284,7 @@ export default function OnboardingScreen() {
         return (
             <View style={[styles.slide, { width }]}>
                 <Image
-                    source={require('../../../assets/onboarding/welcome.png')}
+                    source={item.image}
                     style={styles.image}
                     resizeMode="contain"
                 />
@@ -319,6 +319,29 @@ export default function OnboardingScreen() {
             />
 
             <View style={styles.footer}>
+                <View style={styles.paginatorContainer}>
+                    {SLIDES.map((_, i) => {
+                        const inputRange = [(i - 1) * width, i * width, (i + 1) * width];
+                        const dotWidth = scrollX.interpolate({
+                            inputRange,
+                            outputRange: [10, 20, 10],
+                            extrapolate: 'clamp',
+                        });
+                        const opacity = scrollX.interpolate({
+                            inputRange,
+                            outputRange: [0.3, 1, 0.3],
+                            extrapolate: 'clamp',
+                        });
+
+                        return (
+                            <Animated.View
+                                style={[styles.dot, { width: dotWidth, opacity, backgroundColor: COLORS.primary }]}
+                                key={i.toString()}
+                            />
+                        );
+                    })}
+                </View>
+
                 <TouchableOpacity
                     style={[
                         styles.nextBtn,
@@ -395,4 +418,6 @@ const styles = StyleSheet.create({
         shadowOpacity: 0.3, shadowRadius: 12, elevation: 8
     },
     nextText: { color: '#fff', fontSize: 18, fontWeight: '900' },
+    paginatorContainer: { flexDirection: 'row', justifyContent: 'center', marginBottom: 20 },
+    dot: { height: 10, borderRadius: 5, marginHorizontal: 6 },
 });

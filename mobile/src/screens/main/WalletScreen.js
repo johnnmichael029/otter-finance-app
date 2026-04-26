@@ -61,11 +61,14 @@ const getCardBranding = (wallet) => {
 // ─── Bank Card ────────────────────────────────────────────────────────────────
 const BankCard = ({ wallet, onPress, onToggleHide }) => {
     const brand = getCardBranding(wallet);
+    const isCredit = wallet.type === 'Credit';
     const isCrypto = wallet.type === 'Crypto' && wallet.coinSymbol;
     const currencySymbol = isCrypto ? wallet.coinSymbol : '₱';
+    // Credit balances represent debt owed — always display as a positive number
+    const displayBalance = isCredit ? Math.abs(wallet.balance) : wallet.balance;
     const numBalance = isCrypto
-        ? wallet.balance.toLocaleString('en-US', { minimumFractionDigits: 4, maximumFractionDigits: 8 })
-        : wallet.balance.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 });
+        ? displayBalance.toLocaleString('en-US', { minimumFractionDigits: 4, maximumFractionDigits: 8 })
+        : displayBalance.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 });
     const formattedBalance = wallet.hideBalance ? '••••••' : numBalance;
 
     const renderTopRight = () => {
@@ -116,7 +119,7 @@ const getConvertedBalance = (wallet, prices) => {
 // ─── Net Worth Header ─────────────────────────────────────────────────────────
 const NetWorthHeader = ({ wallets, prices, hideVal, onToggleHide, COLORS }) => {
     const assets = wallets.filter(w => w.type !== 'Credit').reduce((s, w) => s + getConvertedBalance(w, prices), 0);
-    const liabilities = wallets.filter(w => w.type === 'Credit').reduce((s, w) => s + getConvertedBalance(w, prices), 0);
+    const liabilities = wallets.filter(w => w.type === 'Credit').reduce((s, w) => s + Math.abs(getConvertedBalance(w, prices)), 0);
     const netWorth = assets - liabilities;
 
     return (

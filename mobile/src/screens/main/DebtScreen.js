@@ -3,7 +3,7 @@ import {
     View, Text, StyleSheet, TouchableOpacity, ScrollView,
     RefreshControl, Modal, TextInput, KeyboardAvoidingView,
     Platform, TouchableWithoutFeedback, Keyboard, ActivityIndicator,
-    Animated, Dimensions,
+    Animated, Dimensions, Image
 } from 'react-native';
 import { FlashList } from '@shopify/flash-list';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -11,6 +11,7 @@ import { Feather, MaterialCommunityIcons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useTheme } from '../../context/ThemeContext';
 import { useAuth } from '../../context/AuthContext';
+import { API_BASE } from '../../store/authStore';
 import { useFinanceStore } from '../../store/financeStore';
 import { spacing, radius } from '../../theme/colors';
 import {
@@ -304,17 +305,17 @@ export default function DebtScreen({ navigation }) {
     const filtered = debts.filter(d => {
         // Pending incoming requests should ALWAYS show in 'all' or their respective direction tab, but never 'settled'.
         const isIncoming = d.syncStatus === 'pending' && d.linkedUserId === userInfo?._id;
-        
+
         if (filter === 'all') return d.status !== 'settled';
         if (filter === 'settled') return d.status === 'settled' && d.syncStatus !== 'pending';
-        
+
         if (isIncoming) {
             // Incoming requests: The original debt direction is from the sender's perspective.
             // If sender chose "owed_to_me", it means "owed_by_me" for me.
             const myDirection = d.direction === 'owed_to_me' ? 'owed_by_me' : 'owed_to_me';
             return myDirection === filter;
         }
-        
+
         return d.direction === filter && d.status !== 'settled';
     });
 
@@ -688,16 +689,43 @@ export default function DebtScreen({ navigation }) {
                         {friends && friends.length > 0 && (
                             <View style={{ marginTop: 12 }}>
                                 <Text style={[styles.formLabel, { color: COLORS.textMuted, marginTop: 0 }]}>OR SELECT A FRIEND TO LINK</Text>
-                                <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-                                    {friends.map(f => {
-                                        const isSelected = form.linkedUserId === f._id;
+                                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 10, paddingRight: 20 }}>
+                                    {friends.map(friend => {
+                                        const isSelected = form.linkedUserId === friend._id;
                                         return (
                                             <TouchableOpacity
-                                                key={f._id}
-                                                style={[styles.friendPill, isSelected && { backgroundColor: COLORS.primary, borderColor: COLORS.primary }]}
-                                                onPress={() => setForm(s => ({ ...s, linkedUserId: f._id, personName: f.name }))}
+                                                key={friend._id}
+                                                style={[styles.friendChip, {
+                                                    backgroundColor: isSelected ? COLORS.primary + '15' : COLORS.background,
+                                                    borderColor: isSelected ? COLORS.primary : COLORS.border
+                                                }]}
+                                                onPress={() => {
+                                                    if (isSelected) {
+                                                        setForm(s => ({ ...s, linkedUserId: null, personName: '' }));
+                                                    } else {
+                                                        setForm(s => ({ ...s, linkedUserId: friend._id, personName: friend.name }));
+                                                    }
+                                                }}
                                             >
-                                                <Text style={[styles.friendPillText, { color: isSelected ? '#fff' : COLORS.text }]}>{f.name}</Text>
+                                                <View style={styles.friendAvatar}>
+                                                    {friend.avatar || friend.avatarUrl ? (
+                                                        <Image
+                                                            source={{
+                                                                uri: (friend.avatar || friend.avatarUrl).startsWith('http')
+                                                                    ? (friend.avatar || friend.avatarUrl)
+                                                                    : `${API_BASE.replace('/api', '')}/${friend.avatar || friend.avatarUrl}`
+                                                            }}
+                                                            style={styles.avatarImg}
+                                                            resizeMode="cover"
+                                                        />
+                                                    ) : (
+                                                        <Feather name="user" size={14} color={isSelected ? COLORS.primary : COLORS.textMuted} />
+                                                    )}
+                                                </View>
+                                                <Text style={[styles.friendName, { color: isSelected ? COLORS.primary : COLORS.text }]} numberOfLines={1}>
+                                                    {friend.name}
+                                                </Text>
+                                                {isSelected && <Feather name="check-circle" size={12} color={COLORS.primary} style={{ marginLeft: 4 }} />}
                                             </TouchableOpacity>
                                         );
                                     })}
@@ -1120,8 +1148,25 @@ const styles = StyleSheet.create({
     dueDatePreview: { flexDirection: 'row', alignItems: 'center', gap: 8, padding: spacing.sm, borderRadius: radius.md, borderWidth: 1, marginTop: spacing.md },
     dueDatePreviewText: { fontSize: 13, fontWeight: '700' },
 
-    friendPill: { paddingHorizontal: 16, paddingVertical: 8, borderRadius: 20, borderWidth: 1, borderColor: 'rgba(128,128,128,0.2)', marginRight: 8 },
-    friendPillText: { fontSize: 13, fontWeight: '700' },
+    friendChip: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        paddingHorizontal: 12,
+        paddingVertical: 10,
+        borderRadius: 16,
+        borderWidth: 1.5
+    },
+    friendAvatar: {
+        width: 24,
+        height: 24,
+        borderRadius: 12,
+        backgroundColor: 'rgba(0,0,0,0.05)',
+        justifyContent: 'center',
+        alignItems: 'center',
+        marginRight: 8
+    },
+    friendName: { fontSize: 12, fontWeight: '700' },
+    avatarImg: { width: '100%', height: '100%', borderRadius: 12 },
 
     saveBtn: { flexDirection: 'row', justifyContent: 'center', alignItems: 'center', paddingVertical: 16, borderRadius: radius.xl, marginTop: spacing.lg },
     saveBtnText: { color: '#fff', fontSize: 16, fontWeight: '800' },

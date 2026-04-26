@@ -2,14 +2,15 @@ import React, { useState, useCallback, useEffect } from 'react';
 import {
     View, Text, StyleSheet, TouchableOpacity,
     ActivityIndicator, RefreshControl, Modal, TouchableWithoutFeedback,
-    TextInput, Alert
+    TextInput, Alert, FlatList
 } from 'react-native';
-import { FlashList } from '@shopify/flash-list';
+import Animated, { ZoomIn, ZoomOut, LinearTransition } from 'react-native-reanimated';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { Feather } from '@expo/vector-icons';
+import { Feather, MaterialCommunityIcons } from '@expo/vector-icons';
+import { Swipeable } from 'react-native-gesture-handler';
 import { useTheme } from '../../context/ThemeContext';
 import { useAuth } from '../../context/AuthContext';
-import { getSavingsTransfers, deleteTransaction } from '../../api/api';
+import { getSavingsTransfers, deleteTransaction, archiveSavingsTransfer, emptySavingsArchives } from '../../api/api';
 import { spacing, radius } from '../../theme/colors';
 import Skeleton from '../../components/Skeleton';
 import { useDebounce } from '../../utils/debounce';
@@ -57,11 +58,14 @@ export default function SavingsTransferHistoryScreen({ navigation }) {
     // Modal State
     const [selectedTransfer, setSelectedTransfer] = useState(null);
     const [modalVisible, setModalVisible] = useState(false);
+    const [emptyModalVisible, setEmptyModalVisible] = useState(false);
 
-    const load = useCallback(async () => {
-        setLoading(true);
+    const isArchiveView = activeTab === 'Archive';
+
+    const load = useCallback(async (showSkeleton = false) => {
+        if (showSkeleton) setLoading(true);
         try {
-            const params = { limit: 20, page: 1 };
+            const params = { limit: 20, page: 1, isArchived: isArchiveView };
             if (activeTab === 'In') params.type = 'in';
             if (activeTab === 'Out') params.type = 'out';
 
@@ -75,10 +79,10 @@ export default function SavingsTransferHistoryScreen({ navigation }) {
             setLoading(false);
             setRefreshing(false);
         }
-    }, [activeTab]);
+    }, [activeTab, isArchiveView]);
 
     useEffect(() => {
-        load();
+        load(transfers.length === 0);
 
         // Register Socket Listeners
         const { getSocket } = require('../../utils/socket');
@@ -109,7 +113,7 @@ export default function SavingsTransferHistoryScreen({ navigation }) {
         if (!hasMore || loadingMore) return;
         setLoadingMore(true);
         try {
-            const params = { limit: 20, page };
+            const params = { limit: 20, page, isArchived: isArchiveView };
             if (activeTab === 'In') params.type = 'in';
             if (activeTab === 'Out') params.type = 'out';
 
@@ -122,6 +126,33 @@ export default function SavingsTransferHistoryScreen({ navigation }) {
             setPage(p => p + 1);
             if (incoming.length < 20) setHasMore(false);
         } catch (e) { } finally { setLoadingMore(false); }
+    };
+
+    const handleArchiveToggle = async (id) => {
+        try {
+            setTransfers(prev => prev.filter(t => t._id !== id));
+            await archiveSavingsTransfer(id);
+        } catch (e) {
+            console.error('Archive failed:', e);
+            load();
+        }
+    };
+
+    const handleEmptyArchivesConfirm = async () => {
+        try {
+            setEmptyModalVisible(false);
+            await emptySavingsArchives();
+            setTransfers([]);
+            setAlertConfig({
+                visible: true,
+                title: 'Archives Emptied',
+                message: 'All archived transfers have been permanently deleted.',
+                type: 'success',
+                onConfirm: () => setAlertConfig(p => ({ ...p, visible: false }))
+            });
+        } catch (e) {
+            console.error('Empty archives failed:', e);
+        }
     };
 
     const filtered = debouncedSearch.trim()
@@ -194,40 +225,64 @@ export default function SavingsTransferHistoryScreen({ navigation }) {
             });
         };
 
-        return (
+        const renderRightActions = () => (
             <TouchableOpacity
-                style={[styles.row, { backgroundColor: COLORS.surface }]}
-                activeOpacity={0.7}
-                onPress={() => {
-                    setSelectedTransfer(t);
-                    setModalVisible(true);
-                }}
-                onLongPress={handleLongPress}
+                style={styles.archiveAction}
+                onPress={() => handleArchiveToggle(t._id)}
+                activeOpacity={0.8}
             >
-                <View style={[styles.rowIcon, { backgroundColor: color + '15' }]}>
-                    <Feather name={icon} size={18} color={color} />
-                </View>
-                <View style={{ flex: 1 }}>
-                    <Text style={[styles.rowGoal, { color: COLORS.text }]}>{t.goalName}</Text>
-                    <Text style={[styles.rowLabel, { color: COLORS.textMuted }]}>
-                        {label}
-                    </Text>
-                    {t.note ? <Text style={[styles.rowNote, { color: COLORS.text }]} numberOfLines={1}>" {t.note} "</Text> : null}
-                </View>
-                <View style={{ alignItems: 'flex-end' }}>
-                    <Text style={[styles.rowTime, { color: COLORS.textMuted }]}>
-                        {new Intl.DateTimeFormat('en-US', { hour: 'numeric', minute: '2-digit' }).format(new Date(t.createdAt))}
-                    </Text>
-                    <Text style={[styles.rowAmt, { color }]}>
-                        {isDeposit ? '+' : '-'}{formatCurrency(t.amount, userInfo?.currency)}
-                    </Text>
-                    {t.runningBalance !== undefined && (
-                        <Text style={[styles.rowBalance, { color: COLORS.textMuted }]}>
-                            Bal: {formatCurrency(t.runningBalance, userInfo?.currency)}
-                        </Text>
-                    )}
-                </View>
+                <MaterialCommunityIcons
+                    name={isArchiveView ? "archive-arrow-up-outline" : "archive-arrow-down-outline"}
+                    size={28}
+                    color="#fff"
+                />
+                <Text style={styles.archiveActionText}>{isArchiveView ? 'Restore' : 'Archive'}</Text>
             </TouchableOpacity>
+        );
+
+        return (
+            <Animated.View key={t._id} layout={LinearTransition.springify()} entering={ZoomIn.springify().damping(50).mass(0.9)} exiting={ZoomOut.duration(100)}>
+                <Swipeable 
+                    renderRightActions={renderRightActions} 
+                    onSwipeableOpen={(direction) => direction === 'right' && handleArchiveToggle(t._id)}
+                    friction={2}
+                    overshootRight={false}
+                >
+                    <TouchableOpacity
+                        style={[styles.row, { backgroundColor: COLORS.surface }]}
+                        activeOpacity={0.7}
+                        onPress={() => {
+                            setSelectedTransfer(t);
+                            setModalVisible(true);
+                        }}
+                        onLongPress={handleLongPress}
+                    >
+                        <View style={[styles.rowIcon, { backgroundColor: color + '15' }]}>
+                            <Feather name={icon} size={18} color={color} />
+                        </View>
+                        <View style={{ flex: 1 }}>
+                            <Text style={[styles.rowGoal, { color: COLORS.text }]}>{t.goalName}</Text>
+                            <Text style={[styles.rowLabel, { color: COLORS.textMuted }]}>
+                                {label}
+                            </Text>
+                            {t.note ? <Text style={[styles.rowNote, { color: COLORS.text }]} numberOfLines={1}>" {t.note} "</Text> : null}
+                        </View>
+                        <View style={{ alignItems: 'flex-end' }}>
+                            <Text style={[styles.rowTime, { color: COLORS.textMuted }]}>
+                                {new Intl.DateTimeFormat('en-US', { hour: 'numeric', minute: '2-digit' }).format(new Date(t.createdAt))}
+                            </Text>
+                            <Text style={[styles.rowAmt, { color }]}>
+                                {isDeposit ? '+' : '-'}{formatCurrency(t.amount, userInfo?.currency)}
+                            </Text>
+                            {t.runningBalance !== undefined && (
+                                <Text style={[styles.rowBalance, { color: COLORS.textMuted }]}>
+                                    Bal: {formatCurrency(t.runningBalance, userInfo?.currency)}
+                                </Text>
+                            )}
+                        </View>
+                    </TouchableOpacity>
+                </Swipeable>
+            </Animated.View>
         );
     };
 
@@ -238,17 +293,28 @@ export default function SavingsTransferHistoryScreen({ navigation }) {
                     <Feather name="arrow-left" size={20} color={COLORS.text} />
                 </TouchableOpacity>
                 <Text style={[styles.headerTitle, { color: COLORS.text }]}>Transfer History</Text>
-                <View style={{ width: 40 }} />
+                {isArchiveView && transfers.length > 0 ? (
+                    <TouchableOpacity onPress={() => setEmptyModalVisible(true)} style={styles.backBtn}>
+                        <Feather name="trash-2" size={20} color={COLORS.error || '#ef4444'} />
+                    </TouchableOpacity>
+                ) : (
+                    <View style={{ width: 40 }} />
+                )}
             </View>
 
             <View style={styles.searchContainer}>
                 <View style={styles.tabsRow}>
-                    {['All', 'In', 'Out'].map(tab => {
+                    {['All', 'In', 'Out', 'Archive'].map(tab => {
                         const active = activeTab === tab;
                         return (
                             <TouchableOpacity
                                 key={tab}
-                                onPress={() => setActiveTab(tab)}
+                                onPress={() => {
+                                    if (activeTab !== tab) {
+                                        setTransfers([]);
+                                        setActiveTab(tab);
+                                    }
+                                }}
                                 style={[styles.tab, active && { backgroundColor: COLORS.primary }]}
                             >
                                 <Text style={[styles.tabText, { color: active ? '#fff' : COLORS.textMuted }]}>{tab}</Text>
@@ -272,7 +338,14 @@ export default function SavingsTransferHistoryScreen({ navigation }) {
                     )}
                 </View>
 
-
+                {isArchiveView && (
+                    <View style={{ marginTop: spacing.md, padding: 12, backgroundColor: COLORS.primary + '15', borderRadius: radius.md, flexDirection: 'row', alignItems: 'flex-start' }}>
+                        <Feather name="info" size={16} color={COLORS.primary} style={{ marginRight: 8, marginTop: 2 }} />
+                        <Text style={{ flex: 1, fontSize: 12, color: COLORS.textMuted, lineHeight: 18 }}>
+                            Archived transfers are hidden from your main history but still count toward your savings balance. They will be automatically deleted after 30 days.
+                        </Text>
+                    </View>
+                )}
             </View>
 
             {loading ? (
@@ -289,14 +362,12 @@ export default function SavingsTransferHistoryScreen({ navigation }) {
                     ))}
                 </View>
             ) : (
-                <FlashList
+                <FlatList
                     data={flatData}
                     keyExtractor={item => item._id}
                     renderItem={renderItem}
                     contentContainerStyle={styles.list}
                     showsVerticalScrollIndicator={false}
-                    estimatedItemSize={70}
-                    getItemType={item => item.type}
                     refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); load(); }} tintColor={COLORS.primary} />}
                     onEndReached={fetchMore}
                     onEndReachedThreshold={0.5}
@@ -400,6 +471,14 @@ export default function SavingsTransferHistoryScreen({ navigation }) {
             </Modal>
 
             <CustomAlertModal
+                visible={emptyModalVisible}
+                onClose={() => setEmptyModalVisible(false)}
+                title="Empty Archives?"
+                message="This will permanently delete all archived transfers. They cannot be recovered."
+                type="confirm"
+                onConfirm={handleEmptyArchivesConfirm}
+            />
+            <CustomAlertModal
                 visible={alertConfig.visible}
                 onClose={() => setAlertConfig(p => ({ ...p, visible: false }))}
                 title={alertConfig.title}
@@ -454,4 +533,19 @@ const getStyles = (COLORS) => StyleSheet.create({
     modalDetailValue: { fontSize: 13, fontWeight: '700' },
     walletBadge: { paddingHorizontal: 8, paddingVertical: 4, borderRadius: 8 },
     walletBadgeText: { fontSize: 11, fontWeight: '800' },
+    archiveAction: {
+        backgroundColor: '#ef4444',
+        justifyContent: 'center',
+        alignItems: 'center',
+        width: 80,
+        height: '95%',
+        borderRadius: radius.md,
+        marginLeft: spacing.sm,
+    },
+    archiveActionText: {
+        color: '#fff',
+        fontSize: 10,
+        fontWeight: '700',
+        marginTop: 4,
+    },
 });

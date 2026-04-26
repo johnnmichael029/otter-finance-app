@@ -13,6 +13,8 @@ const savingsTransferSchema = new mongoose.Schema({
     note: { type: String, default: '' },
     runningBalance: { type: Number }, // Snapshot of goal balance after transfer
     relatedTransaction: { type: mongoose.Schema.Types.ObjectId, ref: 'Transaction' },
+    performedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }, // The user who actually made the transfer
+    isArchived: { type: Boolean, default: false },
 }, { timestamps: true });
 
 module.exports = mongoose.model('SavingsTransfer', savingsTransferSchema);

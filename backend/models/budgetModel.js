@@ -7,11 +7,12 @@ const budgetSchema = new mongoose.Schema({
         required: true,
         index: true,
     },
-    // 'YYYY-MM' — one budget entry per category per month
-    month: {
+    // 'daily', 'weekly', 'monthly'
+    period: {
         type: String,
+        enum: ['daily', 'weekly', 'monthly'],
+        default: 'monthly',
         required: true,
-        match: [/^\d{4}-\d{2}$/, 'Month must be in YYYY-MM format.'],
     },
     // 'Overall' OR a category name like 'Food', 'Transport', etc.
     category: {
@@ -31,9 +32,15 @@ const budgetSchema = new mongoose.Schema({
         default: 0,
         min: [0, 'Reminder cannot be negative.'],
     },
+    // Sub-budgets (Tags mapping to amounts)
+    subBudgets: [{
+        tag: { type: String, required: true, trim: true },
+        amount: { type: Number, required: true, min: 0 },
+        icon: { type: String, default: 'tag' }
+    }],
 }, { timestamps: true });
 
-// Each user can only have one budget per category per month
-budgetSchema.index({ user: 1, month: 1, category: 1 }, { unique: true });
+// Each user can only have one budget rule per category per period
+budgetSchema.index({ user: 1, category: 1, period: 1 }, { unique: true });
 
 module.exports = mongoose.model('Budget', budgetSchema);

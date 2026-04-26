@@ -10,6 +10,12 @@ const savingsGoalSchema = new mongoose.Schema({
     currentAmount: { type: Number, default: 0 },
     deadline: { type: Date, default: null },
     isCompleted: { type: Boolean, default: false },
+    isShared: { type: Boolean, default: false },
+    participants: [{
+        user: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+        status: { type: String, enum: ['pending', 'accepted', 'rejected'], default: 'pending' },
+        joinedAt: { type: Date }
+    }],
     note: { type: String, default: '' },
 }, { timestamps: true });
 

@@ -10,7 +10,10 @@ import { useFinanceStore } from '../store/financeStore';
  *  - Fiat    → "₱12,500.00"
  */
 export function getBalanceLabel(wallet) {
-    const bal = wallet.balance ?? 0;
+    const isCredit = wallet.type === 'Credit';
+    const rawBal = wallet.balance ?? 0;
+    const bal = isCredit ? Math.abs(rawBal) : rawBal;
+
     if (wallet.type === 'Crypto') {
         const sym = wallet.coinSymbol?.toUpperCase() || 'COIN';
         const formatted = parseFloat(bal.toFixed(8)).toString();
@@ -21,7 +24,7 @@ export function getBalanceLabel(wallet) {
         return `${bal.toLocaleString()} shr (${sym})`;
     }
     // Fiat / E-Wallet / Debit / Credit / Cash
-    return `₱${bal.toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+    return `₱${bal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
 /**

@@ -3,7 +3,7 @@ import {
     View, Text, ScrollView, StyleSheet, Image,
     TouchableOpacity, RefreshControl, ActivityIndicator, Animated,
     Modal, TouchableWithoutFeedback, BackHandler, ToastAndroid, Platform,
-    Vibration
+    Vibration, LayoutAnimation, UIManager
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -16,10 +16,16 @@ import { getTransactionSummary, getTransactions, getSavingsGoals, getDebts, getN
 import { spacing, radius, typography, shadow, colors } from '../../theme/colors';
 import CustomAlertModal from '../../components/CustomAlertModal';
 import Skeleton from '../../components/Skeleton';
+import OnboardingTour from '../../components/OnboardingTour';
 import { connectSocket, disconnectSocket, getSocket } from '../../utils/socket';
 import { useUIStore } from '../../store/uiStore';
 import { useFinanceStore } from '../../store/financeStore';
 import { updateWidgetBalance } from '../../utils/widget';
+import { PieChart } from 'react-native-chart-kit';
+
+if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
+    UIManager.setLayoutAnimationEnabledExperimental(true);
+}
 
 const otterIcon = require('../../../assets/icon/welcomeOtter.png');
 
@@ -46,28 +52,35 @@ const formatDateTime = (dateString) => {
     }).format(new Date(dateString));
 };
 
-const FALLBACK_ICONS = {
-    'Salary': 'briefcase', 'Freelance': 'code', 'Investment': 'trending-up', 'Gift': 'gift',
-    'Food': 'coffee', 'Transport': 'truck', 'Shopping': 'shopping-cart', 'Bills': 'file-text',
-    'Health': 'heart', 'Entertainment': 'tv', 'Other': 'tag', 'Savings': 'piggy-bank-outline'
+const FALLBACK_ICONS = [
+    'briefcase', 'trending-up', 'gift', 'plus-circle', 'coffee', 'truck', 'shopping-bag', 'file-text',
+    'heart', 'tv', 'wifi', 'home', 'monitor', 'smartphone', 'headphones', 'book', 'pen-tool',
+    'aperture', 'camera', 'music', 'map', 'navigation', 'compass', 'award', 'star', 'sun', 'moon', 'zap',
+    'tag', 'speaker', 'watch', 'anchor', 'box', 'cloud', 'cpu', 'database', 'droplet', 'feather',
+    'flag', 'globe', 'image', 'key', 'layers', 'mic', 'package', 'paperclip',
+    'phone', 'printer', 'radio', 'scissors', 'shield', 'tool', 'trash', 'umbrella', 'unlock', 'user', 'video',
+    'smile', 'piggy-bank-outline', 'account-cash', 'jeepney', 'car', 'train-outline', 'boat-outline', 'hospital', 'noodles', 'egg-outline',
+    'egg-fried', 'cup', 'game-controller-outline', 'controller-classic-outline', 'rice', 'steam'
+];
+
+const IconRenderer = ({ name, size, color, style }) => {
+    const MCI_ICONS = ['piggy-bank-outline', 'account-cash', 'jeepney', 'car', 'noodles', 'egg-fried', 'cup',
+        'controller-classic-outline', 'piggy-bank'
+    ];
+    const ION_ICONS = ['train-outline', 'boat-outline', 'egg-outline', 'game-controller-outline'];
+    const FA5_ICONS = ['hospital'];
+    if (MCI_ICONS.includes(name)) {
+        return <MaterialCommunityIcons name={name} size={size} color={color} style={style} />;
+    }
+    if (ION_ICONS.includes(name)) {
+        return <Ionicons name={name} size={size} color={color} style={style} />;
+    }
+    if (FA5_ICONS.includes(name)) {
+        return <FontAwesome5 name={name} size={size} color={color} style={style} />;
+    }
+    return <Feather name={name} size={size} color={color} style={style} />;
 };
 
-const IconRenderer = ({ name, size, color }) => {
-    if (!name) return <Feather name="circle" size={size} color={color} />;
-
-    // Support for Material Icons
-    if (name.startsWith('material:') || name === 'piggy-bank' || name === 'piggy-bank-outline') {
-        const iconName = name.replace('material:', '') || 'piggy-bank';
-        return <MaterialCommunityIcons name={iconName} size={size} color={color} />;
-    }
-
-    // Support for Ionicons (often used for outlines)
-    if (name.includes('-outline') || name.includes('-sharp')) {
-        return <Ionicons name={name} size={size} color={color} />;
-    }
-
-    return <Feather name={name} size={size} color={color} />;
-};
 
 const getIconName = (tx) => {
     const cat = (tx.category || '').toLowerCase();
@@ -90,21 +103,7 @@ export default function HomeScreen({ navigation }) {
     const isDarkMode = useTheme(state => state.isDarkMode);
     const setIsSavingsMode = useUIStore(state => state.setIsSavingsMode);
 
-    // Warm the financeStore background cache
-    const refreshAll = useFinanceStore(state => state.refreshAll);
-    const wallets = useFinanceStore(state => state.wallets);
-    const cryptoPrices = useFinanceStore(state => state.cryptoPrices);
-    const hideGlobalBalance = useFinanceStore(state => state.hideGlobalBalance);
-    const setHideGlobalBalance = useFinanceStore(state => state.setHideGlobalBalance);
-
-    React.useEffect(() => {
-        if (userToken) refreshAll();
-    }, [userToken, refreshAll]);
-    // Security context is used by Settings screen — lock state managed globally
-    const [savingsTotalSaved, setSavingsTotalSaved] = React.useState(0);
-    const [debtStats, setDebtStats] = React.useState({ iOwe: 0, owedToMe: 0 });
-    const [summary, setSummary] = useState({ totalIncome: 0, totalExpenses: 0, balance: 0, incomeDist: [], expenseDist: [] });
-    const [recent, setRecent] = useState([]);
+    // ── UI State ──
     const [loading, setLoading] = useState(true);
     const [refreshing, setRefreshing] = useState(false);
     const [page, setPage] = useState(1);
@@ -115,6 +114,140 @@ export default function HomeScreen({ navigation }) {
     const [unreadNotifCount, setUnreadNotifCount] = useState(0);
     const [pendingRequestsCount, setPendingRequestsCount] = useState(0);
     const [lastBackPressed, setLastBackPressed] = useState(0);
+    const [chartView, setChartView] = useState(0); // 0 = Bar, 1 = Expense, 2 = Income
+    const slideAnim = useRef(new Animated.Value(dateRange === 'Day' ? 0 : dateRange === 'Week' ? 1 : 2)).current;
+    const statsSlideAnim = useRef(new Animated.Value(0)).current;
+    const statsOpacityAnim = useRef(new Animated.Value(1)).current;
+    const chartSlideAnim = useRef(new Animated.Value(0)).current;
+    const chartOpacityAnim = useRef(new Animated.Value(1)).current;
+    const dateRangeIndexRef = useRef(dateRange === 'Day' ? 0 : dateRange === 'Week' ? 1 : 2);
+
+    const FILTER_ORDER = ['Day', 'Week', 'Month'];
+
+    const switchDateRange = (filter) => {
+        const currentIdx = dateRangeIndexRef.current;
+        const nextIdx = FILTER_ORDER.indexOf(filter);
+        if (currentIdx === nextIdx) return;
+
+        const direction = nextIdx > currentIdx ? 1 : -1; // 1 = forward (up), -1 = backward (down)
+        const SLIDE_DISTANCE = 28;
+
+        // Trigger data update immediately so it happens WHILE sliding
+        LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+        setDateRange(filter);
+        dateRangeIndexRef.current = nextIdx;
+
+        // Slide pill immediately
+        Animated.spring(slideAnim, {
+            toValue: nextIdx,
+            useNativeDriver: true,
+            bounciness: 4,
+            speed: 12
+        }).start();
+
+        // Slide BOTH cards out simultaneously
+        Animated.parallel([
+            Animated.timing(statsSlideAnim, {
+                toValue: -direction * SLIDE_DISTANCE,
+                duration: 150,
+                useNativeDriver: true,
+            }),
+            Animated.timing(statsOpacityAnim, {
+                toValue: 0,
+                duration: 120,
+                useNativeDriver: true,
+            }),
+            Animated.timing(chartSlideAnim, {
+                toValue: -direction * SLIDE_DISTANCE,
+                duration: 150,
+                useNativeDriver: true,
+            }),
+            Animated.timing(chartOpacityAnim, {
+                toValue: 0,
+                duration: 120,
+                useNativeDriver: true,
+            }),
+        ]).start(() => {
+            // Reset both to opposite side instantly
+            statsSlideAnim.setValue(direction * SLIDE_DISTANCE);
+            statsOpacityAnim.setValue(0);
+            chartSlideAnim.setValue(direction * SLIDE_DISTANCE);
+            chartOpacityAnim.setValue(0);
+            
+            // Slide both into center
+            Animated.parallel([
+                Animated.spring(statsSlideAnim, {
+                    toValue: 0,
+                    useNativeDriver: true,
+                    bounciness: 5,
+                    speed: 14,
+                }),
+                Animated.timing(statsOpacityAnim, {
+                    toValue: 1,
+                    duration: 160,
+                    useNativeDriver: true,
+                }),
+                Animated.spring(chartSlideAnim, {
+                    toValue: 0,
+                    useNativeDriver: true,
+                    bounciness: 5,
+                    speed: 14,
+                }),
+                Animated.timing(chartOpacityAnim, {
+                    toValue: 1,
+                    duration: 160,
+                    useNativeDriver: true,
+                }),
+            ]).start();
+        });
+    };
+
+    // Transaction Details Modal State
+    const [selectedTx, setSelectedTx] = useState(null);
+    const [txModalVisible, setTxModalVisible] = useState(false);
+    const [revertModalVisible, setRevertModalVisible] = useState(false);
+    const [revertingTx, setRevertingTx] = useState(null);
+    const [alert, setAlert] = useState({ visible: false, title: '', message: '', type: 'info' });
+
+    // ── STORE DATA ──
+    const refreshAll = useFinanceStore(state => state.refreshAll);
+    const wallets = useFinanceStore(state => state.wallets);
+    const cryptoPrices = useFinanceStore(state => state.cryptoPrices);
+    const hideGlobalBalance = useFinanceStore(state => state.hideGlobalBalance);
+    const setHideGlobalBalance = useFinanceStore(state => state.setHideGlobalBalance);
+    const { debouncedRefreshAll, debouncedRefreshSummary, debouncedRefreshSavings, debouncedRefreshDebts } = useFinanceStore.getState();
+
+    // ── DERIVED DATA ──
+    const debts = useFinanceStore(state => state.debts);
+    const savingsGoals = useFinanceStore(state => state.savingsGoals);
+    const savingsMasterPot = useFinanceStore(state => state.savingsMasterPot);
+    const summary = useFinanceStore(state => state.transactionSummary);
+    const recent = useFinanceStore(state => state.transactions);
+    const isLoadingSummary = useFinanceStore(state => state.isLoadingSummary);
+    const isLoadingTransactions = useFinanceStore(state => state.isLoadingTransactions);
+
+    const prevSummaryRef = useRef(summary);
+    if (prevSummaryRef.current !== summary) {
+        LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+        prevSummaryRef.current = summary;
+    }
+
+    const savingsTotalSaved = (savingsMasterPot?.currentAmount || 0) +
+        savingsGoals.reduce((acc, g) => acc + (g.currentAmount || 0), 0);
+
+    const debtStats = (() => {
+        let iOwe = 0;
+        let owedToMe = 0;
+        debts.forEach(d => {
+            if (d.status === 'settled') return;
+            const amount = d.totalOwed ?? ((d.amount || 0) - (d.amountPaid || 0));
+            if (d.direction === 'owed_by_me') iOwe += amount;
+            if (d.direction === 'owed_to_me') owedToMe += amount;
+        });
+        return { iOwe, owedToMe };
+    })();
+
+    const statsTitle = dateRange === 'Day' ? 'Today' : (dateRange === 'Week' ? 'This Week' : 'This Month');
 
     // ── Double Tap to Exit ──
     useFocusEffect(
@@ -141,15 +274,6 @@ export default function HomeScreen({ navigation }) {
             return () => backHandler.remove();
         }, [lastBackPressed])
     );
-
-    // Transaction Details Modal State
-    const [selectedTx, setSelectedTx] = useState(null);
-    const [txModalVisible, setTxModalVisible] = useState(false);
-    const [revertModalVisible, setRevertModalVisible] = useState(false);
-    const [revertingTx, setRevertingTx] = useState(null);
-    const [alert, setAlert] = useState({ visible: false, title: '', message: '', type: 'info' });
-
-    const statsTitle = dateRange === 'Day' ? 'Today' : (dateRange === 'Week' ? 'This Week' : 'This Month');
 
     // Dynamically calculate which bar should be highlighted active based on time
     const currentHour = new Date().getHours();
@@ -187,48 +311,33 @@ export default function HomeScreen({ navigation }) {
     const currentChart = chartConfig[dateRange];
 
     const load = useCallback(async () => {
-        // Guard: don't attempt authenticated requests without a valid token
         if (!userToken) return;
-
         try {
-            const [s, t, savRes, debtsRes, notifRes, requestsRes] = await Promise.all([
-                getTransactionSummary({ range: dateRange.toLowerCase() }),
-                getTransactions({ limit: 10, page: 1 }),
-                getSavingsGoals().catch(() => ({ totalSaved: 0 })),
-                getDebts().catch(() => ([])),
-                getNotifications().catch(() => ({ unreadCount: 0 })),
-                getFriendRequests().catch(() => ([])),
+            // Fetch everything fresh, but use the current dateRange for the summary
+            await Promise.all([
+                useFinanceStore.getState().fetchWallets(true),
+                useFinanceStore.getState().fetchSavings(true),
+                useFinanceStore.getState().fetchDebts(true),
+                useFinanceStore.getState().fetchTransactions(true),
+                useFinanceStore.getState().fetchTransactionSummary(dateRange.toLowerCase(), true),
             ]);
+
+            // Still fetch local-only counts like notifications
+            const notifRes = await getNotifications().catch(() => ({ unreadCount: 0 }));
+            const requestsRes = await getFriendRequests().catch(() => ([]));
             setUnreadNotifCount(notifRes?.unreadCount || 0);
             setPendingRequestsCount(Array.isArray(requestsRes) ? requestsRes.length : 0);
-            setSavingsTotalSaved(savRes?.totalSaved || 0);
 
-            // Calculate debt totals for real net worth
-            let iOwe = 0;
-            let owedToMe = 0;
-            if (Array.isArray(debtsRes)) {
-                debtsRes.forEach(d => {
-                    if (d.status === 'settled') return;
-                    const amount = d.totalOwed ?? ((d.amount || 0) - (d.amountPaid || 0));
-                    if (d.direction === 'owed_by_me') iOwe += amount;
-                    if (d.direction === 'owed_to_me') owedToMe += amount;
-                });
-            }
-            setDebtStats({ iOwe, owedToMe });
-
-            setSummary(s);
-            updateWidgetBalance(s.balance);
-            const txs = t.transactions || [];
-            setRecent(txs);
+            // Reset infinite scroll pagination
             setPage(2);
-            setHasMore(txs.length >= 10);
+            setHasMore(true);
         } catch (err) {
             console.warn('[Home] Load error:', err.message);
         } finally {
             setLoading(false);
             setRefreshing(false);
         }
-    }, [dateRange, userToken]);
+    }, [userToken, dateRange]);
 
     const fetchMore = async () => {
         if (!hasMore || loadingMore) return;
@@ -237,15 +346,7 @@ export default function HomeScreen({ navigation }) {
             const res = await getTransactions({ limit: 10, page });
             const incoming = res.transactions || [];
             if (incoming.length > 0) {
-                setRecent(prev => {
-                    const merged = [...prev, ...incoming];
-                    const seen = new Set();
-                    return merged.filter(item => {
-                        if (seen.has(item._id)) return false;
-                        seen.add(item._id);
-                        return true;
-                    });
-                });
+                useFinanceStore.getState().appendTransactionsSync(incoming);
                 setPage(p => p + 1);
             }
             if (incoming.length < 10) setHasMore(false);
@@ -294,7 +395,13 @@ export default function HomeScreen({ navigation }) {
 
     const todaysRecent = recent.filter(tx => isToday(tx.date || tx.createdAt));
 
-    useEffect(() => { load(); }, [dateRange, userToken, load]);
+    // Initial full load on mount / token change
+    useEffect(() => { load(); }, [userToken]);
+
+    // Re-fetch summary whenever the date range pill changes
+    useEffect(() => {
+        useFinanceStore.getState().fetchTransactionSummary(dateRange.toLowerCase(), true);
+    }, [dateRange]);
 
     // ── Socket.IO — real-time transaction updates ──────────────────────────────
     useEffect(() => {
@@ -303,61 +410,30 @@ export default function HomeScreen({ navigation }) {
         connectSocket(userInfo._id);
         const socket = getSocket();
 
-        const refreshSummary = () => {
-            getTransactionSummary({ range: dateRange.toLowerCase() })
-                .then(s => {
-                    setSummary(s);
-                    updateWidgetBalance(s.balance);
-                })
-                .catch(() => { });
-        };
-
         const handleNewTransaction = (tx) => {
-            // Defensive check: only add if it belongs to me
             if (tx.user && tx.user.toString() !== userInfo._id.toString()) return;
-
-            setRecent(prev => {
-                const merged = [tx, ...prev];
-                const seen = new Set();
-                return merged.filter(item => {
-                    if (seen.has(item._id)) return false;
-                    seen.add(item._id);
-                    return true;
-                });
-            });
-            refreshSummary();
+            // NOTE: addTransactionSync is handled by SocketManager globally — don't call it here
+            debouncedRefreshSummary(dateRange.toLowerCase());
         };
 
         const handleUpdateTransaction = (tx) => {
             if (tx.user && tx.user.toString() !== userInfo._id.toString()) return;
-            setRecent(prev => prev.map(t => t._id === tx._id ? tx : t));
-            refreshSummary();
+            // The store handles sync via a separate listener or we could add updateTransactionSync
+            debouncedRefreshSummary(dateRange.toLowerCase());
         };
 
         const handleDeleteTransaction = (data) => {
-            setRecent(prev => prev.filter(t => t._id !== data._id));
-            refreshSummary();
+            // NOTE: deleteTransactionSync is handled by SocketManager globally — don't call it here
+            debouncedRefreshSummary(dateRange.toLowerCase());
         };
 
         const handleSavingsChange = () => {
-            getSavingsGoals().then(res => setSavingsTotalSaved(res.totalSaved || 0)).catch(() => { });
-            refreshSummary();
+            debouncedRefreshSavings();
+            debouncedRefreshSummary(dateRange.toLowerCase());
         };
 
         const handleDebtChange = () => {
-            getDebts().then(debtsRes => {
-                let iOwe = 0;
-                let owedToMe = 0;
-                if (Array.isArray(debtsRes)) {
-                    debtsRes.forEach(d => {
-                        if (d.status === 'settled') return;
-                        const amount = d.totalOwed ?? ((d.amount || 0) - (d.amountPaid || 0));
-                        if (d.direction === 'owed_by_me') iOwe += amount;
-                        if (d.direction === 'owed_to_me') owedToMe += amount;
-                    });
-                }
-                setDebtStats({ iOwe, owedToMe });
-            }).catch(() => { });
+            debouncedRefreshDebts();
         };
 
         const handleCurrencyUpdate = () => {
@@ -647,59 +723,188 @@ export default function HomeScreen({ navigation }) {
                 </LinearGradient>
 
                 {/* Analytics Row */}
-                <View style={styles.analyticsRow}>
-                    {/* Left: Dynamic Chart */}
-                    <View style={[styles.analyticsCard, { backgroundColor: COLORS.surface, marginRight: spacing.sm }]}>
-                        <Text style={[styles.analyticsLabel, { color: COLORS.textMuted }]}>{currentChart.label}</Text>
-                        <View style={styles.chartContainer}>
-                            {currentChart.labels.map((L, i) => {
-                                const isActive = i === currentChart.activeIndex;
-                                const inc = currentChart.income[i];
-                                const exp = currentChart.expense[i];
+                <View style={[styles.analyticsRow, { flexDirection: 'column', height: 'auto', gap: 12 }]}>
+                    {/* Top: Dynamic Chart */}
+                    <TouchableOpacity
+                        style={[styles.analyticsCard, { backgroundColor: COLORS.surface, marginHorizontal: 0, padding: 20 }]}
+                        activeOpacity={0.8}
+                        onPress={() => {
+                            LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+                            setChartView((prev) => (prev + 1) % 3);
+                        }}
+                    >
+                        <Animated.View style={{ transform: [{ translateY: chartSlideAnim }], opacity: chartOpacityAnim }}>
+                        {chartView === 0 && (
+                            <>
+                                <Text style={[styles.analyticsLabel, { color: COLORS.textMuted }]}>{currentChart.label}</Text>
+                                <View style={[styles.chartContainer, { height: 120, marginTop: 10 }]}>
+                                    {currentChart.labels.map((L, i) => {
+                                        const isActive = i === currentChart.activeIndex;
+                                        const inc = currentChart.income[i];
+                                        const exp = currentChart.expense[i];
 
-                                return (
-                                    <View key={i} style={styles.chartCol}>
-                                        <View style={styles.chartBarGroup}>
-                                            <View style={[styles.chartBar, { height: `${inc}%`, backgroundColor: COLORS.income, opacity: inc > 0 ? (isActive ? 1 : 0.6) : 0.1 }]} />
-                                            <View style={[styles.chartBar, { height: `${exp}%`, backgroundColor: COLORS.expense, opacity: exp > 0 ? (isActive ? 1 : 0.6) : 0.1 }]} />
+                                        return (
+                                            <View key={i} style={styles.chartCol}>
+                                                <View style={styles.chartBarGroup}>
+                                                    <View style={[styles.chartBar, { height: `${inc}%`, backgroundColor: COLORS.income, opacity: inc > 0 ? (isActive ? 1 : 0.6) : 0.1 }]} />
+                                                    <View style={[styles.chartBar, { height: `${exp}%`, backgroundColor: COLORS.expense, opacity: exp > 0 ? (isActive ? 1 : 0.6) : 0.1 }]} />
+                                                </View>
+                                                <Text style={[styles.chartDay, { color: COLORS.textMuted, fontWeight: isActive ? '800' : '500' }]}>
+                                                    {L}
+                                                </Text>
+                                            </View>
+                                        );
+                                    })}
+                                </View>
+                            </>
+                        )}
+                        {chartView === 1 && (
+                            <View style={{ flex: 1 }}>
+                                <View style={{ marginBottom: 16 }}>
+                                    <Text style={{ fontSize: 16, fontWeight: 'bold', color: COLORS.text }}>Expense Distribution</Text>
+                                    <Text style={{ fontSize: 11, color: COLORS.textMuted, marginTop: 2 }}>Tap to switch views</Text>
+                                </View>
+                                {summary.expensePie && summary.expensePie.length > 0 ? (
+                                    <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                                        <View style={{ width: 120, height: 120, justifyContent: 'center', alignItems: 'center' }}>
+                                            <PieChart
+                                                data={summary.expensePie}
+                                                width={140}
+                                                height={140}
+                                                chartConfig={{ color: () => '#000' }}
+                                                accessor={"population"}
+                                                backgroundColor={"transparent"}
+                                                paddingLeft={"35"}
+                                                center={[0, 0]}
+                                                hasLegend={false}
+                                                absolute
+                                            />
+                                            <View style={{ position: 'absolute', width: 70, height: 70, borderRadius: 35, backgroundColor: COLORS.surface, justifyContent: 'center', alignItems: 'center', elevation: 1, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.1, shadowRadius: 4 }}>
+                                                <Text style={{ fontSize: 18, fontWeight: '900', color: COLORS.text }}>
+                                                    {Math.round((summary.expensePie[0].population / summary.expensePie.reduce((a, b) => a + b.population, 0)) * 100)}%
+                                                </Text>
+                                            </View>
                                         </View>
-                                        <Text style={[styles.chartDay, { color: COLORS.textMuted, fontWeight: isActive ? '800' : '500' }]}>
-                                            {L}
-                                        </Text>
+                                        <View style={{ flex: 1, height: 120, marginLeft: 20 }}>
+                                            <ScrollView showsVerticalScrollIndicator={false} nestedScrollEnabled>
+                                                {summary.expensePie.map((item, idx) => (
+                                                    <View key={idx} style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+                                                        <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1, marginRight: 8 }}>
+                                                            <View style={{ width: 10, height: 10, borderRadius: 5, backgroundColor: item.color, marginRight: 8 }} />
+                                                            <Text style={{ color: COLORS.text, fontSize: 12, fontWeight: '500' }} numberOfLines={1}>{item.name}</Text>
+                                                        </View>
+                                                        <Text style={{ color: COLORS.text, fontSize: 12, fontWeight: 'bold' }}>
+                                                            {formatCurrency(item.population, userInfo?.currency)}
+                                                        </Text>
+                                                    </View>
+                                                ))}
+                                            </ScrollView>
+                                        </View>
                                     </View>
-                                );
-                            })}
-                        </View>
-                    </View>
-
-                    {/* Right: Today Summary */}
-                    <View style={[styles.analyticsCard, { backgroundColor: COLORS.surface, marginLeft: spacing.sm }]}>
-                        <Text style={[styles.analyticsTitle, { color: COLORS.text }]}>{statsTitle}</Text>
-
-                        <View style={styles.statsContainer}>
-                            <View style={styles.statRow}>
-                                <Feather name="trending-up" size={14} color={COLORS.income} style={styles.statIcon} />
-                                <Text style={[styles.statValue, { color: COLORS.income }]}>{formatCurrency(summary.totalIncome, userInfo?.currency)}</Text>
+                                ) : (
+                                    <Text style={{ fontSize: 12, color: COLORS.textMuted, marginTop: 20 }}>No expenses recorded.</Text>
+                                )}
                             </View>
-                            <View style={styles.statRow}>
-                                <Feather name="trending-down" size={14} color={COLORS.expense} style={styles.statIcon} />
-                                <Text style={[styles.statValue, { color: COLORS.text }]}>{formatCurrency(summary.totalExpenses, userInfo?.currency)}</Text>
+                        )}
+                        {chartView === 2 && (
+                            <View style={{ flex: 1 }}>
+                                <View style={{ marginBottom: 16 }}>
+                                    <Text style={{ fontSize: 16, fontWeight: 'bold', color: COLORS.text }}>Income Distribution</Text>
+                                    <Text style={{ fontSize: 11, color: COLORS.textMuted, marginTop: 2 }}>Tap to switch views</Text>
+                                </View>
+                                {summary.incomePie && summary.incomePie.length > 0 ? (
+                                    <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                                        <View style={{ width: 120, height: 120, justifyContent: 'center', alignItems: 'center' }}>
+                                            <PieChart
+                                                data={summary.incomePie}
+                                                width={140}
+                                                height={140}
+                                                chartConfig={{ color: () => '#000' }}
+                                                accessor={"population"}
+                                                backgroundColor={"transparent"}
+                                                paddingLeft={"35"}
+                                                center={[0, 0]}
+                                                hasLegend={false}
+                                                absolute
+                                            />
+                                            <View style={{ position: 'absolute', width: 70, height: 70, borderRadius: 35, backgroundColor: COLORS.surface, justifyContent: 'center', alignItems: 'center', elevation: 1, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.1, shadowRadius: 4 }}>
+                                                <Text style={{ fontSize: 18, fontWeight: '900', color: COLORS.text }}>
+                                                    {Math.round((summary.incomePie[0].population / summary.incomePie.reduce((a, b) => a + b.population, 0)) * 100)}%
+                                                </Text>
+                                            </View>
+                                        </View>
+                                        <View style={{ flex: 1, height: 120, marginLeft: 20 }}>
+                                            <ScrollView showsVerticalScrollIndicator={false} nestedScrollEnabled>
+                                                {summary.incomePie.map((item, idx) => (
+                                                    <View key={idx} style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+                                                        <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1, marginRight: 8 }}>
+                                                            <View style={{ width: 10, height: 10, borderRadius: 5, backgroundColor: item.color, marginRight: 8 }} />
+                                                            <Text style={{ color: COLORS.text, fontSize: 12, fontWeight: '500' }} numberOfLines={1}>{item.name}</Text>
+                                                        </View>
+                                                        <Text style={{ color: COLORS.text, fontSize: 12, fontWeight: 'bold' }}>
+                                                            {formatCurrency(item.population, userInfo?.currency)}
+                                                        </Text>
+                                                    </View>
+                                                ))}
+                                            </ScrollView>
+                                        </View>
+                                    </View>
+                                ) : (
+                                    <Text style={{ fontSize: 12, color: COLORS.textMuted, marginTop: 20 }}>No income recorded.</Text>
+                                )}
                             </View>
-                        </View>
-                        <View style={styles.filterPills}>
-                            {['Day', 'Week', 'Month'].map((filter) => {
-                                const isActive = dateRange === filter;
-                                return (
-                                    <TouchableOpacity
-                                        key={filter}
-                                        onPress={() => setDateRange(filter)}
-                                        activeOpacity={0.7}
-                                        style={[styles.filterPill, isActive && { backgroundColor: COLORS.primary }]}
-                                    >
-                                        <Text style={[styles.filterPillText, { color: isActive ? '#fff' : COLORS.textMuted }]}>{filter}</Text>
-                                    </TouchableOpacity>
-                                );
-                            })}
+                        )}
+                        </Animated.View>
+                    </TouchableOpacity>
+
+                    {/* Bottom: Today Summary */}
+                    <View style={[styles.analyticsCard, { backgroundColor: COLORS.surface, marginHorizontal: 0, padding: 16, paddingHorizontal: 20, overflow: 'hidden' }]}>
+                        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <Animated.View style={{ transform: [{ translateY: statsSlideAnim }], opacity: statsOpacityAnim }}>
+                                <Text style={[styles.analyticsTitle, { color: COLORS.text, marginBottom: 8 }]}>{statsTitle}</Text>
+                                <View style={{ flexDirection: 'row', gap: 16 }}>
+                                    <View style={styles.statRow}>
+                                        <Feather name="trending-up" size={14} color={COLORS.income} style={styles.statIcon} />
+                                        <Text style={[styles.statValue, { color: COLORS.income }]}>{formatCurrency(summary.totalIncome, userInfo?.currency)}</Text>
+                                    </View>
+                                    <View style={styles.statRow}>
+                                        <Feather name="trending-down" size={14} color={COLORS.expense} style={styles.statIcon} />
+                                        <Text style={[styles.statValue, { color: COLORS.text }]}>{formatCurrency(summary.totalExpenses, userInfo?.currency)}</Text>
+                                    </View>
+                                </View>
+                            </Animated.View>
+
+                            <View style={[styles.filterPills, { marginTop: 0, flexDirection: 'column', gap: 6, position: 'relative' }]}>
+                                {/* Animated Sliding Pill */}
+                                <Animated.View 
+                                    style={{
+                                        position: 'absolute',
+                                        top: 0, left: 0, right: 0,
+                                        height: 24, // Fixed height for calculation
+                                        backgroundColor: COLORS.primary,
+                                        borderRadius: 12,
+                                        transform: [{
+                                            translateY: slideAnim.interpolate({
+                                                inputRange: [0, 1, 2],
+                                                outputRange: [0, 30, 60] // height (24) + gap (6)
+                                            })
+                                        }]
+                                    }}
+                                />
+                                {['Day', 'Week', 'Month'].map((filter) => {
+                                    const isActive = dateRange === filter;
+                                    return (
+                                        <TouchableOpacity
+                                            key={filter}
+                                            onPress={() => switchDateRange(filter)}
+                                            activeOpacity={0.7}
+                                            style={[styles.filterPill, { paddingVertical: 0, height: 24, justifyContent: 'center', backgroundColor: 'transparent' }]}
+                                        >
+                                            <Text style={[styles.filterPillText, { color: isActive ? '#fff' : COLORS.textMuted, textAlign: 'center' }]}>{filter}</Text>
+                                        </TouchableOpacity>
+                                    );
+                                })}
+                            </View>
                         </View>
                     </View>
                 </View>
@@ -949,6 +1154,7 @@ export default function HomeScreen({ navigation }) {
                     </View>
                 </TouchableWithoutFeedback>
             </Modal>
+            <OnboardingTour />
         </SafeAreaView>
     );
 }

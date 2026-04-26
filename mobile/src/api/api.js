@@ -32,8 +32,10 @@ export const deleteTransaction = (id) =>
 export const archiveTransaction = (id) =>
     axios.patch(`${API_BASE}/transactions/${id}/archive`).then(r => r.data);
 
-export const getAnalytics = () =>
-    axios.get(`${API_BASE}/transactions/analytics`).then(r => r.data);
+export const emptyArchives = () =>
+    axios.delete(`${API_BASE}/transactions/archive/empty`).then(r => r.data);
+export const getAnalytics = (params = {}) =>
+    axios.get(`${API_BASE}/transactions/analytics`, { params }).then(r => r.data);
 
 // ─── Debts ────────────────────────────────────────────────────────────────────
 
@@ -148,8 +150,8 @@ export const markBillPaid = (id) =>
 
 // ─── Budgets ──────────────────────────────────────────────────────────────────
 
-export const getBudgets = (month) =>
-    axios.get(`${API_BASE}/budgets`, { params: { month } }).then(r => r.data);
+export const getBudgets = (date, period) =>
+    axios.get(`${API_BASE}/budgets`, { params: { date, period } }).then(r => r.data);
 
 export const upsertBudget = (data) =>
     axios.post(`${API_BASE}/budgets`, data).then(r => r.data);
@@ -159,11 +161,14 @@ export const deleteBudget = (id) =>
 
 // ─── Savings ──────────────────────────────────────────────────────────────────
 
-export const getSavingsGoals = () =>
-    axios.get(`${API_BASE}/savings/goals`).then(r => r.data);
+export const getSavingsGoals = (params = {}) =>
+    axios.get(`${API_BASE}/savings/goals`, { params }).then(r => r.data);
 
 export const createSavingsGoal = (data) =>
     axios.post(`${API_BASE}/savings/goals`, data).then(r => r.data);
+
+export const respondToGoalInvite = (id, status) =>
+    axios.post(`${API_BASE}/savings/goals/respond/${id}`, { status }).then(r => r.data);
 
 export const updateSavingsGoal = (id, data) =>
     axios.patch(`${API_BASE}/savings/goals/${id}`, data).then(r => r.data);
@@ -176,6 +181,12 @@ export const savingsTransfer = (data) =>
 
 export const getSavingsTransfers = (params = {}) =>
     axios.get(`${API_BASE}/savings/transfers`, { params }).then(r => r.data);
+
+export const archiveSavingsTransfer = (id) =>
+    axios.patch(`${API_BASE}/savings/transfers/${id}/archive`).then(r => r.data);
+
+export const emptySavingsArchives = () =>
+    axios.delete(`${API_BASE}/savings/transfers/archive/empty`).then(r => r.data);
 
 export const completeSavingsGoal = (id, data) =>
     axios.post(`${API_BASE}/savings/goals/complete/${id}`, data).then(r => r.data);
@@ -267,6 +278,9 @@ export const markAllNotificationsRead = () =>
 
 export const deleteNotification = (id) =>
     axios.delete(`${API_BASE}/notifications/${id}`).then(r => r.data);
+
+export const deleteAllNotifications = () =>
+    axios.delete(`${API_BASE}/notifications/bulk-delete`).then(r => r.data);
 
 // ── Categories ────────────────────────────────────────────────────────────────
 

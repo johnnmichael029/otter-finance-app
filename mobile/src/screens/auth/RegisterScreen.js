@@ -28,7 +28,7 @@ export default function RegisterScreen({ navigation }) {
     const showAlert = (type, title, message, onSuccess = null) => {
         setAlert({ visible: true, type, title, message, onSuccess });
     };
-    
+
     const closeAlert = () => {
         setAlert((prev) => ({ ...prev, visible: false }));
         if (alert.onSuccess) alert.onSuccess();
@@ -46,8 +46,11 @@ export default function RegisterScreen({ navigation }) {
         }
         const result = await register(name.trim(), email.trim(), password);
         if (result.success) {
-            showAlert('success', 'Success', 'Account created successfully!', () => {
-                navigation.navigate('Login');
+            navigation.navigate('VerifyEmail', {
+                email: email.trim(),
+                name: name.trim(),
+                password: password,
+                tempToken: result.tempToken
             });
         } else {
             showAlert('error', 'Registration Failed', result.message || 'An error occurred.');
@@ -83,7 +86,7 @@ export default function RegisterScreen({ navigation }) {
                                             <TextInput
                                                 style={[styles.inputFlex, { color: COLORS.text }]}
                                                 placeholder={field.placeholder}
-                                                placeholderTextColor={COLORS.textMuted}
+                                                placeholderTextColor={COLORS.textMuted + '80'}
                                                 value={field.value}
                                                 onChangeText={field.onChange}
                                                 secureTextEntry={!showPassword}
@@ -98,7 +101,7 @@ export default function RegisterScreen({ navigation }) {
                                         <TextInput
                                             style={[styles.input, { backgroundColor: COLORS.inputBackground, borderColor: COLORS.inputBorder, color: COLORS.text }]}
                                             placeholder={field.placeholder}
-                                            placeholderTextColor={COLORS.textMuted}
+                                            placeholderTextColor={COLORS.textMuted + '80'}
                                             value={field.value}
                                             onChangeText={field.onChange}
                                             keyboardType={field.keyboard || 'default'}
@@ -108,6 +111,10 @@ export default function RegisterScreen({ navigation }) {
                                     )}
                                 </View>
                             ))}
+
+                            <Text style={[styles.emailNote, { color: COLORS.textMuted }]}>
+                                You will need access to this email to receive a verification code for your registration.
+                            </Text>
 
                             <TouchableOpacity
                                 style={[styles.btn, isLoading && styles.btnDisabled]}
@@ -194,4 +201,5 @@ const styles = StyleSheet.create({
     switchRow: { alignItems: 'center', marginTop: spacing.md },
     switchText: { ...typography.bodyMuted },
     switchLink: { fontWeight: '600' },
+    emailNote: { fontSize: 12, textAlign: 'center', marginBottom: spacing.md, paddingHorizontal: spacing.sm },
 });

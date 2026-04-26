@@ -273,6 +273,8 @@ const csrfMiddleware = (req, res, next) => {
     // Mobile register/login/2FA: no token yet, source: 'mobile' signals mobile origin
     const publicAuthRoutes = [
         '/api/auth/register',
+        '/api/auth/request-register-otp',
+        '/api/auth/verify-register-otp',
         '/api/auth/login',
         '/api/auth/verify-2fa',
         '/api/auth/2fa/resend',

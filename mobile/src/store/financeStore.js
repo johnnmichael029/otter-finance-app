@@ -3,6 +3,12 @@ import { persist, createJSONStorage } from 'zustand/middleware';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as api from '../api/api';
 
+let refreshAllTimeout = null;
+let summaryTimeout = null;
+let savingsTimeout = null;
+let debtsTimeout = null;
+let lastRefreshTime = 0;
+
 export const useFinanceStore = create(
     persist(
         (set, get) => ({
@@ -135,17 +141,65 @@ export const useFinanceStore = create(
             },
 
             // ─── Global Refresher ───
-            refreshAll: async () => {
+            // Temporarily disabled to prevent 429 Too Many Requests errors
+            // refreshAll: async () => {
+            //     await get().fetchWallets(true);
+            //     await get().fetchSavings(true);
+            //     await get().fetchDebts(true);
+            //     await get().fetchRecurringBills(true);
+            //     await get().fetchTransactions(true);
+            // },
+
+            refreshAll: async (force = true) => {
+                const now = Date.now();
+                if (force && now - lastRefreshTime < 1000) return;
+                if (force) lastRefreshTime = now;
+
                 const { fetchDebts, fetchRecurringBills, fetchTransactions, fetchTransactionSummary, fetchSavings, fetchWallets } = get();
-                await Promise.all([
-                    fetchDebts(true),
-                    fetchRecurringBills(true),
-                    fetchTransactions(true),
-                    fetchTransactionSummary('week', true),
-                    fetchSavings(true),
-                    fetchWallets(true)
-                ].filter(Boolean));
+                try {
+                    await Promise.all([
+                        fetchDebts(force),
+                        fetchRecurringBills(force),
+                        fetchTransactions(force),
+                        fetchTransactionSummary('week', force),
+                        fetchSavings(force),
+                        fetchWallets(force)
+                    ].filter(Boolean));
+                } catch (e) {
+                    console.warn('[FinanceStore] refreshAll error:', e.message);
+                }
             },
+
+            // ─── Debounced Global Refreshers ───
+            debouncedRefreshAll: (force = true) => {
+                if (refreshAllTimeout) clearTimeout(refreshAllTimeout);
+                refreshAllTimeout = setTimeout(() => {
+                    get().refreshAll(force);
+                }, 400);
+            },
+
+            debouncedRefreshSummary: (range = 'week', force = true) => {
+                if (summaryTimeout) clearTimeout(summaryTimeout);
+                summaryTimeout = setTimeout(() => {
+                    get().fetchTransactionSummary(range, force);
+                    get().fetchWallets(force);
+                }, 400);
+            },
+
+            debouncedRefreshSavings: (force = true) => {
+                if (savingsTimeout) clearTimeout(savingsTimeout);
+                savingsTimeout = setTimeout(() => {
+                    get().fetchSavings(force);
+                }, 400);
+            },
+
+            debouncedRefreshDebts: (force = true) => {
+                if (debtsTimeout) clearTimeout(debtsTimeout);
+                debtsTimeout = setTimeout(() => {
+                    get().fetchDebts(force);
+                }, 400);
+            },
+
 
             // ─── Synchronous Mutations ───
             addTransactionSync: (tx) => {
@@ -172,6 +226,13 @@ export const useFinanceStore = create(
                 set((state) => ({
                     transactions: state.transactions.filter(tx => tx._id !== transactionId)
                 }));
+            },
+            appendTransactionsSync: (newTxs) => {
+                set((state) => {
+                    const existingIds = new Set(state.transactions.map(t => t._id));
+                    const uniqueNew = newTxs.filter(t => !existingIds.has(t._id));
+                    return { transactions: [...state.transactions, ...uniqueNew] };
+                });
             },
         }),
         {

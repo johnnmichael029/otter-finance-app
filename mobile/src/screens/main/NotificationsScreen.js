@@ -3,13 +3,13 @@ import {
     View, Text, StyleSheet, FlatList, TouchableOpacity,
     ActivityIndicator, RefreshControl, Platform, Alert, Image, Animated as RNAnimated
 } from 'react-native';
-import Animated, { ZoomIn, ZoomOut } from 'react-native-reanimated';
+import Animated, { ZoomIn, ZoomOut, LinearTransition } from 'react-native-reanimated';
 import { Swipeable } from 'react-native-gesture-handler';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Feather, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useTheme } from '../../context/ThemeContext';
 import { useAuth, API_BASE } from '../../context/AuthContext';
-import { getNotifications, markNotificationRead, markAllNotificationsRead, deleteNotification, respondFriendRequest, respondDebtRequest } from '../../api/api';
+import { getNotifications, markNotificationRead, markAllNotificationsRead, deleteNotification, deleteAllNotifications, respondFriendRequest, respondDebtRequest, respondToGoalInvite } from '../../api/api';
 import { connectSocket, disconnectSocket, getSocket } from '../../utils/socket';
 import { spacing, radius, typography, shadow } from '../../theme/colors';
 import CustomAlertModal from '../../components/CustomAlertModal';
@@ -24,7 +24,8 @@ const NOTIF_ICONS = {
     friend_accepted: { name: 'check-circle', color: '#8b5cf6', bg: '#ede9fe' },
     debt_request: { name: 'dollar-sign', color: '#f59e0b', bg: '#fff7ed' },
     debt_accepted: { name: 'check-circle', color: '#22c55e', bg: '#f0fdf4' },
-    debt_payment: { name: 'check-circle', color: '#8b5cf6', bg: '#ede9fe' }
+    debt_payment: { name: 'check-circle', color: '#8b5cf6', bg: '#ede9fe' },
+    goal_invite: { name: 'users', color: '#E91E8C', bg: '#fdf2f8' }
 };
 
 export default function NotificationsScreen({ navigation }) {
@@ -65,12 +66,21 @@ export default function NotificationsScreen({ navigation }) {
             socket.on('notification_deleted', ({ debtId }) => {
                 setNotifications(prev => prev.filter(n => n.data?.debtId !== debtId));
             });
+            socket.on('all_notifications_deleted', () => {
+                setNotifications([]);
+                setUnreadCount(0);
+            });
+            socket.on('notification_updated', (updatedNotif) => {
+                setNotifications(prev => prev.map(n => n._id === updatedNotif._id ? updatedNotif : n));
+            });
         }
 
         return () => {
             if (socket) {
                 socket.off('new_notification');
                 socket.off('notification_deleted');
+                socket.off('all_notifications_deleted');
+                socket.off('notification_updated');
             }
         };
     }, [loadData, userInfo?._id]);
@@ -106,6 +116,42 @@ export default function NotificationsScreen({ navigation }) {
         }
     };
 
+    const handleDeleteAll = () => {
+        const originalNotifs = [...notifications];
+        const originalUnread = unreadCount;
+
+        setAlertConfig({
+            visible: true,
+            title: 'Clear Notifications',
+            message: 'Are you sure you want to delete all notifications? This action cannot be undone.',
+            type: 'confirm',
+            confirmText: 'Clear All',
+            onConfirm: async () => {
+                setAlertConfig(p => ({ ...p, visible: false }));
+
+                // Optimistic UI update: Clear immediately
+                setNotifications([]);
+                setUnreadCount(0);
+
+                try {
+                    await deleteAllNotifications();
+                    console.log('[NOTIF] All notifications purged successfully');
+                } catch (error) {
+                    console.error('[Notifications] Delete all error:', error);
+                    // Rollback if it fails
+                    setNotifications(originalNotifs);
+                    setUnreadCount(originalUnread);
+                    setAlertConfig({
+                        visible: true,
+                        title: 'Error',
+                        message: 'Failed to clear notifications. Please try again.',
+                        type: 'error'
+                    });
+                }
+            }
+        });
+    };
+
     const handleRespondFriendRequest = async (notifId, requestId, status) => {
         try {
             await respondFriendRequest(requestId, status);
@@ -136,6 +182,25 @@ export default function NotificationsScreen({ navigation }) {
         }
     };
 
+    const handleRespondGoalInvite = async (notifId, goalId, status) => {
+        try {
+            await respondToGoalInvite(goalId, status);
+            // Notification is updated by socket, but we can also optimistically update
+            setNotifications(prev => prev.map(n => n._id === notifId ? {
+                ...n,
+                title: status === 'accepted' ? 'Goal Joined! 🤝' : 'Invite Declined',
+                message: status === 'accepted' ? 'You joined the goal. Let\'s start saving!' : 'You declined the invite.',
+                isRead: true,
+                data: { ...n.data, processed: true }
+            } : n));
+            setAlertConfig({ visible: true, title: 'Success', message: status === 'accepted' ? 'Goal joined! 🎯' : 'Invite declined.', type: 'success' });
+        } catch (error) {
+            console.error('[Notifications] Goal respond error:', error);
+            const msg = error.response?.data?.error || 'Failed to respond.';
+            setAlertConfig({ visible: true, title: 'Error', message: msg, type: 'error' });
+        }
+    };
+
     const renderRightActions = (progress, dragX, id) => {
         const scale = dragX.interpolate({
             inputRange: [-80, 0],
@@ -161,10 +226,11 @@ export default function NotificationsScreen({ navigation }) {
         const config = NOTIF_ICONS[item.type] || NOTIF_ICONS.system;
 
         return (
-            <Animated.View key={item._id} entering={ZoomIn.springify().damping(50).mass(0.9)} exiting={ZoomOut.duration(100)}>
+            <Animated.View key={item._id} layout={LinearTransition.springify()} entering={ZoomIn.springify().damping(50).mass(0.9)} exiting={ZoomOut.duration(100)}>
                 <Swipeable
                     renderRightActions={(prog, drag) => renderRightActions(prog, drag, item._id)}
-                    friction={1}
+                    onSwipeableOpen={(direction) => direction === 'right' && handleDelete(item._id)}
+                    friction={2}
                     overshootRight={false}
                     containerStyle={{ marginBottom: spacing.md }}
                 >
@@ -193,15 +259,15 @@ export default function NotificationsScreen({ navigation }) {
 
                             {item.type === 'friend_request' && item.data?.requestId && (
                                 <View style={styles.actionRow}>
-                                    <TouchableOpacity 
-                                        style={[styles.actionBtn, { backgroundColor: '#22c55e' }]} 
+                                    <TouchableOpacity
+                                        style={[styles.actionBtn, { backgroundColor: '#22c55e' }]}
                                         onPress={() => handleRespondFriendRequest(item._id, item.data.requestId, 'accepted')}
                                     >
                                         <Feather name="check" size={14} color="#fff" />
                                         <Text style={styles.actionBtnText}>Accept</Text>
                                     </TouchableOpacity>
-                                    <TouchableOpacity 
-                                        style={[styles.actionBtn, { backgroundColor: COLORS.border }]} 
+                                    <TouchableOpacity
+                                        style={[styles.actionBtn, { backgroundColor: COLORS.border }]}
                                         onPress={() => handleRespondFriendRequest(item._id, item.data.requestId, 'rejected')}
                                     >
                                         <Feather name="x" size={14} color={COLORS.text} />
@@ -212,19 +278,38 @@ export default function NotificationsScreen({ navigation }) {
 
                             {item.type === 'debt_request' && item.data?.debtId && (
                                 <View style={styles.actionRow}>
-                                    <TouchableOpacity 
-                                        style={[styles.actionBtn, { backgroundColor: COLORS.primary }]} 
+                                    <TouchableOpacity
+                                        style={[styles.actionBtn, { backgroundColor: COLORS.primary }]}
                                         onPress={() => handleRespondDebtRequest(item._id, item.data.debtId, 'accepted')}
                                     >
                                         <Feather name="check" size={14} color="#fff" />
                                         <Text style={styles.actionBtnText}>Confirm</Text>
                                     </TouchableOpacity>
-                                    <TouchableOpacity 
-                                        style={[styles.actionBtn, { backgroundColor: COLORS.border }]} 
+                                    <TouchableOpacity
+                                        style={[styles.actionBtn, { backgroundColor: COLORS.border }]}
                                         onPress={() => handleRespondDebtRequest(item._id, item.data.debtId, 'rejected')}
                                     >
                                         <Feather name="x" size={14} color={COLORS.text} />
                                         <Text style={[styles.actionBtnText, { color: COLORS.text }]}>Reject</Text>
+                                    </TouchableOpacity>
+                                </View>
+                            )}
+
+                            {item.type === 'goal_invite' && item.data?.goalId && !item.data?.processed && (
+                                <View style={styles.actionRow}>
+                                    <TouchableOpacity
+                                        style={[styles.actionBtn, { backgroundColor: COLORS.primary }]}
+                                        onPress={() => handleRespondGoalInvite(item._id, item.data.goalId, 'accepted')}
+                                    >
+                                        <Feather name="check" size={14} color="#fff" />
+                                        <Text style={styles.actionBtnText}>Accept</Text>
+                                    </TouchableOpacity>
+                                    <TouchableOpacity
+                                        style={[styles.actionBtn, { backgroundColor: COLORS.border }]}
+                                        onPress={() => handleRespondGoalInvite(item._id, item.data.goalId, 'rejected')}
+                                    >
+                                        <Feather name="x" size={14} color={COLORS.text} />
+                                        <Text style={[styles.actionBtnText, { color: COLORS.text }]}>Decline</Text>
                                     </TouchableOpacity>
                                 </View>
                             )}
@@ -241,12 +326,20 @@ export default function NotificationsScreen({ navigation }) {
                 <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backBtn}>
                     <Feather name="arrow-left" size={24} color={COLORS.text} />
                 </TouchableOpacity>
-                <Text style={[styles.headerTitle, { color: COLORS.text }]}>Notification Center</Text>
-                {unreadCount > 0 && (
-                    <TouchableOpacity onPress={handleMarkAllRead}>
-                        <Text style={[styles.markAllText, { color: COLORS.primary }]}>Mark all as read</Text>
-                    </TouchableOpacity>
-                )}
+                <Text style={[styles.headerTitle, { color: COLORS.text }]} numberOfLines={1}>Alerts</Text>
+
+                <View style={styles.headerActions}>
+                    {unreadCount > 0 && (
+                        <TouchableOpacity onPress={handleMarkAllRead} style={styles.headerActionBtn}>
+                            <Text style={[styles.markAllText, { color: COLORS.primary }]}>Read All</Text>
+                        </TouchableOpacity>
+                    )}
+                    {notifications.length > 0 && (
+                        <TouchableOpacity onPress={handleDeleteAll} style={styles.headerActionBtn}>
+                            <Text style={[styles.markAllText, { color: '#ef4444' }]}>Clear All</Text>
+                        </TouchableOpacity>
+                    )}
+                </View>
             </View>
 
             {loading ? (
@@ -276,6 +369,8 @@ export default function NotificationsScreen({ navigation }) {
                 title={alertConfig.title}
                 message={alertConfig.message}
                 type={alertConfig.type}
+                confirmText={alertConfig.confirmText}
+                onConfirm={alertConfig.onConfirm}
                 onClose={() => setAlertConfig(p => ({ ...p, visible: false }))}
             />
         </SafeAreaView>
@@ -292,7 +387,9 @@ const styles = StyleSheet.create({
         gap: spacing.md
     },
     backBtn: { padding: 4 },
-    headerTitle: { fontSize: 20, fontWeight: '800', flex: 1 },
+    headerTitle: { fontSize: 20, fontWeight: '800', flex: 1, marginRight: spacing.sm },
+    headerActions: { flexDirection: 'row', alignItems: 'center' },
+    headerActionBtn: { marginLeft: spacing.md, paddingVertical: 4 },
     markAllText: { fontSize: 13, fontWeight: '700' },
     center: { flex: 1, justifyContent: 'center', alignItems: 'center', paddingHorizontal: spacing.xl },
     emptyTitle: { fontSize: 18, fontWeight: '800', marginTop: spacing.md },
@@ -317,7 +414,6 @@ const styles = StyleSheet.create({
     headerRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 },
     title: { fontSize: 15, paddingRight: 12 },
     unreadDot: { width: 8, height: 8, borderRadius: 4 },
-    message: { fontSize: 13, lineHeight: 18, marginBottom: 6 },
     message: { fontSize: 13, lineHeight: 18, marginBottom: 6 },
     date: { fontSize: 11, fontWeight: '600', opacity: 0.7 },
     hiddenDeleteBtn: { width: 80, height: '100%', borderRadius: radius.lg, justifyContent: 'center', alignItems: 'center', marginLeft: 12, elevation: 1 },

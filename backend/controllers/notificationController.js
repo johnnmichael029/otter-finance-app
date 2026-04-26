@@ -87,9 +87,28 @@ const deleteNotification = async (req, res) => {
     }
 };
 
+/**
+ * Delete all notifications for the user
+ */
+const deleteAllNotifications = async (req, res) => {
+    try {
+        await Notification.deleteMany({ user: req.user._id });
+
+        const io = req.app.get('io');
+        if (io) {
+            io.to(`user:${req.user._id}`).emit('all_notifications_deleted');
+        }
+
+        res.status(204).send();
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+};
+
 module.exports = {
     getNotifications,
     markAsRead,
     markAllAsRead,
-    deleteNotification
+    deleteNotification,
+    deleteAllNotifications
 };

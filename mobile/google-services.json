@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "203919311890",
+    "project_id": "otter-70c11",
+    "storage_bucket": "otter-70c11.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:203919311890:android:8fa1753bb8b21a3a0ac4cb",
+        "android_client_info": {
+          "package_name": "com.otter.finance"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDK2izC9EtOGNiyoUR9B_9D_dBo2Jm7beQ"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

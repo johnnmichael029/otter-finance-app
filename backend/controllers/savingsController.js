@@ -13,7 +13,14 @@ const getGoals = async (req, res) => {
         const limit = parseInt(req.query.limit) || 20;
         const skip = (page - 1) * limit;
 
-        const allUserGoals = await SavingsGoal.find({ user: req.userId }).sort({ createdAt: -1 });
+        const allUserGoals = await SavingsGoal.find({
+            $or: [
+                { user: req.userId },
+                { "participants.user": req.userId }
+            ]
+        }).sort({ createdAt: -1 })
+            .populate('user', 'name otterTag avatarUrl')
+            .populate('participants.user', 'name otterTag avatarUrl');
 
         // Ensure master pot exists logic
         let masterPot = allUserGoals.find(g => g.name === 'Savings Balance');
@@ -59,8 +66,11 @@ const completeGoal = async (req, res) => {
     try {
         const { mode } = req.body || {}; // 'spend' or 'return'
         if (!mode) return res.status(400).json({ error: 'mode (spend/return) is required.' });
-        const goal = await SavingsGoal.findOne({ _id: req.params.id, user: req.userId });
-        if (!goal) return res.status(404).json({ error: 'Goal not found.' });
+        const goal = await SavingsGoal.findOne({
+            _id: req.params.id,
+            user: req.userId
+        });
+        if (!goal) return res.status(403).json({ error: 'Only the goal owner can finalize it.' });
 
         if (goal.isCompleted && goal.currentAmount <= 0) {
             return res.status(400).json({ error: 'Goal is already completed and finalized.' });
@@ -101,7 +111,8 @@ const completeGoal = async (req, res) => {
             transferRecord = await SavingsTransfer.create({
                 user: req.userId, direction: 'spent_from_savings', amount: amountToProcess,
                 goal: goal._id, goalName: goal.name, note: `Successfully utilized for ${goal.name}! 🎉`,
-                runningBalance: 0
+                runningBalance: 0,
+                performedBy: req.userId
             });
         }
 
@@ -137,15 +148,38 @@ const completeGoal = async (req, res) => {
 // POST /api/savings/goals
 const createGoal = async (req, res) => {
     try {
-        const { name, icon, color, targetAmount, deadline, note } = req.body;
+        const { name, icon, color, targetAmount, deadline, note, participantIds } = req.body;
         if (!name || !targetAmount) return res.status(400).json({ error: 'name and targetAmount are required.' });
+
+        const isShared = participantIds && participantIds.length > 0;
+        const participants = isShared ? participantIds.map(id => ({ user: id, status: 'pending' })) : [];
 
         const goal = await SavingsGoal.create({
             user: req.userId,
             name, icon, color, targetAmount,
             deadline: deadline || null,
             note: note || '',
+            isShared,
+            participants
         });
+
+        // ── Notifications for Participants ────────────────────────
+        if (isShared) {
+            const io = req.app.get('io');
+            const creator = await mongoose.model('User').findById(req.userId);
+
+            for (const p of participants) {
+                await Notification.create({
+                    user: p.user,
+                    type: 'savings_goal',
+                    title: '🤝 Shared Goal Invite',
+                    message: `${creator.name} invited you to join the "${goal.name}" goal!`,
+                    data: { goalId: goal._id, type: 'goal_invite' }
+                }).then(n => {
+                    if (io) io.to(`user:${p.user}`).emit('new_notification', n);
+                }).catch(() => { });
+            }
+        }
 
         // Emit real-time event
         const io = req.app.get('io');
@@ -189,7 +223,7 @@ const updateGoal = async (req, res) => {
 const deleteGoal = async (req, res) => {
     try {
         const goal = await SavingsGoal.findOne({ _id: req.params.id, user: req.userId });
-        if (!goal) return res.status(404).json({ error: 'Goal not found.' });
+        if (!goal) return res.status(403).json({ error: 'Only the owner can delete this goal.' });
 
         const io = req.app.get('io');
 
@@ -218,7 +252,8 @@ const deleteGoal = async (req, res) => {
                 goal: masterPot._id,
                 goalName: masterPot.name,
                 note: `Refund from deleted goal: ${goal.name}`,
-                runningBalance: masterPot.currentAmount
+                runningBalance: masterPot.currentAmount,
+                performedBy: req.userId
             });
 
             if (io) {
@@ -231,9 +266,14 @@ const deleteGoal = async (req, res) => {
 
         invalidatePrefixes('savings');
 
-        // Emit real-time event
+        // Emit real-time event to owner and all participants
         if (io) {
-            io.to(`user:${req.userId}`).emit('delete_savings_goal', { _id: goal._id });
+            io.to(`user:${goal.user}`).emit('delete_savings_goal', { _id: goal._id });
+            goal.participants.forEach(p => {
+                if (p.status === 'accepted') {
+                    io.to(`user:${p.user}`).emit('delete_savings_goal', { _id: goal._id });
+                }
+            });
         }
 
         res.json({ message: 'Deleted and balance refunded if any.' });
@@ -251,8 +291,18 @@ const transfer = async (req, res) => {
         if (!goalId || !amount || !direction) return res.status(400).json({ error: 'goalId, amount, and direction are required.' });
         if (direction === 'transfer_goal' && goalId === sourceGoalId) return res.status(400).json({ error: 'Cannot transfer to the same goal.' });
 
-        const goal = await SavingsGoal.findOne({ _id: goalId, user: req.userId });
-        if (!goal) return res.status(404).json({ error: 'Savings goal not found.' });
+        const goal = await SavingsGoal.findOne({
+            _id: goalId,
+            $or: [
+                { user: req.userId },
+                { "participants.user": req.userId, "participants.status": "accepted" }
+            ]
+        });
+        if (!goal) return res.status(404).json({ error: 'Savings goal not found or you are not a member.' });
+
+        if (direction === 'from_savings' && goal.user.toString() !== req.userId) {
+            return res.status(403).json({ error: 'Only the owner can withdraw from this goal.' });
+        }
 
         const amt = parseFloat(amount);
         if (isNaN(amt) || amt <= 0) return res.status(400).json({ error: 'Invalid amount.' });
@@ -462,7 +512,7 @@ const transfer = async (req, res) => {
             // 2. Create Ledger Transaction for History/Revert Support
             ledgerTx = await Transaction.create({
                 user: req.userId,
-                type: 'expense',
+                type: 'transfer',
                 amount: amt,
                 category: 'Savings Transfer',
                 categoryIcon: 'repeat',
@@ -478,11 +528,21 @@ const transfer = async (req, res) => {
             });
 
             if (io) {
-                io.to(`user:${req.userId}`).emit('new_transaction', ledgerTx);
-                io.to(`user:${req.userId}`).emit('update_savings_goal', sourceGoal);
-                io.to(`user:${req.userId}`).emit('update_savings_goal', goal);
-                io.to(`user:${req.userId}`).emit('new_savings_transfer', { goalId: goal._id });
-                io.to(`user:${req.userId}`).emit('new_savings_transfer', { goalId: sourceGoal._id });
+                const recipients = new Set();
+                recipients.add(req.userId.toString());
+
+                // Add owners and participants of both goals
+                if (goal.user) recipients.add(goal.user.toString());
+                if (sourceGoal.user) recipients.add(sourceGoal.user.toString());
+
+                goal.participants?.forEach(p => { if (p.status === 'accepted') recipients.add(p.user.toString()); });
+                sourceGoal.participants?.forEach(p => { if (p.status === 'accepted') recipients.add(p.user.toString()); });
+
+                recipients.forEach(userId => {
+                    io.to(`user:${userId}`).emit('update_savings_goal', goal);
+                    io.to(`user:${userId}`).emit('update_savings_goal', sourceGoal);
+                    io.to(`user:${userId}`).emit('new_transaction', ledgerTx);
+                });
             }
 
         } else {
@@ -508,7 +568,8 @@ const transfer = async (req, res) => {
                     goalName: sourceGoal?.name || 'Source Goal',
                     note: note || `Transfer to ${goal.name}`,
                     runningBalance: sourceGoal.currentAmount,
-                    relatedTransaction: ledgerTx._id
+                    relatedTransaction: ledgerTx._id,
+                    performedBy: req.userId
                 });
             }
 
@@ -521,7 +582,8 @@ const transfer = async (req, res) => {
                 goalName: goal.name,
                 note: note || `Transfer from ${sourceGoal?.name || 'Savings'}`,
                 runningBalance: goal.currentAmount,
-                relatedTransaction: ledgerTx._id
+                relatedTransaction: ledgerTx._id,
+                performedBy: req.userId
             });
         } else {
             transferRecord = await SavingsTransfer.create({
@@ -535,13 +597,22 @@ const transfer = async (req, res) => {
                 wallet: sourceWalletId || null,
                 walletAmount: req.body.nativeAmount || null,
                 walletCurrency: req.body.nativeCurrency || null,
-                relatedTransaction: ledgerTx._id
+                relatedTransaction: ledgerTx._id,
+                performedBy: req.userId
             });
         }
 
         if (io) {
-            io.to(`user:${req.userId}`).emit('new_savings_transfer', transferRecord);
-            io.to(`user:${req.userId}`).emit('update_savings_goal', goal);
+            // Final sync for creator and participants
+            io.to(`user:${goal.user}`).emit('update_savings_goal', goal);
+            io.to(`user:${goal.user}`).emit('new_savings_transfer', transferRecord);
+
+            goal.participants?.forEach(p => {
+                if (p.status === 'accepted') {
+                    io.to(`user:${p.user}`).emit('update_savings_goal', goal);
+                    io.to(`user:${p.user}`).emit('new_savings_transfer', transferRecord);
+                }
+            });
         }
 
         // ── Feature #7: Goal Reached Alert ────────────────────────
@@ -577,9 +648,35 @@ const transfer = async (req, res) => {
 // GET /api/savings/transfers
 const getTransfers = async (req, res) => {
     try {
-        const { goalId, limit = 30, page = 1, type } = req.query;
-        const filter = { user: req.userId };
-        if (goalId) filter.goal = goalId;
+        const { goalId, limit = 30, page = 1, type, isArchived } = req.query;
+        let filter = { isArchived: isArchived === 'true' ? true : { $ne: true } };
+
+        if (goalId) {
+            // Find goal first to check if user has access
+            const goal = await SavingsGoal.findOne({
+                _id: goalId,
+                $or: [
+                    { user: req.userId },
+                    { "participants.user": req.userId, "participants.status": "accepted" }
+                ]
+            });
+            if (!goal) return res.status(403).json({ error: 'Access denied.' });
+            filter.goal = goalId;
+        } else {
+            // For global transfers, show what user performed OR transfers related to goals they own/participate in
+            const accessibleGoals = await SavingsGoal.find({
+                $or: [
+                    { user: req.userId },
+                    { "participants.user": req.userId, "participants.status": "accepted" }
+                ]
+            }).select('_id');
+            const goalIds = accessibleGoals.map(g => g._id);
+
+            filter.$or = [
+                { user: req.userId },
+                { goal: { $in: goalIds } }
+            ];
+        }
 
         if (type === 'in') {
             filter.direction = { $in: ['to_savings', 'income', 'transfer_goal'] };
@@ -589,12 +686,58 @@ const getTransfers = async (req, res) => {
 
         const skip = (parseInt(page) - 1) * parseInt(limit);
         const [transfers, total] = await Promise.all([
-            SavingsTransfer.find(filter).sort({ createdAt: -1 }).skip(skip).limit(parseInt(limit)).populate('wallet').populate('relatedTransaction').lean(),
+            SavingsTransfer.find(filter)
+                .sort({ createdAt: -1 })
+                .skip(skip)
+                .limit(parseInt(limit))
+                .populate('wallet')
+                .populate('relatedTransaction')
+                .populate('performedBy', 'name avatarUrl')
+                .lean(),
             SavingsTransfer.countDocuments(filter),
         ]);
         res.json({ transfers, total });
     } catch (err) {
+        console.error('[GetTransfers Error]:', err);
         res.status(500).json({ error: 'Failed to fetch transfer history.' });
+    }
+};
+
+
+// PATCH /api/savings/transfers/:id/archive
+const archiveTransfer = async (req, res) => {
+    try {
+        const transfer = await SavingsTransfer.findOne({ _id: req.params.id, user: req.userId });
+        if (!transfer) return res.status(404).json({ error: 'Transfer not found.' });
+
+        transfer.isArchived = !transfer.isArchived;
+        await transfer.save();
+
+        const io = req.app.get('io');
+        if (io) {
+            io.to(`user:${req.userId}`).emit(transfer.isArchived ? 'delete_savings_transfer' : 'new_savings_transfer', transfer);
+        }
+
+        res.json(transfer);
+    } catch (err) {
+        console.error('[ArchiveTransfer Error]:', err);
+        res.status(500).json({ error: 'Failed to toggle archive status.' });
+    }
+};
+
+// DELETE /api/savings/transfers/archive/empty
+const emptyTransfersArchives = async (req, res) => {
+    try {
+        const result = await SavingsTransfer.deleteMany({ user: req.userId, isArchived: true });
+
+        // Let frontend know to refresh list
+        const io = req.app.get('io');
+        if (io) io.to(`user:${req.userId}`).emit('update_savings_goal', {});
+
+        res.json({ message: 'Archives emptied successfully.', count: result.deletedCount });
+    } catch (err) {
+        console.error('[EmptyArchives Error]:', err);
+        res.status(500).json({ error: 'Failed to empty archives.' });
     }
 };
 
@@ -716,4 +859,78 @@ const bulkAction = async (req, res) => {
     }
 };
 
-module.exports = { getGoals, createGoal, updateGoal, deleteGoal, transfer, getTransfers, completeGoal, bulkAction };
+// POST /api/savings/goals/respond/:id
+const respondToGoalInvite = async (req, res) => {
+    try {
+        const { status } = req.body; // 'accepted' or 'rejected'
+        if (!['accepted', 'rejected'].includes(status)) return res.status(400).json({ error: 'Invalid status.' });
+
+        const goal = await SavingsGoal.findOne({
+            _id: req.params.id,
+            "participants.user": req.userId
+        });
+        if (!goal) return res.status(404).json({ error: 'Invite not found.' });
+
+        const participantIdx = goal.participants.findIndex(p => p.user.toString() === req.userId);
+        goal.participants[participantIdx].status = status;
+        if (status === 'accepted') {
+            goal.participants[participantIdx].joinedAt = new Date();
+        }
+
+        await goal.save();
+
+        // ── Notification Update for Responder ───────────────────
+        const notification = await Notification.findOne({
+            user: req.userId,
+            'data.goalId': goal._id,
+            type: 'savings_goal', // Checking for type
+            'data.type': 'goal_invite'
+        });
+        if (notification) {
+            notification.title = status === 'accepted' ? 'Goal Joined! 🤝' : 'Invite Declined';
+            notification.message = status === 'accepted'
+                ? `You joined "${goal.name}". Let's start saving!`
+                : `You declined the invite to join "${goal.name}".`;
+            notification.read = true;
+            notification.data = { ...notification.data, processed: true };
+            await notification.save();
+            const io = req.app.get('io');
+            if (io) io.to(`user:${req.userId}`).emit('notification_updated', notification);
+        }
+
+        // ── Real-time & Notifications ───────────────────────────
+        const io = req.app.get('io');
+        const responder = await mongoose.model('User').findById(req.userId);
+
+        if (io) {
+            // Notify owner
+            io.to(`user:${goal.user}`).emit('goal_invite_responded', { goalId: goal._id, userId: req.userId, status });
+            // Notify other participants? (Maybe later)
+            io.to(`user:${req.userId}`).emit('update_savings_goal', goal);
+        }
+
+        // Notification for the owner
+        await Notification.create({
+            user: goal.user,
+            type: 'savings_goal',
+            title: `🤝 Goal ${status === 'accepted' ? 'Accepted' : 'Declined'}`,
+            message: `${responder.name} has ${status} your invite to join "${goal.name}".`,
+            data: { goalId: goal._id, type: 'goal_invite_response', status }
+        }).then(n => {
+            if (io) io.to(`user:${goal.user}`).emit('new_notification', n);
+        }).catch(() => { });
+
+        // If rejected, maybe remove from participants entirely to clean up the user's view?
+        if (status === 'rejected') {
+            goal.participants.pull({ user: req.userId });
+            await goal.save();
+        }
+
+        res.json({ message: `Goal invitation ${status}.`, goal });
+    } catch (err) {
+        console.error('[RespondToGoalInvite Error]:', err);
+        res.status(500).json({ error: 'Failed to respond to invite.' });
+    }
+};
+
+module.exports = { getGoals, createGoal, updateGoal, deleteGoal, transfer, getTransfers, completeGoal, bulkAction, respondToGoalInvite, archiveTransfer, emptyTransfersArchives };
