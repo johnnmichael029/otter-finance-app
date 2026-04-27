@@ -6,24 +6,7 @@ import { useTheme } from '../../context/ThemeContext';
 import { useAuth } from '../../context/AuthContext';
 import { getSavingsGoals } from '../../api/api';
 import { spacing, radius } from '../../theme/colors';
-
-const isIonicon = (name) => name?.includes('-outline') || name?.includes('-sharp');
-
-const IconRenderer = ({ name, family, size, color }) => {
-    const fam = family?.toLowerCase();
-    const isMCI = fam === 'materialcommunityicons' || name === 'piggy-bank-outline';
-
-    if (isMCI) {
-        return <MaterialCommunityIcons name={name === 'piggy-bank-outline' ? 'piggy-bank-outline' : name} size={size} color={color} />;
-    }
-
-    const hasFamily = family && family !== 'feather';
-    const useIonicons = (hasFamily && (fam === 'ionicons')) || (!hasFamily && isIonicon(name));
-    if (useIonicons) {
-        return <Ionicons name={name} size={size} color={color} />;
-    }
-    return <Feather name={name} size={size} color={color} />;
-};
+import { IconRenderer } from '../../utils/formatters';
 
 export default function SavingsGoalSelectorScreen({ route, navigation }) {
     const action = route.params?.action || 'deposit'; // 'deposit', 'income', 'move_from', 'move_to'

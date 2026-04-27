@@ -1,12 +1,15 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import {
     View, Text, StyleSheet, TouchableOpacity,
-    Modal, Animated, Vibration, Image,
+    Modal, Animated, Image,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialCommunityIcons, Feather } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
+import { useTheme } from '../context/ThemeContext';
 import { useSecurity } from '../context/SecurityContext';
+import { useAuth } from '../context/AuthContext';
+import { triggerHaptic } from '../utils/haptics';
 import { spacing, radius } from '../theme/colors';
 
 const PIN_LENGTH = 6;
@@ -26,6 +29,8 @@ export default function VerifyIdentityModal({ visible, onSuccess, onCancel, subt
         biometricEnabled, pinEnabled, biometricType,
         authenticateBiometric, verifyPin,
     } = useSecurity();
+    const hapticsEnabled = useAuth(state => state.hapticsEnabled);
+    const COLORS = useTheme(state => state.COLORS);
 
     const [mode, setMode] = useState(biometricEnabled ? 'biometric' : 'pin');
     const [pin, setPin] = useState('');
@@ -101,7 +106,7 @@ export default function VerifyIdentityModal({ visible, onSuccess, onCancel, subt
                 const newAttempts = attempts + 1;
                 setAttempts(newAttempts);
                 setPin('');
-                Vibration.vibrate(300);
+                triggerHaptic(hapticsEnabled, 'notificationError');
                 shake();
                 if (newAttempts >= 5) {
                     setError('Too many incorrect attempts.');
@@ -131,7 +136,12 @@ export default function VerifyIdentityModal({ visible, onSuccess, onCancel, subt
                 return (
                     <Animated.View
                         key={i}
-                        style={[styles.dot, filled && styles.dotFilled, { transform: [{ scale: dotAnims[i] }] }]}
+                        style={[
+                            styles.dot,
+                            { borderColor: COLORS.border },
+                            filled && { backgroundColor: COLORS.primary, borderColor: COLORS.primary },
+                            { transform: [{ scale: dotAnims[i] }] }
+                        ]}
                     />
                 );
             })}
@@ -145,24 +155,24 @@ export default function VerifyIdentityModal({ visible, onSuccess, onCancel, subt
                     {row.map((key, ki) => {
                         if (key === '') return <View key={ki} style={styles.keyPlaceholder} />;
                         if (key === 'del') return (
-                            <TouchableOpacity key={ki} style={styles.key} onPress={() => handleKeyPress('del')} activeOpacity={0.6}>
-                                <Feather name="delete" size={22} color="rgba(255,255,255,0.8)" />
+                            <TouchableOpacity key={ki} style={[styles.key, { backgroundColor: COLORS.surface }]} onPress={() => handleKeyPress('del')} activeOpacity={0.6}>
+                                <Feather name="delete" size={22} color={COLORS.text} />
                             </TouchableOpacity>
                         );
                         if (key === 'bio') return (
-                            <TouchableOpacity key={ki} style={styles.key} onPress={promptBiometric} activeOpacity={0.6}>
-                                <MaterialCommunityIcons name={getBiometricIcon()} size={24} color="#E91E8C" />
+                            <TouchableOpacity key={ki} style={[styles.key, { backgroundColor: COLORS.surface }]} onPress={promptBiometric} activeOpacity={0.6}>
+                                <MaterialCommunityIcons name={getBiometricIcon()} size={24} color={COLORS.primary} />
                             </TouchableOpacity>
                         );
                         return (
                             <TouchableOpacity
                                 key={ki}
-                                style={styles.key}
+                                style={[styles.key, { backgroundColor: COLORS.surface }]}
                                 onPress={() => handleKeyPress(key)}
                                 activeOpacity={0.6}
                                 disabled={attempts >= 5}
                             >
-                                <Text style={styles.keyText}>{key}</Text>
+                                <Text style={[styles.keyText, { color: COLORS.text }]}>{key}</Text>
                             </TouchableOpacity>
                         );
                     })}
@@ -173,44 +183,42 @@ export default function VerifyIdentityModal({ visible, onSuccess, onCancel, subt
 
     return (
         <Modal visible={visible} transparent animationType="none" statusBarTranslucent onRequestClose={onCancel}>
-            <Animated.View style={[StyleSheet.absoluteFill, { opacity: fadeAnim }]}>
-                <LinearGradient colors={['#0d0d1a', '#1a0a1c', '#12062b']} style={StyleSheet.absoluteFill} />
-
+            <Animated.View style={[StyleSheet.absoluteFill, { opacity: fadeAnim, backgroundColor: COLORS.background }]}>
                 <SafeAreaView style={styles.safe}>
                     {/* Cancel */}
-                    <TouchableOpacity style={styles.cancelBtn} onPress={onCancel}>
-                        <Feather name="x" size={22} color="rgba(255,255,255,0.5)" />
+                    <TouchableOpacity style={[styles.cancelBtn, { backgroundColor: COLORS.surface }]} onPress={onCancel}>
+                        <Feather name="x" size={22} color={COLORS.text} />
                     </TouchableOpacity>
 
                     {/* Logo */}
                     <View style={styles.logoWrap}>
                         <Image source={otterIcon} style={styles.logo} />
-                        <Text style={styles.appName}>Otter</Text>
+                        <Text style={[styles.appName, { color: COLORS.textMuted }]}>Otter</Text>
                     </View>
 
                     {/* Biometric Mode */}
                     {mode === 'biometric' && (
                         <View style={styles.section}>
                             <TouchableOpacity onPress={promptBiometric} disabled={isAuthenticating} activeOpacity={0.75}>
-                                <LinearGradient colors={['#E91E8C', '#7b0f4e']} style={styles.bioIcon}>
-                                    <MaterialCommunityIcons name={getBiometricIcon()} size={52} color="#fff" />
-                                </LinearGradient>
+                                <View style={[styles.bioIcon, { backgroundColor: COLORS.primary + '20', shadowColor: COLORS.primary }]}>
+                                    <MaterialCommunityIcons name={getBiometricIcon()} size={52} color={COLORS.primary} />
+                                </View>
                             </TouchableOpacity>
-                            <Text style={styles.title}>
+                            <Text style={[styles.title, { color: COLORS.text }]}>
                                 {isAuthenticating ? 'Verifying…' : 'Verify it\'s you'}
                             </Text>
-                            <Text style={styles.sub}>
+                            <Text style={[styles.sub, { color: COLORS.textMuted }]}>
                                 {subtitle || `Use ${getBiometricLabel()} to continue`}
                             </Text>
                             {error ? (
-                                <View style={styles.errorBox}>
-                                    <Feather name="alert-circle" size={13} color="#ef4444" />
-                                    <Text style={styles.errorText}>{error}</Text>
+                                <View style={[styles.errorBox, { backgroundColor: COLORS.expense + '20', borderColor: COLORS.expense + '40' }]}>
+                                    <Feather name="alert-circle" size={13} color={COLORS.expense} />
+                                    <Text style={[styles.errorText, { color: COLORS.expense }]}>{error}</Text>
                                 </View>
                             ) : null}
                             {pinEnabled && (
                                 <TouchableOpacity onPress={() => { setMode('pin'); setError(''); }} style={styles.switchBtn}>
-                                    <Text style={styles.switchText}>Use PIN instead</Text>
+                                    <Text style={[styles.switchText, { color: COLORS.primary }]}>Use PIN instead</Text>
                                 </TouchableOpacity>
                             )}
                         </View>
@@ -219,16 +227,16 @@ export default function VerifyIdentityModal({ visible, onSuccess, onCancel, subt
                     {/* PIN Mode */}
                     {mode === 'pin' && (
                         <View style={styles.section}>
-                            <MaterialCommunityIcons name="lock" size={32} color="#E91E8C" style={{ marginBottom: 8 }} />
-                            <Text style={styles.title}>Verify it's you</Text>
-                            <Text style={styles.sub}>{subtitle || 'Enter your 6-digit PIN to continue'}</Text>
+                            <MaterialCommunityIcons name="lock" size={32} color={COLORS.primary} style={{ marginBottom: 8 }} />
+                            <Text style={[styles.title, { color: COLORS.text }]}>Verify it's you</Text>
+                            <Text style={[styles.sub, { color: COLORS.textMuted }]}>{subtitle || 'Enter your 6-digit PIN to continue'}</Text>
 
                             {renderDots()}
 
                             {error ? (
-                                <View style={styles.errorBox}>
-                                    <Feather name="alert-circle" size={13} color="#ef4444" />
-                                    <Text style={styles.errorText}>{error}</Text>
+                                <View style={[styles.errorBox, { backgroundColor: COLORS.expense + '20', borderColor: COLORS.expense + '40' }]}>
+                                    <Feather name="alert-circle" size={13} color={COLORS.expense} />
+                                    <Text style={[styles.errorText, { color: COLORS.expense }]}>{error}</Text>
                                 </View>
                             ) : <View style={{ height: 36 }} />}
 
@@ -239,8 +247,8 @@ export default function VerifyIdentityModal({ visible, onSuccess, onCancel, subt
                                     onPress={() => { setMode('biometric'); setError(''); setPin(''); promptBiometric(); }}
                                     style={styles.switchBtn}
                                 >
-                                    <MaterialCommunityIcons name={getBiometricIcon()} size={16} color="#E91E8C" />
-                                    <Text style={[styles.switchText, { marginLeft: 6 }]}>Use {getBiometricLabel()}</Text>
+                                    <MaterialCommunityIcons name={getBiometricIcon()} size={16} color={COLORS.primary} />
+                                    <Text style={[styles.switchText, { marginLeft: 6, color: COLORS.primary }]}>Use {getBiometricLabel()}</Text>
                                 </TouchableOpacity>
                             )}
                         </View>
@@ -256,45 +264,42 @@ const styles = StyleSheet.create({
     cancelBtn: {
         position: 'absolute', top: 56, right: 24,
         width: 40, height: 40, borderRadius: 20,
-        backgroundColor: 'rgba(255,255,255,0.08)',
         justifyContent: 'center', alignItems: 'center',
     },
     logoWrap: { alignItems: 'center', marginBottom: 36 },
     logo: { width: 72, height: 72, borderRadius: 18, marginBottom: 8 },
-    appName: { fontSize: 11, fontWeight: '600', color: 'rgba(255,255,255,0.35)', letterSpacing: 6, textTransform: 'uppercase' },
+    appName: { fontSize: 11, fontWeight: '600', letterSpacing: 6, textTransform: 'uppercase' },
     section: { alignItems: 'center', width: '100%' },
     bioIcon: {
         width: 100, height: 100, borderRadius: 50,
         justifyContent: 'center', alignItems: 'center',
-        shadowColor: '#E91E8C', shadowOffset: { width: 0, height: 0 },
+        shadowOffset: { width: 0, height: 0 },
         shadowOpacity: 0.5, shadowRadius: 20, elevation: 10,
         marginBottom: 24,
     },
-    title: { fontSize: 22, fontWeight: '800', color: '#fff', marginBottom: 6, textAlign: 'center' },
-    sub: { fontSize: 14, color: 'rgba(255,255,255,0.45)', textAlign: 'center', marginBottom: 20, lineHeight: 20 },
+    title: { fontSize: 22, fontWeight: '800', marginBottom: 6, textAlign: 'center' },
+    sub: { fontSize: 14, textAlign: 'center', marginBottom: 20, lineHeight: 20 },
     dotsRow: { flexDirection: 'row', gap: 16, marginTop: 20, marginBottom: 8 },
     dot: {
         width: 14, height: 14, borderRadius: 7,
-        borderWidth: 2, borderColor: 'rgba(255,255,255,0.35)',
+        borderWidth: 2,
         backgroundColor: 'transparent',
     },
-    dotFilled: { backgroundColor: '#E91E8C', borderColor: '#E91E8C' },
     keypad: { marginTop: 8, width: '100%', maxWidth: 300 },
     keyRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 12 },
     key: {
         width: 80, height: 80, borderRadius: 40,
-        backgroundColor: 'rgba(255,255,255,0.07)',
         justifyContent: 'center', alignItems: 'center',
     },
     keyPlaceholder: { width: 80, height: 80 },
-    keyText: { fontSize: 26, fontWeight: '700', color: '#fff' },
+    keyText: { fontSize: 26, fontWeight: '700' },
     errorBox: {
         flexDirection: 'row', alignItems: 'center', gap: 6,
-        backgroundColor: 'rgba(239,68,68,0.12)', borderRadius: radius.md,
+        borderRadius: radius.md,
         paddingHorizontal: spacing.md, paddingVertical: 8,
-        marginBottom: 8, borderWidth: 1, borderColor: 'rgba(239,68,68,0.25)',
+        marginBottom: 8, borderWidth: 1,
     },
-    errorText: { fontSize: 12, color: '#ef4444', fontWeight: '500', flexShrink: 1 },
+    errorText: { fontSize: 12, fontWeight: '500', flexShrink: 1 },
     switchBtn: { flexDirection: 'row', alignItems: 'center', marginTop: 16, paddingVertical: 10, paddingHorizontal: 20 },
-    switchText: { color: '#E91E8C', fontSize: 14, fontWeight: '700' },
+    switchText: { fontSize: 14, fontWeight: '700' },
 });

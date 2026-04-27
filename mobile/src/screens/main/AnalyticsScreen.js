@@ -14,6 +14,7 @@ import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
 import Skeleton from '../../components/Skeleton';
 import { spacing, radius, colors } from '../../theme/colors';
+import { formatCurrency } from '../../utils/formatters';
 
 const screenWidth = Dimensions.get('window').width;
 
@@ -56,9 +57,6 @@ export default function AnalyticsScreen({ navigation }) {
     }, [range, trendYear, startDate, endDate]);
 
     useEffect(() => { loadData(); }, [loadData]);
-
-    const formatCurrency = (amount) =>
-        new Intl.NumberFormat('en-PH', { style: 'currency', currency: 'PHP' }).format(amount);
 
     const DonutChartCard = ({ title, subtitle, data }) => {
         const total = data?.reduce((sum, item) => sum + item.population, 0) || 0;

@@ -1,20 +1,25 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
     View, Text, StyleSheet, TouchableOpacity,
-    Animated, StatusBar, Vibration,
+    Animated, StatusBar,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Feather, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useSecurity } from '../../context/SecurityContext';
 import { useTheme } from '../../context/ThemeContext';
+import { useAuth } from '../../context/AuthContext';
+import { triggerHaptic } from '../../utils/haptics';
 import { spacing, radius } from '../../theme/colors';
 
 const PIN_LENGTH = 6;
 
 export default function PinSetupScreen({ navigation, route }) {
     const { setupPin } = useSecurity();
+    const hapticsEnabled = useAuth(state => state.hapticsEnabled);
     const COLORS = useTheme(state => state.COLORS);
+
+    const isDarkMode = useTheme(state => state.isDarkMode);
 
     // 'enter' → 'confirm' → 'done'
     const [step, setStep] = useState('enter');
@@ -31,7 +36,7 @@ export default function PinSetupScreen({ navigation, route }) {
     }, []);
 
     const shake = () => {
-        Vibration.vibrate(300);
+        triggerHaptic(hapticsEnabled, 'notificationError');
         Animated.sequence([
             Animated.timing(shakeAnim, { toValue: 14, duration: 55, useNativeDriver: true }),
             Animated.timing(shakeAnim, { toValue: -14, duration: 55, useNativeDriver: true }),
@@ -105,7 +110,8 @@ export default function PinSetupScreen({ navigation, route }) {
                         key={i}
                         style={[
                             styles.dot,
-                            filled && styles.dotFilled,
+                            { borderColor: COLORS.border },
+                            filled && { backgroundColor: COLORS.primary, borderColor: COLORS.primary },
                             { transform: [{ scale: dotAnims[i] }] },
                         ]}
                     />
@@ -121,18 +127,18 @@ export default function PinSetupScreen({ navigation, route }) {
                     {row.map((key, ki) => {
                         if (key === '') return <View key={ki} style={styles.keyPlaceholder} />;
                         if (key === 'del') return (
-                            <TouchableOpacity key={ki} style={styles.key} onPress={() => handleKey('del')} activeOpacity={0.6}>
-                                <Feather name="delete" size={22} color="rgba(255,255,255,0.85)" />
+                            <TouchableOpacity key={ki} style={[styles.key, { backgroundColor: COLORS.surface }]} onPress={() => handleKey('del')} activeOpacity={0.6}>
+                                <Feather name="delete" size={22} color={COLORS.text} />
                             </TouchableOpacity>
                         );
                         return (
                             <TouchableOpacity
                                 key={ki}
-                                style={styles.key}
+                                style={[styles.key, { backgroundColor: COLORS.surface }]}
                                 onPress={() => handleKey(key)}
                                 activeOpacity={0.6}
                             >
-                                <Text style={styles.keyText}>{key}</Text>
+                                <Text style={[styles.keyText, { color: COLORS.text }]}>{key}</Text>
                             </TouchableOpacity>
                         );
                     })}
@@ -143,21 +149,20 @@ export default function PinSetupScreen({ navigation, route }) {
 
     if (step === 'done') {
         return (
-            <View style={StyleSheet.absoluteFill}>
-                <LinearGradient colors={['#0d0d1a', '#1a0a1c', '#12062b']} style={StyleSheet.absoluteFill} />
+            <View style={[StyleSheet.absoluteFill, { backgroundColor: COLORS.background }]}>
                 <SafeAreaView style={styles.safe}>
                     <Animated.View style={[styles.doneWrap, { opacity: fadeAnim }]}>
-                        <LinearGradient colors={['#22c55e', '#16a34a']} style={styles.doneIcon}>
-                            <Feather name="check" size={48} color="#fff" />
-                        </LinearGradient>
-                        <Text style={styles.doneTitle}>PIN Set Successfully!</Text>
-                        <Text style={styles.doneSub}>Your app is now protected with a 6-digit PIN.</Text>
+                        <View style={[styles.doneIcon, { backgroundColor: COLORS.success + '20', shadowColor: COLORS.success }]}>
+                            <Feather name="check" size={48} color={COLORS.success} />
+                        </View>
+                        <Text style={[styles.doneTitle, { color: COLORS.text }]}>PIN Set Successfully!</Text>
+                        <Text style={[styles.doneSub, { color: COLORS.textMuted }]}>Your app is now protected with a 6-digit PIN.</Text>
                         <TouchableOpacity
                             style={styles.doneBtn}
                             onPress={() => navigation.goBack()}
                             activeOpacity={0.85}
                         >
-                            <LinearGradient colors={['#E91E8C', '#B0146A']} style={styles.doneBtnGrad} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}>
+                            <LinearGradient colors={[COLORS.primary, COLORS.primary + 'CC']} style={styles.doneBtnGrad} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}>
                                 <Text style={styles.doneBtnText}>Done</Text>
                             </LinearGradient>
                         </TouchableOpacity>
@@ -168,29 +173,28 @@ export default function PinSetupScreen({ navigation, route }) {
     }
 
     return (
-        <View style={StyleSheet.absoluteFill}>
-            <StatusBar barStyle="light-content" backgroundColor="#0d0d1a" />
-            <LinearGradient colors={['#0d0d1a', '#1a0a1c', '#12062b']} style={StyleSheet.absoluteFill} />
+        <View style={[StyleSheet.absoluteFill, { backgroundColor: COLORS.background }]}>
+            <StatusBar barStyle={isDarkMode ? "light-content" : "dark-content"} backgroundColor={COLORS.background} />
 
             <Animated.View style={[styles.container, { opacity: fadeAnim }]}>
                 <SafeAreaView style={styles.safe}>
                     {/* Header */}
                     <View style={styles.header}>
-                        <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backBtn}>
-                            <Feather name="arrow-left" size={22} color="rgba(255,255,255,0.75)" />
+                        <TouchableOpacity onPress={() => navigation.goBack()} style={[styles.backBtn, { backgroundColor: COLORS.surface }]}>
+                            <Feather name="arrow-left" size={22} color={COLORS.text} />
                         </TouchableOpacity>
                     </View>
 
                     {/* Icon */}
-                    <LinearGradient colors={['#E91E8C', '#7b0f4e']} style={styles.iconWrap}>
-                        <MaterialCommunityIcons name="lock-plus" size={40} color="#fff" />
-                    </LinearGradient>
+                    <View style={[styles.iconWrap, { backgroundColor: COLORS.primary + '20', shadowColor: COLORS.primary }]}>
+                        <MaterialCommunityIcons name="lock-plus" size={40} color={COLORS.primary} />
+                    </View>
 
                     {/* Title */}
-                    <Text style={styles.title}>
+                    <Text style={[styles.title, { color: COLORS.text }]}>
                         {step === 'enter' ? 'Set Your PIN' : 'Confirm Your PIN'}
                     </Text>
-                    <Text style={styles.sub}>
+                    <Text style={[styles.sub, { color: COLORS.textMuted }]}>
                         {step === 'enter'
                             ? 'Choose a 6-digit PIN to protect your OTTER account'
                             : 'Re-enter your PIN to confirm'}
@@ -201,9 +205,9 @@ export default function PinSetupScreen({ navigation, route }) {
 
                     {/* Error */}
                     {error ? (
-                        <View style={styles.errorBox}>
-                            <Feather name="alert-circle" size={13} color="#ef4444" />
-                            <Text style={styles.errorText}>{error}</Text>
+                        <View style={[styles.errorBox, { backgroundColor: COLORS.expense + '20', borderColor: COLORS.expense + '40' }]}>
+                            <Feather name="alert-circle" size={13} color={COLORS.expense} />
+                            <Text style={[styles.errorText, { color: COLORS.expense }]}>{error}</Text>
                         </View>
                     ) : <View style={{ height: 36 }} />}
 
@@ -219,39 +223,37 @@ const styles = StyleSheet.create({
     container: { flex: 1 },
     safe: { flex: 1, alignItems: 'center', paddingHorizontal: spacing.xl },
     header: { width: '100%', flexDirection: 'row', alignItems: 'center', paddingTop: spacing.md, marginBottom: 24 },
-    backBtn: { padding: 8 },
+    backBtn: { padding: 10, borderRadius: 12 },
     iconWrap: {
         width: 80, height: 80, borderRadius: 40,
         justifyContent: 'center', alignItems: 'center',
         marginBottom: spacing.lg,
-        shadowColor: '#E91E8C', shadowOffset: { width: 0, height: 0 },
+        shadowOffset: { width: 0, height: 0 },
         shadowOpacity: 0.5, shadowRadius: 18, elevation: 8,
     },
-    title: { fontSize: 24, fontWeight: '800', color: '#fff', marginBottom: 8, textAlign: 'center' },
-    sub: { fontSize: 14, color: 'rgba(255,255,255,0.45)', textAlign: 'center', lineHeight: 20, marginBottom: 16 },
+    title: { fontSize: 24, fontWeight: '800', marginBottom: 8, textAlign: 'center' },
+    sub: { fontSize: 14, textAlign: 'center', lineHeight: 20, marginBottom: 16 },
     dotsRow: { flexDirection: 'row', gap: 16, marginVertical: 16 },
     dot: {
         width: 14, height: 14, borderRadius: 7,
-        borderWidth: 2, borderColor: 'rgba(255,255,255,0.3)',
+        borderWidth: 2,
         backgroundColor: 'transparent',
     },
-    dotFilled: { backgroundColor: '#E91E8C', borderColor: '#E91E8C' },
     errorBox: {
         flexDirection: 'row', alignItems: 'center', gap: 6,
-        backgroundColor: 'rgba(239,68,68,0.12)', borderRadius: radius.md,
+        borderRadius: radius.md,
         paddingHorizontal: spacing.md, paddingVertical: 8,
-        borderWidth: 1, borderColor: 'rgba(239,68,68,0.25)',
+        borderWidth: 1,
     },
-    errorText: { fontSize: 12, color: '#ef4444', fontWeight: '500', flexShrink: 1 },
+    errorText: { fontSize: 12, fontWeight: '500', flexShrink: 1 },
     keypad: { marginTop: 12, width: '100%', maxWidth: 300 },
     keyRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 12 },
     key: {
         width: 80, height: 80, borderRadius: 40,
-        backgroundColor: 'rgba(255,255,255,0.07)',
         justifyContent: 'center', alignItems: 'center',
     },
     keyPlaceholder: { width: 80, height: 80 },
-    keyText: { fontSize: 26, fontWeight: '700', color: '#fff' },
+    keyText: { fontSize: 26, fontWeight: '700' },
     // Done screen
     doneWrap: {
         flex: 1,
@@ -264,11 +266,11 @@ const styles = StyleSheet.create({
     doneIcon: {
         width: 100, height: 100, borderRadius: 50,
         justifyContent: 'center', alignItems: 'center', marginBottom: 28,
-        shadowColor: '#22c55e', shadowOffset: { width: 0, height: 0 },
+        shadowOffset: { width: 0, height: 0 },
         shadowOpacity: 0.5, shadowRadius: 20, elevation: 8,
     },
-    doneTitle: { fontSize: 26, fontWeight: '800', color: '#fff', marginBottom: 10, textAlign: 'center' },
-    doneSub: { fontSize: 14, color: 'rgba(255,255,255,0.5)', textAlign: 'center', marginBottom: 48, lineHeight: 22, paddingHorizontal: 20 },
+    doneTitle: { fontSize: 26, fontWeight: '800', marginBottom: 10, textAlign: 'center' },
+    doneSub: { fontSize: 14, textAlign: 'center', marginBottom: 48, lineHeight: 22, paddingHorizontal: 20 },
     doneBtn: {
         width: '100%',
         alignSelf: 'stretch',

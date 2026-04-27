@@ -19,6 +19,7 @@ import Skeleton from '../../components/Skeleton';
 import CustomAlertModal from '../../components/CustomAlertModal';
 import { useAuth } from '../../context/AuthContext';
 import { getSocket, connectSocket } from '../../utils/socket';
+import { formatCurrency } from '../../utils/formatters';
 
 // ── Notification setup ────────────────────────────────────────────────────────
 Notifications.setNotificationHandler({
@@ -43,8 +44,7 @@ const CATEGORY_OPTIONS = [
     { label: 'Bills', icon: 'file-text', color: '#6b7280' },
 ];
 
-const formatCurrency = (amount, currency = 'PHP') =>
-    new Intl.NumberFormat('en-PH', { style: 'currency', currency }).format(amount);
+
 
 const getDaysUntilDue = (dateStr) => {
     const diff = new Date(dateStr) - new Date();
@@ -57,7 +57,6 @@ const scheduleNotification = async (bill) => {
     // Expo Go does NOT support real scheduled notifications.
     // Notifications will only work correctly in a development or production build.
     if (isExpoGo) {
-        console.log(`[NotifLog] Skipping notification scheduling in Expo Go for: ${bill.name}`);
         return;
     }
     try {
@@ -66,8 +65,6 @@ const scheduleNotification = async (bill) => {
 
         const dueDate = new Date(bill.nextDueDate);
         const now = new Date();
-
-        console.log(`[NotifLog] Scheduling for ${bill.name}. Due: ${dueDate.toLocaleString()}, Now: ${now.toLocaleString()}`);
 
         if (Platform.OS === 'android') {
             await Notifications.setNotificationChannelAsync('bill-alerts', {
@@ -85,7 +82,6 @@ const scheduleNotification = async (bill) => {
         notifDate.setDate(notifDate.getDate() - 3);
 
         if (notifDate > now) {
-            console.log(`[NotifLog] Scheduling upcoming for: ${notifDate.toLocaleString()}`);
             await Notifications.scheduleNotificationAsync({
                 identifier: `${bill._id}_upcoming`,
                 content: {
@@ -102,7 +98,6 @@ const scheduleNotification = async (bill) => {
 
         // 2. Due Date Reminder (Day of)
         if (dueDate > now) {
-            console.log(`[NotifLog] Scheduling due date for: ${dueDate.toLocaleString()}`);
             await Notifications.scheduleNotificationAsync({
                 identifier: `${bill._id}_due`,
                 content: {
@@ -126,7 +121,7 @@ const requestNotifPermission = async () => {
     return status === 'granted';
 };
 
-export default function RecurringBillsScreen({ navigation }) {
+export default function RecurringBillsScreen({ navigation, route }) {
     const COLORS = useTheme(state => state.COLORS);
     const { userInfo } = useAuth();
     const styles = getStyles(COLORS);
@@ -135,10 +130,20 @@ export default function RecurringBillsScreen({ navigation }) {
     const fetchRecurringBills = useFinanceStore(state => state.fetchRecurringBills);
     const loadingBills = useFinanceStore(state => state.isLoadingBills);
 
+    const prefill = route?.params?.prefill || null;
+
     const [loading, setLoading] = useState(true);
     const [refreshing, setRefreshing] = useState(false);
-    const [modalVisible, setModalVisible] = useState(false);
-    const [form, setForm] = useState({ name: '', amount: '', category: 'Bills', categoryIcon: 'file-text', categoryColor: '#6b7280', frequency: 'monthly', startDate: '' });
+    const [modalVisible, setModalVisible] = useState(!!prefill);
+    const [form, setForm] = useState({ 
+        name: prefill?.name || '', 
+        amount: prefill?.amount || '', 
+        category: prefill?.category || 'Bills', 
+        categoryIcon: 'file-text', 
+        categoryColor: '#6b7280', 
+        frequency: 'monthly', 
+        startDate: '' 
+    });
     const [saving, setSaving] = useState(false);
     const [alertConfig, setAlertConfig] = useState({ visible: false, title: '', message: '', type: 'info', onConfirm: null });
 
@@ -190,7 +195,14 @@ export default function RecurringBillsScreen({ navigation }) {
     }, [userInfo?._id]);
 
     const handleCreate = async () => {
-        if (!form.name.trim() || !form.amount) return Alert.alert('Missing Fields', 'Please fill in the name and amount.');
+        if (!form.name.trim() || !form.amount) {
+            return setAlertConfig({
+                visible: true,
+                title: 'Missing Fields',
+                message: 'Please fill in the name and amount.',
+                type: 'info'
+            });
+        }
         setSaving(true);
         try {
             const bill = await createRecurringBill({
@@ -201,7 +213,12 @@ export default function RecurringBillsScreen({ navigation }) {
             setModalVisible(false);
             setForm({ name: '', amount: '', category: 'Bills', categoryIcon: 'file-text', categoryColor: '#6b7280', frequency: 'monthly', startDate: '' });
         } catch (e) {
-            Alert.alert('Error', 'Could not save bill.');
+            setAlertConfig({
+                visible: true,
+                title: 'Error',
+                message: 'Could not save bill.',
+                type: 'error'
+            });
         } finally {
             setSaving(false);
         }
@@ -228,9 +245,19 @@ export default function RecurringBillsScreen({ navigation }) {
             const updated = await markBillPaid(id);
             setBills(prev => prev.map(b => b._id === id ? updated : b));
             await scheduleNotification(updated);
-            Alert.alert('✅ Bill Marked Paid', 'Next due date has been advanced.');
+            setAlertConfig({
+                visible: true,
+                title: '✅ Bill Marked Paid',
+                message: 'Next due date has been advanced.',
+                type: 'success'
+            });
         } catch (e) {
-            Alert.alert('Error', 'Could not update bill.');
+            setAlertConfig({
+                visible: true,
+                title: 'Error',
+                message: 'Could not update bill.',
+                type: 'error'
+            });
         }
     };
 

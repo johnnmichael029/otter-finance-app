@@ -13,31 +13,11 @@ import {
 import CustomAlertModal from '../../components/CustomAlertModal';
 import { spacing, radius } from '../../theme/colors';
 import BottomSheetModal from '../../components/BottomSheetModal';
-import { getSocket, connectSocket } from '../../utils/socket';
 import WalletSelector, { calcNativeDeduct, hasEnoughBalance, getBalanceLabel } from '../../components/WalletSelector';
 import { useFinanceStore } from '../../store/financeStore';
+import { formatCurrency, IconRenderer } from '../../utils/formatters';
 
-const isIonicon = (name) => name?.includes('-outline') || name?.includes('-sharp');
 
-const IconRenderer = ({ name, family, size, color }) => {
-    const fam = family?.toLowerCase();
-    const isSavingsIcon = name === 'database' || name === 'archive' || name === 'piggy-bank-outline' || fam === 'materialcommunityicons';
-
-    if (isSavingsIcon) {
-        return <MaterialCommunityIcons name="piggy-bank-outline" size={size} color={color} />;
-    }
-
-    const hasFamily = family && family !== 'feather';
-    const useIonicons = (hasFamily && fam === 'ionicons') || (!hasFamily && isIonicon(name));
-
-    if (useIonicons) {
-        return <Ionicons name={name} size={size} color={color} />;
-    }
-    return <Feather name={name} size={size} color={color} />;
-};
-
-const formatCurrency = (amount, currency = 'PHP') =>
-    new Intl.NumberFormat('en-PH', { style: 'currency', currency }).format(amount);
 
 export default function SavingsTransferScreen({ route, navigation }) {
     const { goal: initialGoal, direction: initialDirection, isIncome, sourceGoal: initialSource, isDirect, fromSavings } = route.params;
@@ -56,142 +36,61 @@ export default function SavingsTransferScreen({ route, navigation }) {
     const [saving, setSaving] = useState(false);
     const [selectorModalVisible, setSelectorModalVisible] = useState(false);
     const [selectorMode, setSelectorMode] = useState('source'); // 'source' or 'target'
-    const [mainBalance, setMainBalance] = useState(0);
     const [alert, setAlert] = useState({ visible: false, type: 'info', title: '', message: '' });
 
     const cryptoPrices = useFinanceStore(state => state.cryptoPrices);
     const wallets = useFinanceStore(state => state.wallets);
-
-    useEffect(() => {
-        const fetchData = async () => {
-            try {
-                // Fetch Main Balance
-                const summary = await getTransactionSummary({ range: 'all' });
-                setMainBalance(summary?.netBalance || 0);
-
-                // Fetch "Savings Balance" goal
-                const res = await getSavingsGoals();
-                const master = res.goals?.find(g => g.name === 'Savings Balance');
-                if (master) {
-                    setSavingsPot(master);
-                    
-                    // Always refresh goal/sourceGoal/targetGoal if they match the master or the specific goalId
-                    if (goal?._id === master._id || goal?.name === 'Savings Balance') setGoal(master);
-                    else if (goal?._id) {
-                        const freshGoal = res.goals?.find(g => g._id === goal._id);
-                        if (freshGoal) setGoal(freshGoal);
-                    }
-
-                    if (sourceGoal?._id === master._id || sourceGoal?.name === 'Savings Balance') setSourceGoal(master);
-                    else if (sourceGoal?._id) {
-                        const freshSource = res.goals?.find(g => g._id === sourceGoal._id);
-                        if (freshSource) setSourceGoal(freshSource);
-                    }
-
-                    if (targetGoal?._id === master._id || targetGoal?.name === 'Savings Balance') setTargetGoal(master);
-                    else if (targetGoal?._id) {
-                        const freshTarget = res.goals?.find(g => g._id === targetGoal._id);
-                        if (freshTarget) setTargetGoal(freshTarget);
-                    }
-
-                    if (isDirect && !goal) setGoal(master);
-                    
-                    // SMART DEFAULTS: 
-                    if (initialDirection === 'to_savings') {
-                        if (fromSavings && goal && goal._id !== master._id) {
-                            // Savings Detail Context: Internal move from Master Pot -> Specific Goal
-                            setDirection('transfer_goal');
-                            setSourceGoal(master);
-                            setTargetGoal(goal);
-                        } else if (fromSavings && (!goal || goal._id === master._id)) {
-                            // Savings Home Context (Add Funds): Wallet -> Master Pot
-                            setDirection('to_savings');
-                            setSourceGoal(null); // Main Balance
-                            setTargetGoal(master);
-                        } else {
-                            // Non-Savings Context: Wallet -> Goal/Master
-                            setDirection('to_savings');
-                            setSourceGoal(null); 
-                            setTargetGoal(goal || master);
-                        }
-                    } else if (initialDirection === 'from_savings') {
-                        if (fromSavings && goal && goal._id !== master._id) {
-                            // Savings Detail Context: Withdraw from Specific Goal -> Master Pot
-                            setDirection('transfer_goal');
-                            setSourceGoal(goal);
-                            setTargetGoal(master);
-                        } else {
-                            // Main Context (or withdrawing from Master): Goal -> Wallet
-                            setDirection('from_savings');
-                            setSourceGoal(goal || master);
-                            setTargetGoal(null); // Main Balance
-                            setSelectedWallet(null);
-                        }
-                    } else if (initialDirection === 'transfer_goal') {
-                        setDirection('transfer_goal');
-                        setSourceGoal(initialSource || master);
-                        setTargetGoal(goal);
-                    } else if (!initialDirection && !initialSource) {
-                        // Scenario: Goal-to-Goal transfer selected via Move Money
-                        setDirection('transfer_goal');
-                        setSourceGoal(master);
-                        setTargetGoal(goal);
-                    }
-                }
-                // Fetch Wallets to ensure selector is fresh
-                useFinanceStore.getState().fetchWallets(true);
-            } catch (err) {
-                console.error('[SavingsTransfer] Error:', err);
-            }
-        };
-        fetchData();
-    }, [isDirect, initialDirection, initialSource, fromSavings]);
-
-    // REAL-TIME SOCKET UPDATES FOR BALANCE
-    useEffect(() => {
-        if (!userInfo?._id) return;
-        connectSocket(userInfo._id);
-        const socket = getSocket();
-        const refreshTimeout = { current: null };
-
-        const debouncedRefresh = () => {
-            if (refreshTimeout.current) clearTimeout(refreshTimeout.current);
-            refreshTimeout.current = setTimeout(() => {
-                getTransactionSummary({ range: 'all' })
-                    .then(s => setMainBalance(s?.netBalance || 0))
-                    .catch(() => { });
-            }, 300);
-        };
-
-        const handleBalanceChange = () => debouncedRefresh();
-
-        const handleGoalUpdate = (updatedGoal) => {
-            if (goal?._id === updatedGoal._id) setGoal(updatedGoal);
-            if (sourceGoal?._id === updatedGoal._id) setSourceGoal(updatedGoal);
-            if (targetGoal?._id === updatedGoal._id) setTargetGoal(updatedGoal);
-            if (savingsPot?._id === updatedGoal._id) setSavingsPot(updatedGoal);
-        };
-
-        socket.on('new_transaction', handleBalanceChange);
-        socket.on('update_transaction', handleBalanceChange);
-        socket.on('delete_transaction', handleBalanceChange);
-        socket.on('wallet_updated', (w) => {
-            if (w._id === 'main') setMainBalance(w.balance);
-        });
-        socket.on('update_savings_goal', handleGoalUpdate);
-
-        return () => {
-            if (refreshTimeout.current) clearTimeout(refreshTimeout.current);
-            socket.off('new_transaction', handleBalanceChange);
-            socket.off('update_transaction', handleBalanceChange);
-            socket.off('delete_transaction', handleBalanceChange);
-            socket.off('wallet_updated');
-            socket.off('update_savings_goal', handleGoalUpdate);
-        };
-    }, [userInfo?._id]);
-
     const storeGoals = useFinanceStore(state => state.savingsGoals);
     const storeMaster = useFinanceStore(state => state.savingsMasterPot);
+    const mainBalance = useFinanceStore(state => state.netBalance);
+
+    useEffect(() => {
+        // Initialize based on route params and store data
+        const master = storeMaster;
+        if (master) {
+            setSavingsPot(master);
+            
+            // SMART DEFAULTS: 
+            if (initialDirection === 'to_savings') {
+                if (fromSavings && initialGoal && initialGoal._id !== master._id) {
+                    setDirection('transfer_goal');
+                    setSourceGoal(master);
+                    setTargetGoal(initialGoal);
+                } else if (fromSavings && (!initialGoal || initialGoal._id === master._id)) {
+                    setDirection('to_savings');
+                    setSourceGoal(null);
+                    setTargetGoal(master);
+                } else {
+                    setDirection('to_savings');
+                    setSourceGoal(null); 
+                    setTargetGoal(initialGoal || master);
+                }
+            } else if (initialDirection === 'from_savings') {
+                if (fromSavings && initialGoal && initialGoal._id !== master._id) {
+                    setDirection('transfer_goal');
+                    setSourceGoal(initialGoal);
+                    setTargetGoal(master);
+                } else {
+                    setDirection('from_savings');
+                    setSourceGoal(initialGoal || master);
+                    setTargetGoal(null);
+                    setSelectedWallet(null);
+                }
+            } else if (initialDirection === 'transfer_goal') {
+                setDirection('transfer_goal');
+                setSourceGoal(initialSource || master);
+                setTargetGoal(initialGoal);
+            } else if (!initialDirection && !initialSource) {
+                setDirection('transfer_goal');
+                setSourceGoal(master);
+                setTargetGoal(initialGoal);
+            }
+        }
+
+        // Ensure we have the latest global balance and wallets
+        useFinanceStore.getState().fetchTransactionSummary('all', true);
+        useFinanceStore.getState().fetchWallets(true);
+    }, [initialDirection, initialSource, fromSavings, storeMaster]);
 
     // SYNC LOCAL STATES WITH STORE UPDATES
     useEffect(() => {
@@ -327,8 +226,7 @@ export default function SavingsTransferScreen({ route, navigation }) {
                 walletDeductAmount
             });
 
-            // Re-fetch balance immediately after success to update UI
-            getTransactionSummary({ range: 'all' }).then(s => setMainBalance(s?.netBalance || 0)).catch(() => { });
+            // No need to manually re-fetch balance, the global store will handle it via sockets
 
             showAlert('success', 'Success!', `${formatCurrency(amt, userInfo?.currency)} moved successfully.`);
         } catch (err) {

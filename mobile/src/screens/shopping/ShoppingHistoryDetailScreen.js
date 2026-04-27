@@ -9,12 +9,7 @@ import { useAuth } from '../../context/AuthContext';
 import { deleteShoppingSession } from '../../api/api';
 import { spacing, radius } from '../../theme/colors';
 import CustomAlertModal from '../../components/CustomAlertModal';
-
-const formatCurrency = (amount, currency = 'PHP') =>
-    new Intl.NumberFormat('en-PH', { style: 'currency', currency }).format(amount || 0);
-
-const formatDate = (d) =>
-    new Intl.DateTimeFormat('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' }).format(new Date(d));
+import { formatCurrency, formatDateTime } from '../../utils/formatters';
 
 const PM_ICONS = { cash: 'cash', gcash: 'cellphone', card: 'credit-card', other: 'dots-horizontal' };
 const PM_COLORS = { cash: '#22c55e', gcash: '#00A3E4', card: '#3b82f6', other: '#8b5cf6' };
@@ -87,7 +82,7 @@ export default function ShoppingHistoryDetailScreen({ route, navigation }) {
                         <Feather name="shopping-cart" size={28} color={statusColor} />
                     </View>
                     <Text style={[styles.heroLabel, { color: COLORS.text }]}>{session.label}</Text>
-                    <Text style={[styles.heroDate, { color: COLORS.textMuted }]}>{formatDate(session.createdAt)}</Text>
+                    <Text style={[styles.heroDate, { color: COLORS.textMuted }]}>{formatDateTime(session.createdAt)}</Text>
 
                     <View style={[styles.barBg, { backgroundColor: COLORS.border }]}>
                         <View style={[styles.barFill, { width: `${pct}%`, backgroundColor: budgetColor }]} />

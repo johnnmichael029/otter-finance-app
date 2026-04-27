@@ -3,7 +3,6 @@ import { View, Text, StyleSheet, ScrollView, TouchableOpacity } from 'react-nati
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Feather, MaterialCommunityIcons, Ionicons } from '@expo/vector-icons';
 import { useTheme } from '../../context/ThemeContext';
-import { useUIStore } from '../../store/uiStore';
 import { spacing, radius } from '../../theme/colors';
 
 const SERVICES = [
@@ -20,6 +19,7 @@ const SERVICES = [
         category: 'Social & Connect',
         items: [
             { id: 'friends', icon: 'users', label: 'Friends', color: '#3b82f6', screen: 'FriendsScreen' },
+            { id: 'trip_wallet', icon: 'airplane', family: 'ionicons', label: 'Trip Wallet', color: '#6366f1', screen: 'GroupWalletScreen' },
         ]
     },
     {
@@ -46,7 +46,7 @@ const SERVICES = [
 
 export default function AllServicesScreen({ navigation }) {
     const COLORS = useTheme(state => state.COLORS);
-    const setIsSavingsMode = useUIStore(state => state.setIsSavingsMode);
+    const setIsSavingsMode = useTheme(state => state.setIsSavingsMode);
 
     const handlePress = (item) => {
         if (item.action === 'savings') {

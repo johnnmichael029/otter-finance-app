@@ -3,6 +3,7 @@ const DebtPayment = require('../models/debtPaymentModel');
 const Notification = require('../models/Notification');
 const Wallet = require('../models/walletModel');
 const Transaction = require('../models/transactionModel');
+const User = require('../models/userModel');
 const mongoose = require('mongoose');
 const { invalidatePrefixes } = require('../utils/cache');
 const { sendPushNotification } = require('../utils/pushNotification');
@@ -38,7 +39,7 @@ const calcAccruedInterest = (debt) => {
 const getDebts = async (req, res) => {
     try {
         const { status, direction, page = 1, limit = 20 } = req.query;
-        
+
         // Match debts owned by the user, OR debts where the user is the linkedUserId and it's pending
         const filter = {
             $or: [
@@ -142,9 +143,9 @@ const createDebt = async (req, res) => {
         }
 
         if (linkedUserId) {
-            const senderUser = await mongoose.model('User').findById(req.userId).select('name avatarUrl');
+            const senderUser = await User.findById(req.userId).select('name avatarUrl');
             // Create persistent Notification for the receiver
-            await Notification.create({
+            const n = await Notification.create({
                 user: linkedUserId,
                 type: 'debt_request',
                 title: 'New Debt Request',
@@ -157,9 +158,24 @@ const createDebt = async (req, res) => {
                     amount: amount,
                     direction: direction
                 }
-            }).then(n => {
-                if (io) io.to(`user:${linkedUserId}`).emit('new_notification', n);
             });
+
+            if (io) io.to(`user:${linkedUserId}`).emit('new_notification', n);
+
+            // Send Push Notification
+            try {
+                const receiver = await User.findById(linkedUserId).select('pushToken');
+                if (receiver?.pushToken) {
+                    await sendPushNotification(
+                        receiver.pushToken,
+                        'New Debt Request',
+                        `${senderUser?.name || 'Someone'} sent you a debt request for ₱${amount.toLocaleString()}.`,
+                        { debtId: debt._id.toString() }
+                    );
+                }
+            } catch (pushErr) {
+                console.error('[DEBT] Push failed:', pushErr.message);
+            }
         }
 
         res.status(201).json(debt);
@@ -281,8 +297,8 @@ const logPayment = async (req, res) => {
         const remaining = debt.amount - debt.amountPaid;
         // Small epsilon check for floating point precision issues
         if (amount > (remaining + 0.01)) {
-            return res.status(400).json({ 
-                error: `Payment exceeds remaining debt. You only owe ₱${remaining.toLocaleString()}.` 
+            return res.status(400).json({
+                error: `Payment exceeds remaining debt. You only owe ₱${remaining.toLocaleString()}.`
             });
         }
 
@@ -328,6 +344,10 @@ const logPayment = async (req, res) => {
             wallet: walletId || null
         });
 
+        // Link transaction to payment log
+        payment.transactionId = newTx._id;
+        await payment.save();
+
         // ── Feature: Wallet Balance Sync ──────────────────────────
         if (walletId) {
             const wallet = await Wallet.findOne({ _id: walletId, userId: req.userId });
@@ -364,7 +384,7 @@ const logPayment = async (req, res) => {
 
                     // Guard against negative balance for non-credit wallets
                     if (!isCredit && wallet.balance < 0) wallet.balance = 0;
-                    
+
                     await wallet.save();
 
                     // Attach native info to the transaction (newTx) for history view
@@ -430,7 +450,7 @@ const logPayment = async (req, res) => {
 
                 // Log Transaction for friend's HAND balance
                 const friendTxType = friendDebt.direction === 'owed_by_me' ? 'expense' : 'income';
-                const friendTxDesc = friendDebt.direction === 'owed_by_me' 
+                const friendTxDesc = friendDebt.direction === 'owed_by_me'
                     ? `Paid debt to ${friendDebt.personName}`
                     : `Received debt payment from ${friendDebt.personName}`;
 
@@ -460,22 +480,41 @@ const logPayment = async (req, res) => {
                     wallet: null
                 });
 
+                // Link friend's transaction to their payment log
+                friendPayment.transactionId = friendTx._id;
+                await friendPayment.save();
+
                 if (io) {
                     io.to(`user:${friendDebt.user._id.toString()}`).emit('update_debt', friendDebt);
                     const friendFullTx = await Transaction.findById(friendTx._id).populate('wallet', 'name type color').lean();
                     io.to(`user:${friendDebt.user._id.toString()}`).emit('new_transaction', decryptNote(friendFullTx));
                     io.to(`user:${friendDebt.user._id.toString()}`).emit('wallet_updated'); // Trigger HAND balance refresh
-                    
+
                     // Create persistent notification for the recipient
-                    await Notification.create({
+                    const n = await Notification.create({
                         user: friendDebt.user._id,
                         type: 'debt_payment',
                         title: 'Debt Payment Received',
                         message: `${req.user.name} has paid you ₱${amount.toLocaleString()}.`,
                         data: { debtId: friendDebt._id, senderAvatar: req.user.avatarUrl }
-                    }).then(n => {
-                        io.to(`user:${n.user.toString()}`).emit('new_notification', n);
                     });
+
+                    io.to(`user:${n.user.toString()}`).emit('new_notification', n);
+
+                    // Send Push Notification
+                    try {
+                        const receiver = await User.findById(friendDebt.user._id).select('pushToken');
+                        if (receiver?.pushToken) {
+                            await sendPushNotification(
+                                receiver.pushToken,
+                                'Debt Payment Received',
+                                `${req.user.name} has paid you ₱${amount.toLocaleString()}.`,
+                                { debtId: friendDebt._id.toString() }
+                            );
+                        }
+                    } catch (pushErr) {
+                        console.error('[DEBT] Payment push failed:', pushErr.message);
+                    }
                 }
             }
         }
@@ -533,7 +572,7 @@ const sendDebtReminder = async (req, res) => {
         const body = `₱${balance.toLocaleString()} remaining${debt.description ? ` — ${debt.description}` : ''}`;
 
         await sendPushNotification(user.pushToken, title, body, { debtId: debt._id });
-        
+
         // ── In-App Notification ───────────────────────────────────
         await Notification.create({
             user: req.userId,
@@ -544,7 +583,7 @@ const sendDebtReminder = async (req, res) => {
         }).then(n => {
             const io = req.app.get('io');
             if (io) io.to(`user:${req.userId}`).emit('new_notification', n);
-        }).catch(() => {});
+        }).catch(() => { });
 
         debt.reminderSent = true;
         await debt.save();
@@ -578,14 +617,14 @@ const respondDebtRequest = async (req, res) => {
             await originalDebt.save();
             // Cleanup notification
             await Notification.deleteMany({ 'data.debtId': new mongoose.Types.ObjectId(req.params.id) });
-            
+
             if (io) io.to(`user:${originalDebt.user._id}`).emit('debt_request_rejected', originalDebt);
             return res.json({ message: 'Debt request rejected.' });
         }
 
         // If accepted, we must create the counterpart debt for the CURRENT user
         const counterpartDirection = originalDebt.direction === 'owed_to_me' ? 'owed_by_me' : 'owed_to_me';
-        
+
         const myDebt = await Debt.create({
             user: req.userId,
             direction: counterpartDirection,
@@ -621,18 +660,33 @@ const respondDebtRequest = async (req, res) => {
         }
 
         // Create notification for the SENDER to let them know it was accepted
-        const receiverUser = await mongoose.model('User').findById(req.userId).select('name avatarUrl');
-        await Notification.create({
+        const receiverUser = await User.findById(req.userId).select('name avatarUrl');
+        const n = await Notification.create({
             user: originalDebt.user._id,
             type: 'debt_accepted',
             title: 'Debt Request Accepted',
             message: `${receiverUser?.name || 'Your friend'} accepted your debt request for ₱${originalDebt.amount.toLocaleString()}.`,
             data: { debtId: originalDebt._id, senderAvatar: receiverUser?.avatarUrl }
-        }).then(n => {
-            if (io) {
-                io.to(`user:${n.user.toString()}`).emit('new_notification', n);
-            }
         });
+
+        if (io) {
+            io.to(`user:${n.user.toString()}`).emit('new_notification', n);
+        }
+
+        // Send Push Notification
+        try {
+            const sender = await User.findById(originalDebt.user._id).select('pushToken');
+            if (sender?.pushToken) {
+                await sendPushNotification(
+                    sender.pushToken,
+                    'Debt Request Accepted',
+                    `${receiverUser?.name || 'Your friend'} accepted your debt request for ₱${originalDebt.amount.toLocaleString()}.`,
+                    { debtId: originalDebt._id.toString() }
+                );
+            }
+        } catch (pushErr) {
+            console.error('[DEBT] Response push failed:', pushErr.message);
+        }
 
         res.json({ message: 'Debt request accepted successfully.', debt: myDebt });
     } catch (err) {
@@ -641,4 +695,95 @@ const respondDebtRequest = async (req, res) => {
     }
 };
 
-module.exports = { getDebts, createDebt, updateDebt, deleteDebt, logPayment, getPayments, sendDebtReminder, respondDebtRequest };
+// ─────────────────────────────────────────────────────────────────────────────
+//  POST /api/debts/split
+//  Atomically creates multiple debts for a split bill
+// ─────────────────────────────────────────────────────────────────────────────
+const splitDebt = async (req, res) => {
+    try {
+        const { reason, totalAmount, splits } = req.body;
+        // splits should be an array of { debtorId, amount }
+
+        if (!reason || !totalAmount || !splits || !splits.length) {
+            return res.status(400).json({ error: 'reason, totalAmount, and splits array are required.' });
+        }
+
+        const io = req.app.get('io');
+        const createdDebts = [];
+
+        // Ensure user data is fetched for notifications
+        const senderUser = await User.findById(req.userId).select('name avatarUrl');
+
+        for (const split of splits) {
+            const { debtorId, amount } = split;
+
+            // Fetch friend to get their name for the 'personName' field
+            const friend = await User.findById(debtorId).select('name');
+            if (!friend) continue;
+
+            const debt = await Debt.create({
+                user: req.userId,
+                direction: 'owed_to_me',
+                personName: friend.name,
+                amount: amount,
+                description: reason,
+                dateBorrowed: new Date(),
+                linkedUserId: debtorId,
+                syncStatus: 'pending'
+            });
+
+            createdDebts.push(debt);
+
+            if (io) {
+                // Notify the creator (req.userId) about the new pending debt
+                io.to(`user:${req.userId}`).emit('new_debt', debt);
+                // Notify the friend via Socket
+                io.to(`user:${debtorId.toString()}`).emit('new_debt_request', debt);
+                io.to(`user:${debtorId.toString()}`).emit('notification_received');
+            }
+
+            // Create persistent Notification for the receiver
+            const n = await Notification.create({
+                user: debtorId,
+                type: 'debt_request',
+                title: 'Split Bill Request',
+                message: `${senderUser?.name || 'Someone'} requested ₱${amount.toLocaleString()} for "${reason}".`,
+                data: {
+                    debtId: debt._id,
+                    senderId: req.userId,
+                    senderName: senderUser?.name,
+                    senderAvatar: senderUser?.avatarUrl,
+                    amount: amount,
+                    direction: 'owed_to_me',
+                    isSplit: true
+                }
+            });
+
+            if (io) io.to(`user:${debtorId}`).emit('new_notification', n);
+
+            // Send Push Notification
+            try {
+                const receiver = await User.findById(debtorId).select('pushToken');
+                if (receiver?.pushToken) {
+                    await sendPushNotification(
+                        receiver.pushToken,
+                        'Split Bill Request',
+                        `${senderUser?.name || 'Someone'} requested ₱${amount.toLocaleString()} for "${reason}".`,
+                        { debtId: debt._id.toString() }
+                    );
+                }
+            } catch (pushErr) {
+                console.error('[DEBT] Split push failed:', pushErr.message);
+            }
+        }
+
+        invalidatePrefixes('debt');
+
+        res.status(201).json({ message: 'Split bill requests sent successfully.', debts: createdDebts });
+    } catch (err) {
+        console.error('[DEBT] splitDebt error:', err.message);
+        res.status(500).json({ error: 'Failed to split bill.' });
+    }
+};
+
+module.exports = { getDebts, createDebt, updateDebt, deleteDebt, logPayment, getPayments, sendDebtReminder, respondDebtRequest, splitDebt };

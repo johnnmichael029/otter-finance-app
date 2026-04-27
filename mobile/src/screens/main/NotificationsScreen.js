@@ -9,7 +9,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Feather, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useTheme } from '../../context/ThemeContext';
 import { useAuth, API_BASE } from '../../context/AuthContext';
-import { getNotifications, markNotificationRead, markAllNotificationsRead, deleteNotification, deleteAllNotifications, respondFriendRequest, respondDebtRequest, respondToGoalInvite } from '../../api/api';
+import { getNotifications, markNotificationRead, markAllNotificationsRead, deleteNotification, deleteAllNotifications, respondFriendRequest, respondDebtRequest, respondToGoalInvite, respondToBudgetInvite, respondToChallengeInvite, respondToTripInvite } from '../../api/api';
 import { connectSocket, disconnectSocket, getSocket } from '../../utils/socket';
 import { spacing, radius, typography, shadow } from '../../theme/colors';
 import CustomAlertModal from '../../components/CustomAlertModal';
@@ -25,7 +25,12 @@ const NOTIF_ICONS = {
     debt_request: { name: 'dollar-sign', color: '#f59e0b', bg: '#fff7ed' },
     debt_accepted: { name: 'check-circle', color: '#22c55e', bg: '#f0fdf4' },
     debt_payment: { name: 'check-circle', color: '#8b5cf6', bg: '#ede9fe' },
-    goal_invite: { name: 'users', color: '#E91E8C', bg: '#fdf2f8' }
+    goal_invite: { name: 'users', color: '#E91E8C', bg: '#fdf2f8' },
+    budget_invite: { name: 'pie-chart', color: '#3b82f6', bg: '#eff6ff' },
+    challenge_invite: { name: 'crosshair', color: '#E91E8C', bg: '#fdf2f8' },
+    group_trip: { name: 'briefcase', color: '#3b82f6', bg: '#eff6ff' },
+    trip_invite: { name: 'send', color: '#3b82f6', bg: '#eff6ff' },
+    trip_response: { name: 'check-circle', color: '#22c55e', bg: '#f0fdf4' }
 };
 
 export default function NotificationsScreen({ navigation }) {
@@ -135,7 +140,6 @@ export default function NotificationsScreen({ navigation }) {
 
                 try {
                     await deleteAllNotifications();
-                    console.log('[NOTIF] All notifications purged successfully');
                 } catch (error) {
                     console.error('[Notifications] Delete all error:', error);
                     // Rollback if it fails
@@ -155,9 +159,12 @@ export default function NotificationsScreen({ navigation }) {
     const handleRespondFriendRequest = async (notifId, requestId, status) => {
         try {
             await respondFriendRequest(requestId, status);
-            // Delete the notification or mark it as read after responding?
-            // Usually, once responded, the notification is "done"
-            handleDelete(notifId);
+            // Notification is already deleted on the backend by the controller.
+            // Just update local state to reflect it.
+            setNotifications(prev => prev.filter(n => n._id !== notifId));
+            const wasUnread = !notifications.find(n => n._id === notifId)?.isRead;
+            if (wasUnread) setUnreadCount(prev => Math.max(0, prev - 1));
+            
             setAlertConfig({ visible: true, title: 'Success', message: `Friend request ${status}!`, type: 'success' });
         } catch (error) {
             console.error('[Notifications] Respond error:', error);
@@ -169,7 +176,11 @@ export default function NotificationsScreen({ navigation }) {
     const handleRespondDebtRequest = async (notifId, debtId, status) => {
         try {
             await respondDebtRequest(debtId, status === 'accepted' ? 'linked' : 'rejected');
-            handleDelete(notifId);
+            // Notification is already deleted on the backend by the controller.
+            setNotifications(prev => prev.filter(n => n._id !== notifId));
+            const wasUnread = !notifications.find(n => n._id === notifId)?.isRead;
+            if (wasUnread) setUnreadCount(prev => Math.max(0, prev - 1));
+            
             setAlertConfig({ visible: true, title: 'Success', message: `Debt request ${status}!`, type: 'success' });
         } catch (error) {
             console.error('[Notifications] Debt Respond error:', error);
@@ -177,7 +188,9 @@ export default function NotificationsScreen({ navigation }) {
             setAlertConfig({ visible: true, title: 'Error', message: msg, type: 'error' });
             // If it's already processed, clean up the notification so it goes away
             if (error.response?.status === 404) {
-                handleDelete(notifId);
+                setNotifications(prev => prev.filter(n => n._id !== notifId));
+                const wasUnread = !notifications.find(n => n._id === notifId)?.isRead;
+                if (wasUnread) setUnreadCount(prev => Math.max(0, prev - 1));
             }
         }
     };
@@ -196,6 +209,59 @@ export default function NotificationsScreen({ navigation }) {
             setAlertConfig({ visible: true, title: 'Success', message: status === 'accepted' ? 'Goal joined! 🎯' : 'Invite declined.', type: 'success' });
         } catch (error) {
             console.error('[Notifications] Goal respond error:', error);
+            const msg = error.response?.data?.error || 'Failed to respond.';
+            setAlertConfig({ visible: true, title: 'Error', message: msg, type: 'error' });
+        }
+    };
+    const handleRespondBudgetInvite = async (notifId, budgetId, status) => {
+        try {
+            await respondToBudgetInvite(budgetId, status);
+            setNotifications(prev => prev.map(n => n._id === notifId ? {
+                ...n,
+                title: status === 'accepted' ? 'Budget Joined! 🤝' : 'Invite Declined',
+                message: status === 'accepted' ? 'You joined the budget. Let\'s track spending together!' : 'You declined the invite.',
+                isRead: true,
+                data: { ...n.data, processed: true }
+            } : n));
+            setAlertConfig({ visible: true, title: 'Success', message: status === 'accepted' ? 'Budget joined! 📊' : 'Invite declined.', type: 'success' });
+        } catch (error) {
+            console.error('[Notifications] Budget respond error:', error);
+            const msg = error.response?.data?.error || 'Failed to respond.';
+            setAlertConfig({ visible: true, title: 'Error', message: msg, type: 'error' });
+        }
+    };
+
+    const handleRespondChallengeInvite = async (notifId, challengeId, status) => {
+        try {
+            await respondToChallengeInvite(challengeId, status);
+            setNotifications(prev => prev.map(n => n._id === notifId ? {
+                ...n,
+                title: status === 'accepted' ? 'Challenge Accepted! ⚔️' : 'Invite Declined',
+                message: status === 'accepted' ? 'You joined the challenge. Time to prove yourself!' : 'You declined the invite.',
+                isRead: true,
+                data: { ...n.data, processed: true }
+            } : n));
+            setAlertConfig({ visible: true, title: 'Success', message: status === 'accepted' ? 'Challenge joined! 🎯' : 'Invite declined.', type: 'success' });
+        } catch (error) {
+            console.error('[Notifications] Challenge respond error:', error);
+            const msg = error.response?.data?.error || 'Failed to respond.';
+            setAlertConfig({ visible: true, title: 'Error', message: msg, type: 'error' });
+        }
+    };
+
+    const handleRespondTripInvite = async (notifId, groupId, status) => {
+        try {
+            await respondToTripInvite(groupId, status);
+            setNotifications(prev => prev.map(n => n._id === notifId ? {
+                ...n,
+                title: status === 'accepted' ? 'Trip Joined! ✈️' : 'Invite Declined',
+                message: status === 'accepted' ? 'Pack your bags! You joined the trip.' : 'You declined the invite.',
+                isRead: true,
+                data: { ...n.data, processed: true }
+            } : n));
+            setAlertConfig({ visible: true, title: 'Success', message: status === 'accepted' ? 'Trip joined! 🗺️' : 'Invite declined.', type: 'success' });
+        } catch (error) {
+            console.error('[Notifications] Trip respond error:', error);
             const msg = error.response?.data?.error || 'Failed to respond.';
             setAlertConfig({ visible: true, title: 'Error', message: msg, type: 'error' });
         }
@@ -307,6 +373,63 @@ export default function NotificationsScreen({ navigation }) {
                                     <TouchableOpacity
                                         style={[styles.actionBtn, { backgroundColor: COLORS.border }]}
                                         onPress={() => handleRespondGoalInvite(item._id, item.data.goalId, 'rejected')}
+                                    >
+                                        <Feather name="x" size={14} color={COLORS.text} />
+                                        <Text style={[styles.actionBtnText, { color: COLORS.text }]}>Decline</Text>
+                                    </TouchableOpacity>
+                                </View>
+                            )}
+
+                            {item.type === 'budget_invite' && item.data?.budgetId && !item.data?.processed && (
+                                <View style={styles.actionRow}>
+                                    <TouchableOpacity
+                                        style={[styles.actionBtn, { backgroundColor: COLORS.primary }]}
+                                        onPress={() => handleRespondBudgetInvite(item._id, item.data.budgetId, 'accepted')}
+                                    >
+                                        <Feather name="check" size={14} color="#fff" />
+                                        <Text style={styles.actionBtnText}>Accept</Text>
+                                    </TouchableOpacity>
+                                    <TouchableOpacity
+                                        style={[styles.actionBtn, { backgroundColor: COLORS.border }]}
+                                        onPress={() => handleRespondBudgetInvite(item._id, item.data.budgetId, 'rejected')}
+                                    >
+                                        <Feather name="x" size={14} color={COLORS.text} />
+                                        <Text style={[styles.actionBtnText, { color: COLORS.text }]}>Decline</Text>
+                                    </TouchableOpacity>
+                                </View>
+                            )}
+
+                            {item.type === 'challenge_invite' && item.data?.challengeId && !item.data?.processed && (
+                                <View style={styles.actionRow}>
+                                    <TouchableOpacity
+                                        style={[styles.actionBtn, { backgroundColor: COLORS.primary }]}
+                                        onPress={() => handleRespondChallengeInvite(item._id, item.data.challengeId, 'accepted')}
+                                    >
+                                        <Feather name="check" size={14} color="#fff" />
+                                        <Text style={styles.actionBtnText}>Accept</Text>
+                                    </TouchableOpacity>
+                                    <TouchableOpacity
+                                        style={[styles.actionBtn, { backgroundColor: COLORS.border }]}
+                                        onPress={() => handleRespondChallengeInvite(item._id, item.data.challengeId, 'rejected')}
+                                    >
+                                        <Feather name="x" size={14} color={COLORS.text} />
+                                        <Text style={[styles.actionBtnText, { color: COLORS.text }]}>Decline</Text>
+                                    </TouchableOpacity>
+                                </View>
+                            )}
+
+                            {item.type === 'trip_invite' && !item.data?.processed && (
+                                <View style={styles.actionRow}>
+                                    <TouchableOpacity
+                                        style={[styles.actionBtn, { backgroundColor: COLORS.primary }]}
+                                        onPress={() => handleRespondTripInvite(item._id, item.data.groupId, 'accepted')}
+                                    >
+                                        <Feather name="check" size={14} color="#fff" />
+                                        <Text style={styles.actionBtnText}>Accept</Text>
+                                    </TouchableOpacity>
+                                    <TouchableOpacity
+                                        style={[styles.actionBtn, { backgroundColor: COLORS.border }]}
+                                        onPress={() => handleRespondTripInvite(item._id, item.data.groupId, 'rejected')}
                                     >
                                         <Feather name="x" size={14} color={COLORS.text} />
                                         <Text style={[styles.actionBtnText, { color: COLORS.text }]}>Decline</Text>

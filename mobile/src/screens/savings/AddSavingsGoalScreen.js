@@ -12,17 +12,7 @@ import { useTheme } from '../../context/ThemeContext';
 import { createSavingsGoal, getSavingsGoals, getFriends } from '../../api/api';
 import CustomAlertModal from '../../components/CustomAlertModal';
 import { spacing, radius } from '../../theme/colors';
-
-const isIonicon = (name) => name?.includes('-outline') || name?.includes('-sharp');
-
-const IconRenderer = ({ name, family, size, color }) => {
-    const hasFamily = family && family !== 'feather';
-    const useIonicons = (hasFamily && (family === 'ionicons' || family === 'Ionicons')) || (!hasFamily && isIonicon(name));
-    if (useIonicons) {
-        return <Ionicons name={name} size={size} color={color} />;
-    }
-    return <Feather name={name} size={size} color={color} />;
-};
+import { IconRenderer } from '../../utils/formatters';
 
 const GOAL_ICONS = [
     // Goals & Finance

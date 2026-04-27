@@ -2,89 +2,35 @@ import React, { useState, useCallback, useEffect, useRef } from 'react';
 import {
     View, Text, StyleSheet, TouchableOpacity, ScrollView,
     TextInput, ActivityIndicator, RefreshControl, Modal, TouchableWithoutFeedback, Image,
-    Vibration, FlatList
+    FlatList
 } from 'react-native';
 import Animated, { ZoomIn, ZoomOut, LinearTransition } from 'react-native-reanimated';
 import { FlashList } from '@shopify/flash-list';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Feather, MaterialCommunityIcons, Ionicons } from '@expo/vector-icons';
 import { Swipeable } from 'react-native-gesture-handler';
+import { useNavigation } from '@react-navigation/native';
 import { useTheme } from '../../context/ThemeContext';
 import { useAuth, API_BASE } from '../../context/AuthContext';
 import { getTransactions, archiveTransaction as archiveTxApi, deleteTransaction, emptyArchives } from '../../api/api';
 import { spacing, radius } from '../../theme/colors';
 import Skeleton from '../../components/Skeleton';
 import CustomAlertModal from '../../components/CustomAlertModal';
+import SubscriptionSuggestionCard from '../../components/SubscriptionSuggestionCard';
 import { getSocket, connectSocket } from '../../utils/socket';
 import { useDebounce } from '../../utils/debounce';
 import { useFinanceStore } from '../../store/financeStore';
-
-const formatCurrency = (amount, currency = 'PHP') =>
-    new Intl.NumberFormat('en-PH', { style: 'currency', currency }).format(amount);
-
-const formatDateTime = (dateString) => {
-    if (!dateString) return '';
-    return new Intl.DateTimeFormat('en-US', {
-        month: 'short', day: 'numeric', year: 'numeric',
-        hour: 'numeric', minute: '2-digit',
-    }).format(new Date(dateString));
-};
-
-const formatDate = (dateString) => {
-    if (!dateString) return '';
-    return new Intl.DateTimeFormat('en-US', {
-        month: 'short', day: 'numeric', year: 'numeric',
-    }).format(new Date(dateString));
-};
-
-const FALLBACK_ICONS = [
-    'briefcase', 'trending-up', 'gift', 'plus-circle', 'coffee', 'truck', 'shopping-bag', 'file-text',
-    'heart', 'tv', 'wifi', 'home', 'monitor', 'smartphone', 'headphones', 'book', 'pen-tool',
-    'aperture', 'camera', 'music', 'map', 'navigation', 'compass', 'award', 'star', 'sun', 'moon', 'zap',
-    'tag', 'speaker', 'watch', 'anchor', 'box', 'cloud', 'cpu', 'database', 'droplet', 'feather',
-    'flag', 'globe', 'image', 'key', 'layers', 'mic', 'package', 'paperclip',
-    'phone', 'printer', 'radio', 'scissors', 'shield', 'tool', 'trash', 'umbrella', 'unlock', 'user', 'video',
-    'smile', 'piggy-bank-outline', 'account-cash', 'jeepney', 'car', 'train-outline', 'boat-outline', 'hospital', 'noodles', 'egg-outline',
-    'egg-fried', 'cup', 'game-controller-outline', 'controller-classic-outline', 'rice', 'steam'
-];
-
-const IconRenderer = ({ name, size, color, style }) => {
-    const MCI_ICONS = ['piggy-bank-outline', 'account-cash', 'jeepney', 'car', 'noodles', 'egg-fried', 'cup',
-        'controller-classic-outline', 'piggy-bank'
-    ];
-    const ION_ICONS = ['train-outline', 'boat-outline', 'egg-outline', 'game-controller-outline'];
-    const FA5_ICONS = ['hospital'];
-    if (MCI_ICONS.includes(name)) {
-        return <MaterialCommunityIcons name={name} size={size} color={color} style={style} />;
-    }
-    if (ION_ICONS.includes(name)) {
-        return <Ionicons name={name} size={size} color={color} style={style} />;
-    }
-    if (FA5_ICONS.includes(name)) {
-        return <FontAwesome5 name={name} size={size} color={color} style={style} />;
-    }
-    return <Feather name={name} size={size} color={color} style={style} />;
-};
+import { formatCurrency, formatDate, formatDateTime, getIconName, getIconColor, IconRenderer } from '../../utils/formatters';
+import { triggerHaptic } from '../../utils/haptics';
 
 
-const getIconName = (tx) => {
-    const cat = (tx.category || '').toLowerCase();
-    if (cat === 'savings' || cat === 'savings interest' || cat === 'savings balance') return 'piggy-bank';
-    if (cat === 'shopping') return 'shopping-cart';
-    return tx.categoryIcon || FALLBACK_ICONS[tx.category] || FALLBACK_ICONS[tx.category.charAt(0).toUpperCase() + tx.category.slice(1).toLowerCase()] || 'circle';
-};
-const getIconColor = (tx, COLORS) => {
-    const cat = (tx.category || '').toLowerCase();
-    if (cat === 'shopping') return '#E91E8C';
-    if (tx.type === 'transfer') return '#3b82f6'; // Neutral blue for transfers
-    return tx.categoryColor || (tx.type === 'income' ? COLORS.income : COLORS.expense);
-};
 
 const TABS = ['All', 'Income', 'Expense', 'Ledger', 'Archive'];
 
 const TransactionsScreen = () => {
     const COLORS = useTheme(state => state.COLORS);
-    const { userInfo } = useAuth();
+    const { userInfo, hapticsEnabled } = useAuth();
+    const navigation = useNavigation();
     const styles = getStyles(COLORS);
 
     const [activeTab, setActiveTab] = useState('All');
@@ -102,8 +48,49 @@ const TransactionsScreen = () => {
     const [infoAlert, setInfoAlert] = useState({ visible: false, title: '', message: '', type: 'info' });
     const [emptyModalVisible, setEmptyModalVisible] = useState(false);
 
+    const [suggestedSubscription, setSuggestedSubscription] = useState(null);
+    const [dismissedSuggestions, setDismissedSuggestions] = useState([]);
+    const recurringBills = useFinanceStore(state => state.recurringBills);
+
     const typeFilter = activeTab === 'Income' ? 'income' : activeTab === 'Expense' ? 'expense' : '';
     const isArchiveView = activeTab === 'Archive';
+
+    useEffect(() => {
+        if (transactions.length < 2 || isArchiveView) return;
+
+        const groups = {};
+        transactions.forEach(tx => {
+            if (tx.type !== 'expense' || tx.isArchived) return;
+            const merchant = (tx.description || tx.category || '').trim();
+            if (!merchant) return;
+
+            const key = `${merchant.toLowerCase()}_${tx.amount}`;
+            if (!groups[key]) {
+                groups[key] = { merchant, amount: tx.amount, category: tx.category, dates: [], txIds: [] };
+            }
+            groups[key].dates.push(new Date(tx.date || tx.createdAt));
+            groups[key].txIds.push(tx._id);
+        });
+
+        let found = null;
+        for (const key in groups) {
+            const group = groups[key];
+            if (group.dates.length >= 2) {
+                if (dismissedSuggestions.includes(key)) continue;
+
+                const alreadyBilled = recurringBills.some(b =>
+                    b.name.toLowerCase() === group.merchant.toLowerCase() ||
+                    b.amount === group.amount
+                );
+
+                if (!alreadyBilled) {
+                    found = { ...group, key };
+                    break;
+                }
+            }
+        }
+        setSuggestedSubscription(found);
+    }, [transactions, recurringBills, dismissedSuggestions, isArchiveView]);
 
     const load = useCallback(async (showSkeleton = false) => {
         if (showSkeleton) setLoading(true);
@@ -197,12 +184,23 @@ const TransactionsScreen = () => {
 
     const handleArchiveToggle = async (id) => {
         try {
-            Vibration.vibrate(50); // Haptic feedback
-            setTransactions(prev => prev.filter(t => t._id !== id));
+            triggerHaptic(hapticsEnabled, 'impactLight'); // Haptic feedback
             await archiveTxApi(id);
+            // The list will update via socket handleArchive or handleUpdate in useEffect
         } catch (e) {
             console.error('Archive failed:', e);
-            load(); // Revert on failure
+            const isNetworkError = !e.response && e.request;
+            const msg = isNetworkError 
+                ? 'Unable to connect to the server. Please check your internet connection.'
+                : (e?.response?.data?.error || 'Could not update transaction status.');
+            
+            setInfoAlert({
+                visible: true,
+                title: isNetworkError ? 'Network Error' : 'Action Restricted',
+                message: msg,
+                type: 'error'
+            });
+            load(); // Refresh to ensure UI matches DB
         }
     };
 
@@ -216,8 +214,43 @@ const TransactionsScreen = () => {
             // List will update via socket handleDeleted already in this file
         } catch (e) {
             console.error('Revert failed:', e);
+            const isNetworkError = !e.response && e.request;
+            const msg = isNetworkError 
+                ? 'Unable to connect to the server. Please check your internet connection.'
+                : (e?.response?.data?.error || 'Could not revert transaction.');
+
+            setInfoAlert({
+                visible: true,
+                title: isNetworkError ? 'Network Error' : 'Revert Failed',
+                message: msg,
+                type: 'error'
+            });
+            load();
         }
     };
+
+    const handleDeleteTransaction = async (id) => {
+        try {
+            triggerHaptic(hapticsEnabled, 'impactMedium');
+            await deleteTransaction(id);
+            // List will update via socket handleDeleted in useEffect
+        } catch (e) {
+            console.error('Delete failed:', e);
+            const isNetworkError = !e.response && e.request;
+            const msg = isNetworkError 
+                ? 'Unable to connect to the server. Please check your internet connection.'
+                : (e?.response?.data?.error || 'Could not delete transaction.');
+
+            setInfoAlert({
+                visible: true,
+                title: isNetworkError ? 'Network Error' : 'Action Restricted',
+                message: msg,
+                type: 'error'
+            });
+            load();
+        }
+    };
+
 
     const handleEmptyArchivesConfirm = async () => {
         try {
@@ -275,6 +308,21 @@ const TransactionsScreen = () => {
         );
     };
 
+    const renderLeftActions = (id) => {
+        if (!isArchiveView) return null;
+        return (
+            <TouchableOpacity
+                style={styles.deleteAction}
+                onPress={() => handleDeleteTransaction(id)}
+                activeOpacity={0.8}
+            >
+                <MaterialCommunityIcons name="trash-can-outline" size={28} color="#fff" />
+                <Text style={styles.archiveActionText}>Delete</Text>
+            </TouchableOpacity>
+        );
+    };
+
+
     return (
         <SafeAreaView style={styles.safe}>
             <View style={[styles.header, { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }]}>
@@ -310,6 +358,31 @@ const TransactionsScreen = () => {
                     <Text style={{ flex: 1, fontSize: 12, color: COLORS.textMuted, lineHeight: 18 }}>
                         Archived transactions are hidden from your main ledgers but still count toward your mathematical balance. They will be automatically deleted after 30 days.
                     </Text>
+                </View>
+            )}
+
+            {suggestedSubscription && !isArchiveView && activeTab === 'All' && (
+                <View style={{ marginBottom: spacing.sm }}>
+                    <SubscriptionSuggestionCard
+                        merchant={suggestedSubscription.merchant}
+                        amount={suggestedSubscription.amount}
+                        category={suggestedSubscription.category}
+                        onDismiss={() => {
+                            setDismissedSuggestions(prev => [...prev, suggestedSubscription.key]);
+                            setSuggestedSubscription(null);
+                        }}
+                        onAdd={() => {
+                            navigation.navigate('RecurringBills', {
+                                prefill: {
+                                    name: suggestedSubscription.merchant,
+                                    amount: suggestedSubscription.amount.toString(),
+                                    category: suggestedSubscription.category
+                                }
+                            });
+                            setDismissedSuggestions(prev => [...prev, suggestedSubscription.key]);
+                            setSuggestedSubscription(null);
+                        }}
+                    />
                 </View>
             )}
 
@@ -383,8 +456,17 @@ const TransactionsScreen = () => {
                                 <Animated.View key={tx._id} layout={LinearTransition.springify()} entering={ZoomIn.springify().damping(50).mass(0.9)} exiting={ZoomOut.duration(100)}>
                                     <Swipeable
                                         renderRightActions={() => renderRightActions(tx._id, tx.isArchived)}
-                                        onSwipeableOpen={(direction) => direction === 'right' && handleArchiveToggle(tx._id)}
+                                        renderLeftActions={() => renderLeftActions(tx._id)}
+                                        onSwipeableOpen={(direction) => {
+                                            if (direction === 'right') {
+                                                handleArchiveToggle(tx._id);
+                                            } else if (direction === 'left' && isArchiveView) {
+                                                handleDeleteTransaction(tx._id);
+                                            }
+                                        }}
                                         friction={2}
+                                        overshootRight={false}
+                                        overshootLeft={false}
                                         containerStyle={{ borderRadius: radius.md, marginBottom: spacing.xs }}
                                     >
                                         <TouchableOpacity
@@ -392,7 +474,7 @@ const TransactionsScreen = () => {
                                             onPress={() => setSelectedTx(tx)}
                                             activeOpacity={0.7}
                                             onLongPress={() => {
-                                                Vibration.vibrate(60);
+                                                triggerHaptic(hapticsEnabled, 'impactMedium');
                                                 if (tx.relatedType === 'Debt') {
                                                     setInfoAlert({
                                                         visible: true,
@@ -607,7 +689,7 @@ const getStyles = (COLORS) => StyleSheet.create({
     ledgerCredit: { fontSize: 12, fontWeight: '700' },
     ledgerDebit: { fontSize: 12, fontWeight: '700' },
     archiveAction: {
-        backgroundColor: '#725149',
+        backgroundColor: '#ef4444',
         justifyContent: 'center',
         alignItems: 'center',
         width: 80,
@@ -620,6 +702,15 @@ const getStyles = (COLORS) => StyleSheet.create({
         fontWeight: '700',
         marginTop: 4
     },
+    deleteAction: {
+        backgroundColor: COLORS.error || '#ef4444',
+        justifyContent: 'center',
+        alignItems: 'center',
+        width: 80,
+        height: '100%',
+        borderRadius: radius.md,
+    },
+
     modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
     modalSheet: { borderTopLeftRadius: radius.xl, borderTopRightRadius: radius.xl, padding: spacing.lg, paddingBottom: 40, maxHeight: '80%' },
     modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: spacing.md },

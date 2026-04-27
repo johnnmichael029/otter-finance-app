@@ -5,6 +5,9 @@ const User = require('../models/userModel');
 const SavingsGoal = require('../models/savingsGoalModel');
 const SavingsTransfer = require('../models/savingsTransferModel');
 const Notification = require('../models/Notification');
+const Challenge = require('../models/challengeModel');
+const Debt = require('../models/debtModel');
+const DebtPayment = require('../models/debtPaymentModel');
 const { invalidatePrefixes } = require('../utils/cache');
 const { encrypt, decryptNote } = require('../utils/encryption');
 const mongoose = require('mongoose');
@@ -448,9 +451,10 @@ const createTransaction = async (req, res) => {
         invalidatePrefixes('transaction');
         invalidatePrefixes('savings');
 
-        // ── Feature #7: Budget Alerter ──────────────────────────────
+        // ── Feature #7: Budget Alerter & Challenge Tracking ─────────
         if (type === 'expense') {
             checkBudgetAlerts(req.userId, category, req.app.get('io'));
+            triggerNoSpendChallenge(req.userId, date || new Date(), req.app.get('io'));
         }
 
         const fullTransaction = await Transaction.findById(transaction._id)
@@ -514,27 +518,91 @@ const updateTransaction = async (req, res) => {
 // ─────────────────────────────────────────────────────────────────────────────
 const deleteTransaction = async (req, res) => {
     try {
-        const transaction = await Transaction.findOneAndDelete({
-            _id: req.params.id,
-            user: req.userId,
-        });
+        const transaction = await Transaction.findById(req.params.id);
+        if (!transaction) return res.status(404).json({ error: 'Transaction not found.' });
 
-        if (!transaction) {
-            return res.status(404).json({ error: 'Transaction not found.' });
+        // ── Block Debt Transaction Deletion ──
+        if (transaction.relatedType === 'Debt') {
+            return res.status(400).json({ error: 'Debt-related transactions cannot be deleted. They must remain in history to maintain accurate debt balances.' });
         }
 
-        // Block manual revert for Debt transactions
-        if (transaction.relatedType === 'Debt') {
-            return res.status(400).json({ error: 'Debt-related transactions cannot be reverted from history. Please manage them in the Debt screen.' });
+        // Authorization check: User must be owner OR participant in linked Goal/Debt
+        let isAuthorized = transaction.user.toString() === req.userId;
+
+        let goalObj = null;
+        if (transaction.relatedType === 'SavingsGoal' && transaction.relatedId) {
+            goalObj = await SavingsGoal.findOne({
+                _id: transaction.relatedId,
+                $or: [
+                    { user: req.userId },
+                    { "participants.user": req.userId, "participants.status": "accepted" }
+                ]
+            });
+            if (goalObj) isAuthorized = true;
+        }
+
+        if (!isAuthorized && transaction.relatedType === 'Debt' && transaction.relatedId) {
+            const debt = await Debt.findOne({
+                _id: transaction.relatedId,
+                $or: [{ user: req.userId }, { linkedUserId: req.userId }]
+            });
+            if (debt) isAuthorized = true;
+        }
+
+        if (!isAuthorized) return res.status(403).json({ error: 'Access denied.' });
+
+        const io = req.app.get('io');
+
+        // ── Feature: Debt Payment Reversal Sync ──
+        if (transaction.relatedType === 'Debt' && transaction.relatedId) {
+            const debt = await Debt.findById(transaction.relatedId);
+            if (debt) {
+                // 1. Revert principal
+                debt.amountPaid = Math.max(0, (debt.amountPaid || 0) - transaction.amount);
+                // 2. Update status
+                if (debt.amountPaid <= 0) debt.status = 'pending';
+                else if (debt.amountPaid < debt.amount) debt.status = 'partial';
+                await debt.save();
+
+                // 3. Find and delete the DebtPayment log
+                await DebtPayment.findOneAndDelete({
+                    transactionId: transaction._id
+                });
+
+
+                // 4. Sync linked debt if exists
+                if (debt.syncStatus === 'linked' && debt.linkedDebtId) {
+                    const friendDebt = await Debt.findById(debt.linkedDebtId);
+                    if (friendDebt) {
+                        friendDebt.amountPaid = Math.max(0, (friendDebt.amountPaid || 0) - transaction.amount);
+                        if (friendDebt.amountPaid <= 0) friendDebt.status = 'pending';
+                        else if (friendDebt.amountPaid < friendDebt.amount) friendDebt.status = 'partial';
+                        await friendDebt.save();
+
+                        // Delete friend's transaction too
+                        const friendTx = await Transaction.findOneAndDelete({
+                            user: friendDebt.user,
+                            relatedId: friendDebt._id,
+                            relatedType: 'Debt',
+                            amount: transaction.amount,
+                            createdAt: { $gte: new Date(transaction.createdAt.getTime() - 60000), $lte: new Date(transaction.createdAt.getTime() + 60000) }
+                        });
+
+                        if (friendTx && io) {
+                            io.to(`user:${friendDebt.user}`).emit('delete_transaction', { _id: friendTx._id });
+                        }
+                        if (io) io.to(`user:${friendDebt.user}`).emit('update_debt', friendDebt);
+                    }
+                }
+                if (io) io.to(`user:${debt.user}`).emit('update_debt', debt);
+                invalidatePrefixes('debt');
+            }
         }
 
         // ── Feature: Wallet Balance Reversal Sync (Smart Revert) ──
-        const io = req.app.get('io');
-        const user = await User.findById(req.userId);
-
         // 1. Revert Destination Wallet
         if (transaction.wallet) {
-            const wallet = await Wallet.findOne({ _id: transaction.wallet, userId: req.userId });
+            const wallet = await Wallet.findOne({ _id: transaction.wallet, userId: transaction.user });
             if (wallet) {
                 const isCredit = wallet.type === 'Credit';
                 const revAmount = transaction.walletAmount != null ? transaction.walletAmount : transaction.amount;
@@ -546,106 +614,101 @@ const deleteTransaction = async (req, res) => {
                     if (transaction.type === 'expense') wallet.balance += revAmount;
                     else wallet.balance -= revAmount;
                 }
-
                 if (!isCredit && wallet.balance < 0) wallet.balance = 0;
                 await wallet.save();
-                if (io) io.to(`user:${req.userId}`).emit('wallet_updated', wallet.toObject());
+                if (io) io.to(`user:${transaction.user}`).emit('wallet_updated', wallet.toObject());
             }
-        } else {
-            // Revert "HAND" (User Balance) - Hand balance is dynamically aggregated.
-            // It will be re-calculated below and emitted.
         }
 
-        // 2. Revert Source Wallet (for Transfers/Income Sources)
+        // 2. Revert Source Wallet (for Transfers)
         if (transaction.sourceWallet) {
-            const sWallet = await Wallet.findOne({ _id: transaction.sourceWallet, userId: req.userId });
+            const sWallet = await Wallet.findOne({ _id: transaction.sourceWallet, userId: transaction.user });
             if (sWallet) {
                 const srcRevAmount = transaction.sourceWalletAmount != null ? transaction.sourceWalletAmount : transaction.amount;
                 if (sWallet.type === 'Credit') {
-                    sWallet.balance -= srcRevAmount;
-                    // Credit balance represents debt, but in this specific revert we cap at 0 to avoid negative debt if it got misaligned
-                    if (sWallet.balance < 0) sWallet.balance = 0;
+                    if (transaction.type === 'expense') sWallet.balance -= srcRevAmount;
+                    else sWallet.balance += srcRevAmount;
                 } else {
-                    sWallet.balance += srcRevAmount;
+                    if (transaction.type === 'expense') sWallet.balance += srcRevAmount;
+                    else sWallet.balance -= srcRevAmount;
                 }
+                if (sWallet.type !== 'Credit' && sWallet.balance < 0) sWallet.balance = 0;
                 await sWallet.save();
-                if (io) io.to(`user:${req.userId}`).emit('wallet_updated', sWallet.toObject());
+                if (io) io.to(`user:${transaction.user}`).emit('wallet_updated', sWallet.toObject());
             }
-        } else if (transaction.sourceWalletAmount || transaction.paymentSource === 'HAND') {
-            // This would be the case if "HAND" was used as a source wallet
-            // Dynamically computed, no need to modify user.balance
         }
 
-        // 3. Revert Savings Goal (if linked)
+        // 3. Revert Savings Goal
         if (transaction.relatedType === 'SavingsGoal' && transaction.relatedId) {
-            const goal = await SavingsGoal.findOne({ _id: transaction.relatedId, user: req.userId });
+            const goal = goalObj || await SavingsGoal.findById(transaction.relatedId);
             if (goal) {
-                // If it was an expense (to savings), we remove money from goal
-                // If it was a transfer (internal), we also remove money from the target goal
                 if (transaction.type === 'expense' || transaction.type === 'transfer') {
                     goal.currentAmount = Math.max(0, goal.currentAmount - transaction.amount);
                 } else {
-                    // It was income (withdrawal), so we put money back into the goal
                     goal.currentAmount += transaction.amount;
                 }
                 await goal.save();
-
-                // Delete associated SavingsTransfer record to clean up history
                 await SavingsTransfer.deleteOne({ relatedTransaction: transaction._id });
 
                 if (io) {
-                    io.to(`user:${req.userId}`).emit('update_savings_goal', goal);
-                    io.to(`user:${req.userId}`).emit('delete_savings_transfer', { goalId: goal._id, amount: transaction.amount });
+                    io.to(`user:${goal.user}`).emit('update_savings_goal', goal);
+                    goal.participants.forEach(p => io.to(`user:${p.user}`).emit('update_savings_goal', goal));
+                    io.to(`user:${transaction.user}`).emit('delete_savings_transfer', { goalId: goal._id, amount: transaction.amount });
                 }
             }
         }
 
-        // 4. Revert Source Savings Goal (if linked)
+        // 4. Revert Source Savings Goal
         if (transaction.sourceRelatedType === 'SavingsGoal' && transaction.sourceRelatedId) {
-            const sGoal = await SavingsGoal.findOne({ _id: transaction.sourceRelatedId, user: req.userId });
+            const sGoal = await SavingsGoal.findById(transaction.sourceRelatedId);
             if (sGoal) {
-                // Since this was a source goal, money ALWAYS left it originally.
-                // Reverting it means we MUST add it back, regardless of transaction type.
                 sGoal.currentAmount += transaction.amount;
                 await sGoal.save();
-
-                // Delete associated SavingsTransfer record to clean up history
                 await SavingsTransfer.deleteOne({ relatedTransaction: transaction._id });
 
                 if (io) {
-                    io.to(`user:${req.userId}`).emit('update_savings_goal', sGoal);
-                    io.to(`user:${req.userId}`).emit('delete_savings_transfer', { goalId: sGoal._id, amount: transaction.amount });
+                    io.to(`user:${sGoal.user}`).emit('update_savings_goal', sGoal);
+                    sGoal.participants.forEach(p => io.to(`user:${p.user}`).emit('update_savings_goal', sGoal));
+                    io.to(`user:${transaction.user}`).emit('delete_savings_transfer', { goalId: sGoal._id, amount: transaction.amount });
                 }
             }
         }
 
-        // Re-calculate and emit dynamic HAND balance
-        const handAgg = await Transaction.aggregate([
-            { $match: { user: new mongoose.Types.ObjectId(req.userId), wallet: null } },
-            { $group: { _id: '$type', total: { $sum: '$amount' } } }
-        ]);
-        let handBalance = 0;
-        handAgg.forEach(r => {
-            if (r._id === 'income') handBalance += r.total;
-            if (r._id === 'expense') handBalance -= r.total;
-        });
+        // Delete the transaction record
+        await transaction.deleteOne();
 
-        // Subtract money transferred from HAND to a physical wallet
-        const handDeductionsAgg = await Transaction.aggregate([
-            { $match: { user: new mongoose.Types.ObjectId(req.userId), paymentSource: 'HAND', wallet: { $ne: null } } },
-            { $group: { _id: null, total: { $sum: '$amount' } } }
-        ]);
-        if (handDeductionsAgg.length > 0) {
-            handBalance -= handDeductionsAgg[0].total;
+        // Re-calculate and emit dynamic HAND balance for the transaction owner
+        const emitHandBalance = async (userId) => {
+            const handAgg = await Transaction.aggregate([
+                { $match: { user: new mongoose.Types.ObjectId(userId), wallet: null } },
+                { $group: { _id: '$type', total: { $sum: '$amount' } } }
+            ]);
+            let handBalance = 0;
+            handAgg.forEach(r => {
+                if (r._id === 'income') handBalance += r.total;
+                if (r._id === 'expense') handBalance -= r.total;
+            });
+            const handDeductionsAgg = await Transaction.aggregate([
+                { $match: { user: new mongoose.Types.ObjectId(userId), paymentSource: 'HAND', wallet: { $ne: null } } },
+                { $group: { _id: null, total: { $sum: '$amount' } } }
+            ]);
+            if (handDeductionsAgg.length > 0) handBalance -= handDeductionsAgg[0].total;
+            if (io) io.to(`user:${userId}`).emit('wallet_updated', { _id: 'main', balance: handBalance });
+        };
+
+        await emitHandBalance(transaction.user);
+        if (req.userId !== transaction.user.toString()) {
+            await emitHandBalance(req.userId);
         }
-
-        if (io) io.to(`user:${req.userId}`).emit('wallet_updated', { _id: 'main', balance: handBalance });
 
         invalidatePrefixes('transaction');
         invalidatePrefixes('savings');
 
         if (io) {
-            io.to(`user:${req.userId}`).emit('delete_transaction', { _id: transaction._id });
+            io.to(`user:${transaction.user}`).emit('delete_transaction', { _id: transaction._id });
+            if (req.userId !== transaction.user.toString()) {
+                io.to(`user:${req.userId}`).emit('delete_transaction', { _id: transaction._id });
+            }
         }
 
         res.json({ message: 'Transaction deleted successfully.' });
@@ -654,6 +717,7 @@ const deleteTransaction = async (req, res) => {
         res.status(500).json({ error: 'Failed to delete transaction.' });
     }
 };
+
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  GET /api/transactions/analytics
@@ -972,17 +1036,121 @@ const checkBudgetAlerts = async (userId, categoryName, io) => {
     }
 };
 
+/**
+ * Helper: No-Spend Challenge Tracker
+ * Runs in background after an expense is created
+ */
+const triggerNoSpendChallenge = async (userId, txDateStr, io) => {
+    try {
+        const txDate = new Date(txDateStr);
+        const dayStart = new Date(txDate.getFullYear(), txDate.getMonth(), txDate.getDate());
+        
+        // Find active no-spend challenges
+        const challenges = await Challenge.find({
+            type: 'no-spend',
+            status: 'active',
+            $or: [
+                { user: userId },
+                { "participants.user": userId, "participants.status": 'accepted' }
+            ]
+        });
+
+        for (const challenge of challenges) {
+            const isOwner = challenge.user.toString() === userId.toString();
+            let changed = false;
+
+            if (isOwner) {
+                const fails = challenge.progressData?.failedDates || [];
+                // Check if this date is already logged
+                const alreadyLogged = fails.some(d => {
+                    const fd = new Date(d);
+                    return fd.getFullYear() === dayStart.getFullYear() &&
+                           fd.getMonth() === dayStart.getMonth() &&
+                           fd.getDate() === dayStart.getDate();
+                });
+
+                if (!alreadyLogged) {
+                    fails.push(dayStart.toISOString());
+                    challenge.progressData = { ...challenge.progressData, failedDates: fails };
+                    changed = true;
+                }
+            } else {
+                const pIndex = challenge.participants.findIndex(p => p.user.toString() === userId.toString());
+                if (pIndex !== -1) {
+                    const pData = challenge.participants[pIndex].progressData || { failedDates: [] };
+                    const fails = pData.failedDates || [];
+                    const alreadyLogged = fails.some(d => {
+                        const fd = new Date(d);
+                        return fd.getFullYear() === dayStart.getFullYear() &&
+                               fd.getMonth() === dayStart.getMonth() &&
+                               fd.getDate() === dayStart.getDate();
+                    });
+
+                    if (!alreadyLogged) {
+                        fails.push(dayStart.toISOString());
+                        challenge.participants[pIndex].progressData = { ...pData, failedDates: fails };
+                        changed = true;
+                    }
+                }
+            }
+
+            if (changed) {
+                // Remove required participant check from save
+                await challenge.save();
+                
+                await challenge.populate('user', 'name otterTag avatarUrl');
+                await challenge.populate('participants.user', 'name otterTag avatarUrl');
+                
+                if (io) {
+                    io.to(`user:${challenge.user._id}`).emit('update_challenge', challenge);
+                    challenge.participants.forEach(p => {
+                        io.to(`user:${p.user._id}`).emit('update_challenge', challenge);
+                    });
+                }
+            }
+        }
+    } catch (e) {
+        console.error('[CHALLENGE_TRACKER] Error:', e.message);
+    }
+};
+
 // ─────────────────────────────────────────────────────────────────────────────
 //  PATCH /api/transactions/:id/archive
 //  Toggle isArchived status
 // ─────────────────────────────────────────────────────────────────────────────
 const archiveTransaction = async (req, res) => {
     try {
-        const transaction = await Transaction.findOne({ _id: req.params.id, user: req.userId });
+        const transaction = await Transaction.findById(req.params.id);
+        if (!transaction) return res.status(404).json({ error: 'Transaction not found.' });
 
-        if (!transaction) {
-            return res.status(404).json({ error: 'Transaction not found.' });
+        // ── Block Debt Transaction Archiving ──
+        if (transaction.relatedType === 'Debt') {
+            return res.status(400).json({ error: 'Debt-related transactions cannot be archived. They must remain in your main history for balance integrity.' });
         }
+
+        // Authorization check: User must be owner OR participant in linked Goal/Debt
+        let isAuthorized = transaction.user.toString() === req.userId;
+
+        if (!isAuthorized && transaction.relatedType === 'SavingsGoal' && transaction.relatedId) {
+            const goal = await SavingsGoal.findOne({
+                _id: transaction.relatedId,
+                $or: [
+                    { user: req.userId },
+                    { "participants.user": req.userId, "participants.status": "accepted" }
+                ]
+            });
+            if (goal) isAuthorized = true;
+        }
+
+        if (!isAuthorized && transaction.relatedType === 'Debt' && transaction.relatedId) {
+            const debt = await Debt.findOne({
+                _id: transaction.relatedId,
+                $or: [{ user: req.userId }, { linkedUserId: req.userId }]
+            });
+            if (debt) isAuthorized = true;
+        }
+
+        if (!isAuthorized) return res.status(403).json({ error: 'Access denied.' });
 
         transaction.isArchived = !transaction.isArchived;
         await transaction.save();
@@ -996,6 +1164,13 @@ const archiveTransaction = async (req, res) => {
                 _id: transaction._id, 
                 isArchived: transaction.isArchived 
             });
+            // If user is not the creator, also notify the creator
+            if (transaction.user.toString() !== req.userId) {
+                io.to(`user:${transaction.user}`).emit('transaction_archived', { 
+                    _id: transaction._id, 
+                    isArchived: transaction.isArchived 
+                });
+            }
         }
 
         res.json({ message: transaction.isArchived ? 'Archived' : 'Restored', isArchived: transaction.isArchived });
@@ -1005,13 +1180,19 @@ const archiveTransaction = async (req, res) => {
     }
 };
 
+
 // ─────────────────────────────────────────────────────────────────────────────
 //  DELETE /api/transactions/archive/empty
 //  Delete all archived transactions permanently
 // ─────────────────────────────────────────────────────────────────────────────
 const emptyArchives = async (req, res) => {
     try {
-        await Transaction.deleteMany({ user: req.userId, isArchived: true });
+        // Delete only non-debt transactions from the archive
+        await Transaction.deleteMany({ 
+            user: req.userId, 
+            isArchived: true,
+            relatedType: { $ne: 'Debt' } 
+        });
 
         invalidatePrefixes('transaction');
         invalidatePrefixes('savings');

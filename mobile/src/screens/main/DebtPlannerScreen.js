@@ -9,6 +9,7 @@ import { getDebts, logDebtPayment } from '../../api/api';
 import { connectSocket, getSocket } from '../../utils/socket';
 import BottomSheetModal from '../../components/BottomSheetModal';
 import CustomAlertModal from '../../components/CustomAlertModal';
+import { formatCurrency } from '../../utils/formatters';
 
 const { width } = Dimensions.get('window');
 
@@ -193,8 +194,6 @@ export default function DebtPlannerScreen({ navigation }) {
 
     const activeSim = activeStrategy === 'snowball' ? snowballSim : avalancheSim;
 
-    // Format helpers
-    const formatCurrency = (val) => new Intl.NumberFormat('en-PH', { style: 'currency', currency: 'PHP' }).format(val);
     const formatMonths = (m) => {
         if (m === "Never") return "Never (30+ yrs)";
         if (m >= 360) return "Never (30+ yrs)";

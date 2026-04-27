@@ -2,6 +2,7 @@ import React from 'react';
 import { View, Text, StyleSheet, Modal, TouchableOpacity, ActivityIndicator } from 'react-native';
 import { Ionicons, Feather } from '@expo/vector-icons';
 import { useTheme } from '../context/ThemeContext';
+import { IconRenderer } from '../utils/formatters';
 
 const CustomAlertModal = ({
     visible,
@@ -18,6 +19,9 @@ const CustomAlertModal = ({
     hideButtons = false,
     extraActions, // Array of { label, icon, onPress, danger }
     isLoading = false, // NEW: show spinner and disable confirm button while API is working
+    iconName,
+    iconFamily,
+    iconColor,
 }) => {
     const COLORS = useTheme(state => state.COLORS);
     const styles = getStyles(COLORS);
@@ -60,8 +64,17 @@ const CustomAlertModal = ({
                     />
                 )}
                 <View style={styles.alertBox}>
-                    <View style={[styles.iconWrapper, { backgroundColor: icon.color + '20' }]}>
-                        <Ionicons name={icon.name} size={40} color={icon.color} />
+                    <View style={[styles.iconWrapper, { backgroundColor: (iconColor || icon.color) + '20' }]}>
+                        {iconName ? (
+                            <IconRenderer 
+                                name={iconName} 
+                                family={iconFamily} 
+                                size={40} 
+                                color={iconColor || icon.color} 
+                            />
+                        ) : (
+                            <Ionicons name={icon.name} size={40} color={icon.color} />
+                        )}
                     </View>
 
                     <Text style={styles.title}>{title}</Text>

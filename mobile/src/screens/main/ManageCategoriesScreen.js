@@ -13,34 +13,11 @@ import { spacing, radius, shadow } from '../../theme/colors';
 import BottomSheetModal from '../../components/BottomSheetModal';
 import CustomAlertModal from '../../components/CustomAlertModal';
 import Skeleton from '../../components/Skeleton';
+import { IconRenderer, FALLBACK_ICONS } from '../../utils/formatters';
 
-const ICONS = Array.from(new Set([
-    'briefcase', 'trending-up', 'gift', 'plus-circle', 'coffee', 'truck', 'shopping-bag', 'file-text',
-    'heart', 'tv', 'wifi', 'home', 'monitor', 'smartphone', 'headphones', 'book', 'pen-tool',
-    'aperture', 'camera', 'music', 'map', 'navigation', 'compass', 'award', 'star', 'sun', 'moon', 'zap',
-    'tag', 'speaker', 'watch', 'anchor', 'box', 'cloud', 'cpu', 'database', 'droplet', 'feather',
-    'flag', 'globe', 'image', 'key', 'layers', 'mic', 'package', 'paperclip',
-    'phone', 'printer', 'radio', 'scissors', 'shield', 'tool', 'trash', 'umbrella', 'unlock', 'user', 'video',
-    'smile', 'piggy-bank-outline', 'account-cash', 'jeepney', 'car', 'train-outline', 'boat-outline', 'hospital', 'noodles', 'egg-outline',
-    'egg-fried', 'cup', 'game-controller-outline', 'controller-classic-outline', 'rice', 'steam'
-]));
+// Use global FALLBACK_ICONS instead of local ICONS array
+const ICONS = FALLBACK_ICONS;
 
-const DynamicIcon = ({ name, size, color, style }) => {
-    const MCI_ICONS = ['piggy-bank-outline', 'account-cash', 'jeepney', 'car', 'noodles', 'egg-fried', 'cup',
-        'controller-classic-outline', 'rice'];
-    const ION_ICONS = ['train-outline', 'boat-outline', 'egg-outline', 'game-controller-outline'];
-    const FA5_ICONS = ['hospital', 'steam'];
-    if (MCI_ICONS.includes(name)) {
-        return <MaterialCommunityIcons name={name} size={size} color={color} style={style} />;
-    }
-    else if (ION_ICONS.includes(name)) {
-        return <Ionicons name={name} size={size} color={color} style={style} />;
-    }
-    else if (FA5_ICONS.includes(name)) {
-        return <FontAwesome5 name={name} size={size} color={color} style={style} />;
-    }
-    return <Feather name={name} size={size} color={color} style={style} />;
-};
 
 const COLORS_PALETTE = [
     '#ef4444', '#f97316', '#f59e0b', '#84cc16', '#22c55e', '#10b981', '#14b8a6', '#06b6d4',
@@ -153,7 +130,7 @@ export default function ManageCategoriesScreen({ navigation }) {
             <Swipeable renderRightActions={(prog, drag) => renderRightActions(prog, drag, item)} friction={1} overshootRight={false} containerStyle={{ marginBottom: spacing.md }}>
                 <TouchableOpacity style={[styles.card, { backgroundColor: COLORS.surface }]} activeOpacity={0.8} onPress={() => openEditModal(item)}>
                     <View style={[styles.iconBox, { backgroundColor: item.color + '20' }]}>
-                        <DynamicIcon name={item.icon || 'circle'} size={22} color={item.color} />
+                        <IconRenderer name={item.icon || 'circle'} size={22} color={item.color} />
                     </View>
                     <View style={{ flex: 1 }}>
                         <Text style={[styles.cardTitle, { color: COLORS.text }]}>{item.name}</Text>
@@ -215,7 +192,7 @@ export default function ManageCategoriesScreen({ navigation }) {
                         {/* Live Preview Pill */}
                         <View style={{ alignItems: 'center', marginBottom: spacing.lg }}>
                             <View style={[styles.previewPill, { backgroundColor: form.color + '20', borderColor: form.color }]}>
-                                <DynamicIcon name={form.icon} size={24} color={form.color} />
+                                <IconRenderer name={form.icon} size={24} color={form.color} />
                                 <Text style={[styles.previewText, { color: form.color }]}>{form.name || 'Category Name'}</Text>
                             </View>
                         </View>
@@ -248,7 +225,7 @@ export default function ManageCategoriesScreen({ navigation }) {
                                         borderColor: form.icon === ix ? COLORS.primary : COLORS.border,
                                         borderWidth: 1.5
                                     }]}>
-                                    <DynamicIcon name={ix} size={18} color={form.icon === ix ? COLORS.primary : COLORS.textMuted} />
+                                    <IconRenderer name={ix} size={18} color={form.icon === ix ? COLORS.primary : COLORS.textMuted} />
                                 </TouchableOpacity>
                             ))}
                         </View>

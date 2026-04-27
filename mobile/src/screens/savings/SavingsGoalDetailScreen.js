@@ -10,28 +10,14 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { API_BASE } from '../../store/authStore';
 import { useTheme } from '../../context/ThemeContext';
 import { useAuth } from '../../context/AuthContext';
-import { getSavingsGoals, deleteSavingsGoal, getSavingsTransfers, completeSavingsGoal } from '../../api/api';
+import { getSavingsGoals, deleteSavingsGoal, getSavingsTransfers, completeSavingsGoal, updateSavingsGoal } from '../../api/api';
 import BottomSheetModal from '../../components/BottomSheetModal';
 import { spacing, radius, shadow } from '../../theme/colors';
-import { getSocket, connectSocket } from '../../utils/socket';
 import CustomAlertModal from '../../components/CustomAlertModal';
 import { useFinanceStore } from '../../store/financeStore';
+import { formatCurrency, formatDate, IconRenderer } from '../../utils/formatters';
 
-const isIonicon = (name) => name?.includes('-outline') || name?.includes('-sharp');
 
-const IconRenderer = ({ name, family, size, color }) => {
-    const hasFamily = family && family !== 'feather';
-    const useIonicons = (hasFamily && (family === 'ionicons' || family === 'Ionicons')) || (!hasFamily && isIonicon(name));
-    if (useIonicons) {
-        return <Ionicons name={name} size={size} color={color} />;
-    }
-    return <Feather name={name} size={size} color={color} />;
-};
-
-const formatCurrency = (amount, currency = 'PHP') =>
-    new Intl.NumberFormat('en-PH', { style: 'currency', currency }).format(amount);
-
-const formatDate = (d) => d ? new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', year: 'numeric' }).format(new Date(d)) : null;
 
 const getDaysLeft = (deadline) => {
     if (!deadline) return null;
@@ -112,32 +98,6 @@ export default function SavingsGoalDetailScreen({ route, navigation }) {
 
     useEffect(() => { load(); }, [load]);
 
-    useEffect(() => {
-        if (!userInfo?._id) return;
-        connectSocket(userInfo._id);
-        const socket = getSocket();
-
-        const handleUpdate = () => {
-            debouncedRefreshSavings();
-            debouncedRefreshSummary();
-            // Still need to refresh local transfers history manually
-            load();
-        };
-
-        socket.on('update_savings_goal', handleUpdate);
-        socket.on('new_savings_transfer', handleUpdate);
-        socket.on('delete_savings_goal', (data) => {
-            if (data._id === initialGoal._id && navigation.isFocused()) {
-                if (navigation.canGoBack()) navigation.goBack();
-            }
-        });
-
-        return () => {
-            socket.off('update_savings_goal', handleUpdate);
-            socket.off('new_savings_transfer', handleUpdate);
-            socket.off('delete_savings_goal');
-        };
-    }, [userInfo?._id, initialGoal._id, navigation]);
 
     // Guard: goal may be briefly undefined during navigation transitions
     const safeGoal = goal || initialGoal;
@@ -158,7 +118,17 @@ export default function SavingsGoalDetailScreen({ route, navigation }) {
                 message: mode === 'spend'
                     ? `Awesome! "${goal.name}" has been recorded as a successful expense.`
                     : `Done! Your savings from "${goal.name}" are back in your wallet.`,
-                type: 'success'
+                type: 'success',
+                onConfirm: async () => {
+                    setAlertConfig(p => ({ ...p, visible: false }));
+                    try {
+                        await updateSavingsGoal(goal._id, { isArchived: true });
+                        useFinanceStore.getState().refreshAll(true);
+                        navigation.navigate('SavingsArchive');
+                    } catch (err) {
+                        console.warn('Auto-archive failed:', err);
+                    }
+                }
             });
         } catch (e) {
             setAlertConfig({
@@ -185,6 +155,8 @@ export default function SavingsGoalDetailScreen({ route, navigation }) {
             onConfirm: async () => {
                 setAlertConfig(p => ({ ...p, visible: false }));
                 await deleteSavingsGoal(goal._id);
+                // Refresh store immediately so the goal list is updated when we go back
+                useFinanceStore.getState().refreshAll(true);
                 if (navigation.canGoBack()) navigation.goBack();
             }
         });
@@ -225,7 +197,7 @@ export default function SavingsGoalDetailScreen({ route, navigation }) {
                 </View>
             </LinearGradient>
 
-            {pct >= 100 && (!goal.isCompleted || goal.currentAmount > 0) && (
+            {pct >= 100 && !goal.isCompleted && (
                 <TouchableOpacity
                     onPress={handleComplete}
                     style={[styles.completeBtn, { borderStyle: 'dashed', borderWidth: 2, borderColor: '#22c55e' }]}
@@ -259,29 +231,26 @@ export default function SavingsGoalDetailScreen({ route, navigation }) {
                         <Text style={[styles.infoVal, { color: COLORS.text }]}>{formatDate(goal.deadline) || 'No deadline'}</Text>
                     </View>
                 </View>
-
-                {(!goal.isCompleted || goal.currentAmount > 0) ? (
+                {!goal.isCompleted && !goal.isArchived ? (
                     <View style={styles.actionRow}>
-                        {!goal.isCompleted && (
-                            <TouchableOpacity
-                                style={[styles.actionBtn, { backgroundColor: COLORS.primary }]}
-                                onPress={() => navigation.navigate('SavingsTransfer', { goal, direction: 'to_savings', fromSavings: true })}
-                            >
-                                <Feather name="arrow-down-circle" size={18} color="#fff" />
-                                <Text style={styles.actionBtnText}>Add Money</Text>
-                            </TouchableOpacity>
-                        )}
-                        {/* Only owner can withdraw from shared goal */}
+                        <TouchableOpacity
+                            style={[styles.actionBtn, { backgroundColor: COLORS.primary }]}
+                            onPress={() => navigation.navigate('SavingsTransfer', { goal, direction: 'to_savings', fromSavings: true })}
+                        >
+                            <Feather name="arrow-down-circle" size={18} color="#fff" />
+                            <Text style={styles.actionBtnText}>Add Money</Text>
+                        </TouchableOpacity>
+
                         {(goal.user?._id === userInfo._id || goal.user === userInfo._id) ? (
                             <TouchableOpacity
-                                style={[goal.isCompleted ? styles.actionBtn : styles.actionBtnOutline, { backgroundColor: goal.isCompleted ? COLORS.primary : 'transparent', borderColor: COLORS.primary, marginLeft: !goal.isCompleted ? spacing.md : 0 }]}
+                                style={[styles.actionBtnOutline, { borderColor: COLORS.primary, marginLeft: spacing.md }]}
                                 onPress={() => navigation.navigate('SavingsTransfer', { goal, direction: 'from_savings', fromSavings: true })}
                             >
-                                <Feather name="arrow-up-circle" size={18} color={goal.isCompleted ? '#fff' : COLORS.primary} />
-                                <Text style={[styles.actionBtnText, { color: goal.isCompleted ? '#fff' : COLORS.primary }]}>Withdraw</Text>
+                                <Feather name="arrow-up-circle" size={18} color={COLORS.primary} />
+                                <Text style={[styles.actionBtnText, { color: COLORS.primary }]}>Withdraw</Text>
                             </TouchableOpacity>
                         ) : (
-                            <View style={[styles.actionBtnDisabled, { marginLeft: !goal.isCompleted ? spacing.md : 0, borderColor: COLORS.border, borderWidth: 1 }]}>
+                            <View style={[styles.actionBtnDisabled, { marginLeft: spacing.md, borderColor: COLORS.border, borderWidth: 1 }]}>
                                 <Feather name="lock" size={16} color={COLORS.textMuted} />
                                 <Text style={[styles.actionBtnText, { color: COLORS.textMuted }]}>Withdraw</Text>
                             </View>
@@ -291,8 +260,12 @@ export default function SavingsGoalDetailScreen({ route, navigation }) {
                     <View style={[styles.archivedBanner, { backgroundColor: COLORS.surface, borderColor: COLORS.border }]}>
                         <View style={styles.archivedIconBg}><Feather name="award" size={22} color={COLORS.primary} /></View>
                         <View style={{ flex: 1 }}>
-                            <Text style={[styles.archivedTitle, { color: COLORS.text }]}>Goal Finalized! 🎉</Text>
-                            <Text style={[styles.archivedSub, { color: COLORS.textMuted }]}>This goal has been successfully completed and all funds processed.</Text>
+                            <Text style={[styles.archivedTitle, { color: COLORS.text }]}>{goal.isCompleted ? 'Goal Finalized! 🎉' : 'Goal Archived 🦦'}</Text>
+                            <Text style={[styles.archivedSub, { color: COLORS.textMuted }]}>
+                                {goal.isCompleted
+                                    ? 'This goal has been successfully completed and all funds processed.'
+                                    : 'This goal is currently archived. You can restore it anytime from the Completed Goals section.'}
+                            </Text>
                         </View>
                     </View>
                 )}

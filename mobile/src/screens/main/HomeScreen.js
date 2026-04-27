@@ -3,25 +3,30 @@ import {
     View, Text, ScrollView, StyleSheet, Image,
     TouchableOpacity, RefreshControl, ActivityIndicator, Animated,
     Modal, TouchableWithoutFeedback, BackHandler, ToastAndroid, Platform,
-    Vibration, LayoutAnimation, UIManager
+    LayoutAnimation, UIManager
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
-import { useAuth } from '../../context/AuthContext';
 import { useTheme } from '../../context/ThemeContext';
+import { useAuth } from '../../context/AuthContext';
+import { useSecurity } from '../../context/SecurityContext';
+import { useFinanceStore } from '../../store/financeStore';
 import { API_BASE } from '../../store/authStore';
 import { Feather, MaterialCommunityIcons, Ionicons } from '@expo/vector-icons';
-import { getTransactionSummary, getTransactions, getSavingsGoals, getDebts, getNotifications, deleteTransaction, getFriendRequests } from '../../api/api';
+import { getTransactionSummary, getTransactions, getSavingsGoals, getDebts, getNotifications, deleteTransaction, getFriendRequests, getGroupWallets } from '../../api/api';
 import { spacing, radius, typography, shadow, colors } from '../../theme/colors';
 import CustomAlertModal from '../../components/CustomAlertModal';
 import Skeleton from '../../components/Skeleton';
 import OnboardingTour from '../../components/OnboardingTour';
 import { connectSocket, disconnectSocket, getSocket } from '../../utils/socket';
-import { useUIStore } from '../../store/uiStore';
-import { useFinanceStore } from '../../store/financeStore';
 import { updateWidgetBalance } from '../../utils/widget';
 import { PieChart } from 'react-native-chart-kit';
+import Svg, { Circle } from 'react-native-svg';
+import { formatCurrency, formatDateTime, getIconName, getIconColor, IconRenderer } from '../../utils/formatters';
+import { triggerHaptic } from '../../utils/haptics';
+import { checkAchievements } from '../../utils/achievementUtils';
+import { calculateForecast } from '../../utils/forecastUtils';
 
 if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
     UIManager.setLayoutAnimationEnabledExperimental(true);
@@ -29,79 +34,17 @@ if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental
 
 const otterIcon = require('../../../assets/icon/welcomeOtter.png');
 
-const formatCurrency = (amount, currency = 'PHP') => {
-    try {
-        return new Intl.NumberFormat('en-US', {
-            style: 'currency',
-            currency: currency || 'PHP',
-            minimumFractionDigits: 2,
-            maximumFractionDigits: 2
-        }).format(amount || 0);
-    } catch (e) {
-        // Fallback for environments with limited Intl support
-        const symbol = currency === 'PHP' ? '₱' : '$';
-        return `${symbol}${Number(amount).toFixed(2)}`;
-    }
-};
 
-const formatDateTime = (dateString) => {
-    if (!dateString) return '';
-    return new Intl.DateTimeFormat('en-US', {
-        month: 'short', day: 'numeric',
-        hour: 'numeric', minute: '2-digit',
-    }).format(new Date(dateString));
-};
-
-const FALLBACK_ICONS = [
-    'briefcase', 'trending-up', 'gift', 'plus-circle', 'coffee', 'truck', 'shopping-bag', 'file-text',
-    'heart', 'tv', 'wifi', 'home', 'monitor', 'smartphone', 'headphones', 'book', 'pen-tool',
-    'aperture', 'camera', 'music', 'map', 'navigation', 'compass', 'award', 'star', 'sun', 'moon', 'zap',
-    'tag', 'speaker', 'watch', 'anchor', 'box', 'cloud', 'cpu', 'database', 'droplet', 'feather',
-    'flag', 'globe', 'image', 'key', 'layers', 'mic', 'package', 'paperclip',
-    'phone', 'printer', 'radio', 'scissors', 'shield', 'tool', 'trash', 'umbrella', 'unlock', 'user', 'video',
-    'smile', 'piggy-bank-outline', 'account-cash', 'jeepney', 'car', 'train-outline', 'boat-outline', 'hospital', 'noodles', 'egg-outline',
-    'egg-fried', 'cup', 'game-controller-outline', 'controller-classic-outline', 'rice', 'steam'
-];
-
-const IconRenderer = ({ name, size, color, style }) => {
-    const MCI_ICONS = ['piggy-bank-outline', 'account-cash', 'jeepney', 'car', 'noodles', 'egg-fried', 'cup',
-        'controller-classic-outline', 'piggy-bank'
-    ];
-    const ION_ICONS = ['train-outline', 'boat-outline', 'egg-outline', 'game-controller-outline'];
-    const FA5_ICONS = ['hospital'];
-    if (MCI_ICONS.includes(name)) {
-        return <MaterialCommunityIcons name={name} size={size} color={color} style={style} />;
-    }
-    if (ION_ICONS.includes(name)) {
-        return <Ionicons name={name} size={size} color={color} style={style} />;
-    }
-    if (FA5_ICONS.includes(name)) {
-        return <FontAwesome5 name={name} size={size} color={color} style={style} />;
-    }
-    return <Feather name={name} size={size} color={color} style={style} />;
-};
-
-
-const getIconName = (tx) => {
-    const cat = (tx.category || '').toLowerCase();
-    if (cat === 'savings' || cat === 'savings interest' || cat === 'savings balance') return 'piggy-bank';
-    if (cat === 'shopping') return 'shopping-cart';
-    return tx.categoryIcon || FALLBACK_ICONS[tx.category] || FALLBACK_ICONS[tx.category.charAt(0).toUpperCase() + tx.category.slice(1).toLowerCase()] || 'circle';
-};
-const getIconColor = (tx, COLORS) => {
-    const cat = (tx.category || '').toLowerCase();
-    if (cat === 'shopping') return '#E91E8C';
-    return tx.categoryColor || (tx.type === 'income' ? COLORS.income : COLORS.expense);
-};
 
 export default function HomeScreen({ navigation }) {
     const userInfo = useAuth(state => state.userInfo);
     const userToken = useAuth(state => state.userToken);
     const logout = useAuth(state => state.logout);
+    const hapticsEnabled = useAuth(state => state.hapticsEnabled);
     const COLORS = useTheme(state => state.COLORS);
     const toggleTheme = useTheme(state => state.toggleTheme);
     const isDarkMode = useTheme(state => state.isDarkMode);
-    const setIsSavingsMode = useUIStore(state => state.setIsSavingsMode);
+    const setIsSavingsMode = useTheme(state => state.setIsSavingsMode);
 
     // ── UI State ──
     const [loading, setLoading] = useState(true);
@@ -111,10 +54,9 @@ export default function HomeScreen({ navigation }) {
     const [loadingMore, setLoadingMore] = useState(false);
     const [logoutModalVisible, setLogoutModalVisible] = useState(false);
     const [dateRange, setDateRange] = useState('Week');
-    const [unreadNotifCount, setUnreadNotifCount] = useState(0);
-    const [pendingRequestsCount, setPendingRequestsCount] = useState(0);
     const [lastBackPressed, setLastBackPressed] = useState(0);
     const [chartView, setChartView] = useState(0); // 0 = Bar, 1 = Expense, 2 = Income
+    const [achievementModal, setAchievementModal] = useState({ visible: false, badge: null });
     const slideAnim = useRef(new Animated.Value(dateRange === 'Day' ? 0 : dateRange === 'Week' ? 1 : 2)).current;
     const statsSlideAnim = useRef(new Animated.Value(0)).current;
     const statsOpacityAnim = useRef(new Animated.Value(1)).current;
@@ -173,7 +115,7 @@ export default function HomeScreen({ navigation }) {
             statsOpacityAnim.setValue(0);
             chartSlideAnim.setValue(direction * SLIDE_DISTANCE);
             chartOpacityAnim.setValue(0);
-            
+
             // Slide both into center
             Animated.parallel([
                 Animated.spring(statsSlideAnim, {
@@ -225,6 +167,13 @@ export default function HomeScreen({ navigation }) {
     const recent = useFinanceStore(state => state.transactions);
     const isLoadingSummary = useFinanceStore(state => state.isLoadingSummary);
     const isLoadingTransactions = useFinanceStore(state => state.isLoadingTransactions);
+    const addAchievement = useFinanceStore(state => state.addAchievement);
+    const achievements = useFinanceStore(state => state.achievements);
+    const recurringBills = useFinanceStore(state => state.recurringBills);
+    const budgets = useFinanceStore(state => state.budgets);
+    const unreadNotifCount = useFinanceStore(state => state.unreadNotifCount);
+    const pendingRequestsCount = useFinanceStore(state => state.pendingRequestsCount);
+    const activeTrips = useFinanceStore(state => state.activeTrips);
 
     const prevSummaryRef = useRef(summary);
     if (prevSummaryRef.current !== summary) {
@@ -313,26 +262,23 @@ export default function HomeScreen({ navigation }) {
     const load = useCallback(async () => {
         if (!userToken) return;
         try {
-            // Fetch everything fresh, but use the current dateRange for the summary
-            await Promise.all([
-                useFinanceStore.getState().fetchWallets(true),
-                useFinanceStore.getState().fetchSavings(true),
-                useFinanceStore.getState().fetchDebts(true),
-                useFinanceStore.getState().fetchTransactions(true),
-                useFinanceStore.getState().fetchTransactionSummary(dateRange.toLowerCase(), true),
-            ]);
-
-            // Still fetch local-only counts like notifications
-            const notifRes = await getNotifications().catch(() => ({ unreadCount: 0 }));
-            const requestsRes = await getFriendRequests().catch(() => ([]));
-            setUnreadNotifCount(notifRes?.unreadCount || 0);
-            setPendingRequestsCount(Array.isArray(requestsRes) ? requestsRes.length : 0);
+            // Fetch everything fresh via the global refresher
+            await refreshAll(true);
 
             // Reset infinite scroll pagination
             setPage(2);
             setHasMore(true);
         } catch (err) {
             console.warn('[Home] Load error:', err.message);
+            const isNetworkError = !err.response && err.request;
+            if (isNetworkError) {
+                setAlert({
+                    visible: true,
+                    title: 'Network Error',
+                    message: 'Unable to connect to the server. Please check your internet connection and try again.',
+                    type: 'error'
+                });
+            }
         } finally {
             setLoading(false);
             setRefreshing(false);
@@ -352,6 +298,15 @@ export default function HomeScreen({ navigation }) {
             if (incoming.length < 10) setHasMore(false);
         } catch (err) {
             console.warn('[Home] fetchMore error:', err.message);
+            const isNetworkError = !err.response && err.request;
+            if (isNetworkError) {
+                setAlert({
+                    visible: true,
+                    title: 'Network Error',
+                    message: 'Unable to connect to the server. Please check your internet connection and try again.',
+                    type: 'error'
+                });
+            }
         } finally {
             setLoadingMore(false);
         }
@@ -369,10 +324,13 @@ export default function HomeScreen({ navigation }) {
             // Socket will handle the rest (removing from list, updating balance)
         } catch (err) {
             console.warn('[Home] Revert error:', err.message);
+            const isNetworkError = !err.response && err.request;
             setAlert({
                 visible: true,
-                title: 'Revert Failed',
-                message: err?.response?.data?.error || 'Could not undo this transaction. Please try again.',
+                title: isNetworkError ? 'Network Error' : 'Revert Failed',
+                message: isNetworkError
+                    ? 'Unable to connect to the server. Please check your internet connection and try again.'
+                    : (err?.response?.data?.error || 'Could not undo this transaction. Please try again.'),
                 type: 'error'
             });
         }
@@ -403,108 +361,28 @@ export default function HomeScreen({ navigation }) {
         useFinanceStore.getState().fetchTransactionSummary(dateRange.toLowerCase(), true);
     }, [dateRange]);
 
-    // ── Socket.IO — real-time transaction updates ──────────────────────────────
+
+    // ── Achievement Engine ──
     useEffect(() => {
-        if (!userInfo?._id) return;
+        if (loading) return;
+        const timer = setTimeout(() => {
+            const newlyEarned = checkAchievements({
+                transactions: recent,
+                savingsGoals,
+                savingsMasterPot,
+                recurringBills,
+                debts,
+                budgets,
+                summary,
+            }, addAchievement);
 
-        connectSocket(userInfo._id);
-        const socket = getSocket();
-
-        const handleNewTransaction = (tx) => {
-            if (tx.user && tx.user.toString() !== userInfo._id.toString()) return;
-            // NOTE: addTransactionSync is handled by SocketManager globally — don't call it here
-            debouncedRefreshSummary(dateRange.toLowerCase());
-        };
-
-        const handleUpdateTransaction = (tx) => {
-            if (tx.user && tx.user.toString() !== userInfo._id.toString()) return;
-            // The store handles sync via a separate listener or we could add updateTransactionSync
-            debouncedRefreshSummary(dateRange.toLowerCase());
-        };
-
-        const handleDeleteTransaction = (data) => {
-            // NOTE: deleteTransactionSync is handled by SocketManager globally — don't call it here
-            debouncedRefreshSummary(dateRange.toLowerCase());
-        };
-
-        const handleSavingsChange = () => {
-            debouncedRefreshSavings();
-            debouncedRefreshSummary(dateRange.toLowerCase());
-        };
-
-        const handleDebtChange = () => {
-            debouncedRefreshDebts();
-        };
-
-        const handleCurrencyUpdate = () => {
-            // Slight delay to ensure DB and Cache are fully settled before refetch
-            setTimeout(() => {
-                load();
-            }, 600);
-        };
-
-        socket.on('new_transaction', handleNewTransaction);
-        socket.on('update_transaction', handleUpdateTransaction);
-        socket.on('delete_transaction', handleDeleteTransaction);
-        socket.on('new_savings_goal', handleSavingsChange);
-        socket.on('update_savings_goal', handleSavingsChange);
-        socket.on('delete_savings_goal', handleSavingsChange);
-        socket.on('new_savings_transfer', handleSavingsChange);
-
-        socket.on('new_debt', handleDebtChange);
-        socket.on('update_debt', handleDebtChange);
-        socket.on('delete_debt', handleDebtChange);
-        socket.on('currency_updated', handleCurrencyUpdate);
-        socket.on('finances_wiped', load);
-
-        socket.on('new_notification', () => {
-            setUnreadNotifCount(prev => prev + 1);
-        });
-        socket.on('notification_read', () => {
-            setUnreadNotifCount(prev => Math.max(0, prev - 1));
-        });
-        socket.on('all_notifications_read', () => {
-            setUnreadNotifCount(0);
-        });
-
-        socket.on('new_friend_request', () => {
-            setPendingRequestsCount(prev => prev + 1);
-        });
-
-        socket.on('friend_request_accepted', () => {
-            setPendingRequestsCount(prev => Math.max(0, prev - 1));
-        });
-
-        socket.on('friend_request_rejected', () => {
-            setPendingRequestsCount(prev => Math.max(0, prev - 1));
-        });
-
-        socket.on('friend_request_cancelled', () => {
-            setPendingRequestsCount(prev => Math.max(0, prev - 1));
-        });
-
-        return () => {
-            socket.off('new_transaction', handleNewTransaction);
-            socket.off('update_transaction', handleUpdateTransaction);
-            socket.off('delete_transaction', handleDeleteTransaction);
-            socket.off('new_savings_goal', handleSavingsChange);
-            socket.off('update_savings_goal', handleSavingsChange);
-            socket.off('delete_savings_goal', handleSavingsChange);
-            socket.off('new_savings_transfer', handleSavingsChange);
-            socket.off('new_debt', handleDebtChange);
-            socket.off('update_debt', handleDebtChange);
-            socket.off('delete_debt', handleDebtChange);
-            socket.off('currency_updated', handleCurrencyUpdate);
-            socket.off('finances_wiped', load);
-            socket.off('new_notification');
-            socket.off('notification_read');
-            socket.off('all_notifications_read');
-            socket.off('new_friend_request');
-            socket.off('friend_request_accepted');
-            socket.off('friend_request_rejected');
-            socket.off('friend_request_cancelled');
-        };
-    }, [userInfo?._id, dateRange]);
+            if (newlyEarned.length > 0) {
+                setAchievementModal({ visible: true, badge: newlyEarned[0] });
+                triggerHaptic('success');
+            }
+        }, 1500);
+        return () => clearTimeout(timer);
+    }, [recent, savingsGoals, savingsMasterPot, recurringBills, debts, budgets, loading]);
 
     const onRefresh = () => { setRefreshing(true); load(); };
 
@@ -526,13 +404,54 @@ export default function HomeScreen({ navigation }) {
 
     const netWorth = walletBal + savingBal + netDebt + walletsWorth;
 
-    // Otter mood based on net worth
-    const otterMood = () => {
-        if (netWorth > 0) return { mood: "You're looking great! Keep tracking exactly where your money goes.", color: COLORS.income };
-        if (netWorth === 0) return { mood: "Neutral net worth today. Start building your savings and track your expenses!", color: COLORS.warning };
-        return { mood: "Nasa red ang net worth mo. Try to hold off on non-essentials and pay down debts!", color: COLORS.expense };
+    // Calculate Health Score (0-100)
+    const getHealthScore = () => {
+        let score = 50; // Base score
+
+        // 1. Net Worth Factor
+        if (netWorth > 10000) score += 20;
+        else if (netWorth > 0) score += 10;
+        else if (netWorth < 0) score -= 20;
+
+        // 2. Savings Factor
+        if (savingBal > 0) {
+            if (savingBal > (netWorth * 0.2)) score += 20;
+        }
+
+        // 3. Debt Factor
+        if (debtStats.iOwe > 0) {
+            if (debtStats.iOwe > (walletBal + savingBal)) score -= 20;
+            else score -= 10;
+        }
+
+        // 4. Cash Flow Factor (Monthly summary approximation)
+        const inc = summary.totalIncome || 0;
+        const exp = summary.totalExpenses || 0;
+        if (inc > exp) {
+            score += 20;
+            if (inc > exp * 1.5) score += 10;
+        } else if (exp > inc && inc > 0) {
+            score -= 10;
+        }
+
+        return Math.max(0, Math.min(100, score));
     };
-    const mood = otterMood();
+
+    const healthScore = getHealthScore();
+
+    // Calculate Forecast Data
+    const forecast = calculateForecast({
+        transactions: recent,
+        transactionSummary: summary,
+        recurringBills,
+    });
+
+    const getOtterMood = () => {
+        if (healthScore >= 80) return { mood: "You're looking great! Your finances are very healthy.", color: COLORS.income };
+        if (healthScore >= 50) return { mood: "You're doing okay, but there's room to improve your cash flow.", color: COLORS.warning };
+        return { mood: "Your health score is low. Try to hold off on non-essentials and pay down debts!", color: COLORS.expense };
+    };
+    const mood = getOtterMood();
 
     if (loading) {
         return (
@@ -637,50 +556,76 @@ export default function HomeScreen({ navigation }) {
                         <TouchableOpacity
                             onPress={() => {
                                 setIsSavingsMode(true);
-                                // No need for popToTop here as we are on the Home screen already
                             }}
-                            style={[{ marginRight: spacing.sm, padding: 8, backgroundColor: COLORS.primary + '20', borderRadius: 12 }]}
+                            style={[{ marginRight: 6, padding: 6, backgroundColor: COLORS.primary + '20', borderRadius: 10 }]}
                         >
-                            <MaterialCommunityIcons name="piggy-bank-outline" size={20} color={COLORS.primary} />
+                            <MaterialCommunityIcons name="piggy-bank-outline" size={18} color={COLORS.primary} />
                         </TouchableOpacity>
 
                         <TouchableOpacity
                             onPress={() => navigation.navigate('FriendsScreen')}
-                            style={[{ marginRight: spacing.sm, padding: 8, backgroundColor: COLORS.surface, borderRadius: 12 }]}
+                            style={[{ marginRight: 6, padding: 6, backgroundColor: COLORS.surface, borderRadius: 10 }]}
                         >
-                            <Feather name="users" size={20} color={COLORS.textMuted} />
+                            <Feather name="users" size={18} color={COLORS.textMuted} />
                             {pendingRequestsCount > 0 && (
-                                <View style={[styles.badge, { backgroundColor: COLORS.primary }]}>
-                                    <Text style={styles.badgeText}>{pendingRequestsCount > 9 ? '9+' : pendingRequestsCount}</Text>
+                                <View style={[styles.badge, { backgroundColor: COLORS.primary, right: -4, top: -4 }]}>
+                                    <Text style={[styles.badgeText, { fontSize: 8 }]}>{pendingRequestsCount > 9 ? '9+' : pendingRequestsCount}</Text>
                                 </View>
                             )}
+                        </TouchableOpacity>
+
+                        <TouchableOpacity
+                            onPress={() => navigation.navigate('BillCalendar')}
+                            style={[{ marginRight: 6, padding: 6, backgroundColor: COLORS.surface, borderRadius: 10 }]}
+                        >
+                            <Feather name="calendar" size={18} color={COLORS.textMuted} />
                         </TouchableOpacity>
 
                         <TouchableOpacity
                             onPress={() => navigation.navigate('Notifications')}
-                            style={[{ marginRight: spacing.sm, padding: 8, backgroundColor: COLORS.surface, borderRadius: 12 }]}
+                            style={[{ marginRight: 6, padding: 6, backgroundColor: COLORS.surface, borderRadius: 10 }]}
                         >
-                            <Feather name="bell" size={20} color={COLORS.textMuted} />
+                            <Feather name="bell" size={18} color={COLORS.textMuted} />
                             {unreadNotifCount > 0 && (
-                                <View style={[styles.badge, { backgroundColor: COLORS.primary }]}>
-                                    <Text style={styles.badgeText}>{unreadNotifCount > 9 ? '9+' : unreadNotifCount}</Text>
+                                <View style={[styles.badge, { backgroundColor: COLORS.primary, right: -4, top: -4 }]}>
+                                    <Text style={[styles.badgeText, { fontSize: 8 }]}>{unreadNotifCount > 9 ? '9+' : unreadNotifCount}</Text>
                                 </View>
                             )}
                         </TouchableOpacity>
-                        {/* <TouchableOpacity onPress={toggleTheme} style={{ marginRight: spacing.sm, padding: 8, backgroundColor: COLORS.surface, borderRadius: 12 }}>
-                            <Feather name={isDarkMode ? 'sun' : 'moon'} size={22} color={COLORS.textMuted} />
-                        </TouchableOpacity> */}
                         <TouchableOpacity
                             onPress={() => navigation.navigate('Settings')}
-                            style={{ padding: 8, backgroundColor: COLORS.surface, borderRadius: 12 }}
+                            style={{ padding: 6, backgroundColor: COLORS.surface, borderRadius: 10 }}
                         >
-                            <Feather name="settings" size={22} color={COLORS.textMuted} />
+                            <Feather name="settings" size={18} color={COLORS.textMuted} />
                         </TouchableOpacity>
                     </View>
                 </View>
 
-                {/* Otter Mascot + Balance Card */}
                 <LinearGradient colors={['#E91E8C', '#B0146A', '#7b0f4e']} style={styles.balanceCard} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }}>
+                    {/* Finalized Option 2: Premium Health Badge */}
+                    <View style={{
+                        position: 'absolute',
+                        top: 12,
+                        right: 12,
+                        backgroundColor: mood.color + '30',
+                        paddingHorizontal: 10,
+                        paddingVertical: 5,
+                        borderRadius: 20,
+                        flexDirection: 'row',
+                        alignItems: 'center',
+                        borderColor: mood.color,
+                        borderWidth: 1.5,
+                        zIndex: 10,
+                        shadowColor: mood.color,
+                        shadowOffset: { width: 0, height: 0 },
+                        shadowOpacity: 0.8,
+                        shadowRadius: 10,
+                        elevation: 5
+                    }}>
+                        <MaterialCommunityIcons name="shield-check" size={14} color="#fff" style={{ marginRight: 4 }} />
+                        <Text style={{ color: '#fff', fontSize: 11, fontWeight: '900', letterSpacing: 0.5 }}>{healthScore}</Text>
+                    </View>
+
                     <View style={styles.messageRow}>
                         <Image source={otterIcon} style={styles.mascotAvatar} resizeMode="contain" />
 
@@ -703,7 +648,13 @@ export default function HomeScreen({ navigation }) {
 
 
                     {/* Net Worth Breakdown */}
-                    <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 16, paddingTop: 16, borderTopWidth: 1, borderTopColor: 'rgba(255,255,255,0.2)' }}>
+                    <TouchableOpacity
+                        activeOpacity={0.9}
+                        onPress={() => {
+                            navigation.navigate('NetWorth');
+                        }}
+                        style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 16, paddingTop: 16, borderTopWidth: 1, borderTopColor: 'rgba(255,255,255,0.2)' }}
+                    >
                         <View>
 
                             <Text style={{ color: 'rgba(255,255,255,0.7)', fontSize: 10, fontWeight: '700' }}>SAVINGS</Text>
@@ -717,9 +668,12 @@ export default function HomeScreen({ navigation }) {
                         </View>
                         <View style={{ alignItems: 'flex-end', marginLeft: 'auto' }}>
                             <Text style={{ color: 'rgba(255,255,255,0.7)', fontSize: 10, fontWeight: '700' }}>TOTAL NET WORTH</Text>
-                            <Text style={{ color: '#fff', fontSize: 13, fontWeight: '800' }}>{hideGlobalBalance ? '••••••••' : formatCurrency(netWorth, userInfo?.currency)}</Text>
+                            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                                <Text style={{ color: '#fff', fontSize: 13, fontWeight: '800' }}>{hideGlobalBalance ? '••••••••' : formatCurrency(netWorth, userInfo?.currency)}</Text>
+
+                            </View>
                         </View>
-                    </View>
+                    </TouchableOpacity>
                 </LinearGradient>
 
                 {/* Analytics Row */}
@@ -734,126 +688,126 @@ export default function HomeScreen({ navigation }) {
                         }}
                     >
                         <Animated.View style={{ transform: [{ translateY: chartSlideAnim }], opacity: chartOpacityAnim }}>
-                        {chartView === 0 && (
-                            <>
-                                <Text style={[styles.analyticsLabel, { color: COLORS.textMuted }]}>{currentChart.label}</Text>
-                                <View style={[styles.chartContainer, { height: 120, marginTop: 10 }]}>
-                                    {currentChart.labels.map((L, i) => {
-                                        const isActive = i === currentChart.activeIndex;
-                                        const inc = currentChart.income[i];
-                                        const exp = currentChart.expense[i];
+                            {chartView === 0 && (
+                                <>
+                                    <Text style={[styles.analyticsLabel, { color: COLORS.textMuted }]}>{currentChart.label}</Text>
+                                    <View style={[styles.chartContainer, { height: 120, marginTop: 10 }]}>
+                                        {currentChart.labels.map((L, i) => {
+                                            const isActive = i === currentChart.activeIndex;
+                                            const inc = currentChart.income[i];
+                                            const exp = currentChart.expense[i];
 
-                                        return (
-                                            <View key={i} style={styles.chartCol}>
-                                                <View style={styles.chartBarGroup}>
-                                                    <View style={[styles.chartBar, { height: `${inc}%`, backgroundColor: COLORS.income, opacity: inc > 0 ? (isActive ? 1 : 0.6) : 0.1 }]} />
-                                                    <View style={[styles.chartBar, { height: `${exp}%`, backgroundColor: COLORS.expense, opacity: exp > 0 ? (isActive ? 1 : 0.6) : 0.1 }]} />
+                                            return (
+                                                <View key={i} style={styles.chartCol}>
+                                                    <View style={styles.chartBarGroup}>
+                                                        <View style={[styles.chartBar, { height: `${inc}%`, backgroundColor: COLORS.income, opacity: inc > 0 ? (isActive ? 1 : 0.6) : 0.1 }]} />
+                                                        <View style={[styles.chartBar, { height: `${exp}%`, backgroundColor: COLORS.expense, opacity: exp > 0 ? (isActive ? 1 : 0.6) : 0.1 }]} />
+                                                    </View>
+                                                    <Text style={[styles.chartDay, { color: COLORS.textMuted, fontWeight: isActive ? '800' : '500' }]}>
+                                                        {L}
+                                                    </Text>
                                                 </View>
-                                                <Text style={[styles.chartDay, { color: COLORS.textMuted, fontWeight: isActive ? '800' : '500' }]}>
-                                                    {L}
-                                                </Text>
-                                            </View>
-                                        );
-                                    })}
-                                </View>
-                            </>
-                        )}
-                        {chartView === 1 && (
-                            <View style={{ flex: 1 }}>
-                                <View style={{ marginBottom: 16 }}>
-                                    <Text style={{ fontSize: 16, fontWeight: 'bold', color: COLORS.text }}>Expense Distribution</Text>
-                                    <Text style={{ fontSize: 11, color: COLORS.textMuted, marginTop: 2 }}>Tap to switch views</Text>
-                                </View>
-                                {summary.expensePie && summary.expensePie.length > 0 ? (
-                                    <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                                        <View style={{ width: 120, height: 120, justifyContent: 'center', alignItems: 'center' }}>
-                                            <PieChart
-                                                data={summary.expensePie}
-                                                width={140}
-                                                height={140}
-                                                chartConfig={{ color: () => '#000' }}
-                                                accessor={"population"}
-                                                backgroundColor={"transparent"}
-                                                paddingLeft={"35"}
-                                                center={[0, 0]}
-                                                hasLegend={false}
-                                                absolute
-                                            />
-                                            <View style={{ position: 'absolute', width: 70, height: 70, borderRadius: 35, backgroundColor: COLORS.surface, justifyContent: 'center', alignItems: 'center', elevation: 1, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.1, shadowRadius: 4 }}>
-                                                <Text style={{ fontSize: 18, fontWeight: '900', color: COLORS.text }}>
-                                                    {Math.round((summary.expensePie[0].population / summary.expensePie.reduce((a, b) => a + b.population, 0)) * 100)}%
-                                                </Text>
-                                            </View>
-                                        </View>
-                                        <View style={{ flex: 1, height: 120, marginLeft: 20 }}>
-                                            <ScrollView showsVerticalScrollIndicator={false} nestedScrollEnabled>
-                                                {summary.expensePie.map((item, idx) => (
-                                                    <View key={idx} style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
-                                                        <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1, marginRight: 8 }}>
-                                                            <View style={{ width: 10, height: 10, borderRadius: 5, backgroundColor: item.color, marginRight: 8 }} />
-                                                            <Text style={{ color: COLORS.text, fontSize: 12, fontWeight: '500' }} numberOfLines={1}>{item.name}</Text>
-                                                        </View>
-                                                        <Text style={{ color: COLORS.text, fontSize: 12, fontWeight: 'bold' }}>
-                                                            {formatCurrency(item.population, userInfo?.currency)}
-                                                        </Text>
-                                                    </View>
-                                                ))}
-                                            </ScrollView>
-                                        </View>
+                                            );
+                                        })}
                                     </View>
-                                ) : (
-                                    <Text style={{ fontSize: 12, color: COLORS.textMuted, marginTop: 20 }}>No expenses recorded.</Text>
-                                )}
-                            </View>
-                        )}
-                        {chartView === 2 && (
-                            <View style={{ flex: 1 }}>
-                                <View style={{ marginBottom: 16 }}>
-                                    <Text style={{ fontSize: 16, fontWeight: 'bold', color: COLORS.text }}>Income Distribution</Text>
-                                    <Text style={{ fontSize: 11, color: COLORS.textMuted, marginTop: 2 }}>Tap to switch views</Text>
-                                </View>
-                                {summary.incomePie && summary.incomePie.length > 0 ? (
-                                    <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                                        <View style={{ width: 120, height: 120, justifyContent: 'center', alignItems: 'center' }}>
-                                            <PieChart
-                                                data={summary.incomePie}
-                                                width={140}
-                                                height={140}
-                                                chartConfig={{ color: () => '#000' }}
-                                                accessor={"population"}
-                                                backgroundColor={"transparent"}
-                                                paddingLeft={"35"}
-                                                center={[0, 0]}
-                                                hasLegend={false}
-                                                absolute
-                                            />
-                                            <View style={{ position: 'absolute', width: 70, height: 70, borderRadius: 35, backgroundColor: COLORS.surface, justifyContent: 'center', alignItems: 'center', elevation: 1, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.1, shadowRadius: 4 }}>
-                                                <Text style={{ fontSize: 18, fontWeight: '900', color: COLORS.text }}>
-                                                    {Math.round((summary.incomePie[0].population / summary.incomePie.reduce((a, b) => a + b.population, 0)) * 100)}%
-                                                </Text>
+                                </>
+                            )}
+                            {chartView === 1 && (
+                                <View style={{ flex: 1 }}>
+                                    <View style={{ marginBottom: 16 }}>
+                                        <Text style={{ fontSize: 16, fontWeight: 'bold', color: COLORS.text }}>Expense Distribution</Text>
+                                        <Text style={{ fontSize: 11, color: COLORS.textMuted, marginTop: 2 }}>Tap to switch views</Text>
+                                    </View>
+                                    {summary.expensePie && summary.expensePie.length > 0 ? (
+                                        <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                                            <View style={{ width: 120, height: 120, justifyContent: 'center', alignItems: 'center' }}>
+                                                <PieChart
+                                                    data={summary.expensePie}
+                                                    width={140}
+                                                    height={140}
+                                                    chartConfig={{ color: () => '#000' }}
+                                                    accessor={"population"}
+                                                    backgroundColor={"transparent"}
+                                                    paddingLeft={"35"}
+                                                    center={[0, 0]}
+                                                    hasLegend={false}
+                                                    absolute
+                                                />
+                                                <View style={{ position: 'absolute', width: 70, height: 70, borderRadius: 35, backgroundColor: COLORS.surface, justifyContent: 'center', alignItems: 'center', elevation: 1, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.1, shadowRadius: 4 }}>
+                                                    <Text style={{ fontSize: 18, fontWeight: '900', color: COLORS.text }}>
+                                                        {Math.round((summary.expensePie[0].population / summary.expensePie.reduce((a, b) => a + b.population, 0)) * 100)}%
+                                                    </Text>
+                                                </View>
+                                            </View>
+                                            <View style={{ flex: 1, height: 120, marginLeft: 20 }}>
+                                                <ScrollView showsVerticalScrollIndicator={false} nestedScrollEnabled>
+                                                    {summary.expensePie.map((item, idx) => (
+                                                        <View key={idx} style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+                                                            <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1, marginRight: 8 }}>
+                                                                <View style={{ width: 10, height: 10, borderRadius: 5, backgroundColor: item.color, marginRight: 8 }} />
+                                                                <Text style={{ color: COLORS.text, fontSize: 12, fontWeight: '500' }} numberOfLines={1}>{item.name}</Text>
+                                                            </View>
+                                                            <Text style={{ color: COLORS.text, fontSize: 12, fontWeight: 'bold' }}>
+                                                                {formatCurrency(item.population, userInfo?.currency)}
+                                                            </Text>
+                                                        </View>
+                                                    ))}
+                                                </ScrollView>
                                             </View>
                                         </View>
-                                        <View style={{ flex: 1, height: 120, marginLeft: 20 }}>
-                                            <ScrollView showsVerticalScrollIndicator={false} nestedScrollEnabled>
-                                                {summary.incomePie.map((item, idx) => (
-                                                    <View key={idx} style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
-                                                        <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1, marginRight: 8 }}>
-                                                            <View style={{ width: 10, height: 10, borderRadius: 5, backgroundColor: item.color, marginRight: 8 }} />
-                                                            <Text style={{ color: COLORS.text, fontSize: 12, fontWeight: '500' }} numberOfLines={1}>{item.name}</Text>
-                                                        </View>
-                                                        <Text style={{ color: COLORS.text, fontSize: 12, fontWeight: 'bold' }}>
-                                                            {formatCurrency(item.population, userInfo?.currency)}
-                                                        </Text>
-                                                    </View>
-                                                ))}
-                                            </ScrollView>
-                                        </View>
+                                    ) : (
+                                        <Text style={{ fontSize: 12, color: COLORS.textMuted, marginTop: 20 }}>No expenses recorded.</Text>
+                                    )}
+                                </View>
+                            )}
+                            {chartView === 2 && (
+                                <View style={{ flex: 1 }}>
+                                    <View style={{ marginBottom: 16 }}>
+                                        <Text style={{ fontSize: 16, fontWeight: 'bold', color: COLORS.text }}>Income Distribution</Text>
+                                        <Text style={{ fontSize: 11, color: COLORS.textMuted, marginTop: 2 }}>Tap to switch views</Text>
                                     </View>
-                                ) : (
-                                    <Text style={{ fontSize: 12, color: COLORS.textMuted, marginTop: 20 }}>No income recorded.</Text>
-                                )}
-                            </View>
-                        )}
+                                    {summary.incomePie && summary.incomePie.length > 0 ? (
+                                        <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                                            <View style={{ width: 120, height: 120, justifyContent: 'center', alignItems: 'center' }}>
+                                                <PieChart
+                                                    data={summary.incomePie}
+                                                    width={140}
+                                                    height={140}
+                                                    chartConfig={{ color: () => '#000' }}
+                                                    accessor={"population"}
+                                                    backgroundColor={"transparent"}
+                                                    paddingLeft={"35"}
+                                                    center={[0, 0]}
+                                                    hasLegend={false}
+                                                    absolute
+                                                />
+                                                <View style={{ position: 'absolute', width: 70, height: 70, borderRadius: 35, backgroundColor: COLORS.surface, justifyContent: 'center', alignItems: 'center', elevation: 1, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.1, shadowRadius: 4 }}>
+                                                    <Text style={{ fontSize: 18, fontWeight: '900', color: COLORS.text }}>
+                                                        {Math.round((summary.incomePie[0].population / summary.incomePie.reduce((a, b) => a + b.population, 0)) * 100)}%
+                                                    </Text>
+                                                </View>
+                                            </View>
+                                            <View style={{ flex: 1, height: 120, marginLeft: 20 }}>
+                                                <ScrollView showsVerticalScrollIndicator={false} nestedScrollEnabled>
+                                                    {summary.incomePie.map((item, idx) => (
+                                                        <View key={idx} style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+                                                            <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1, marginRight: 8 }}>
+                                                                <View style={{ width: 10, height: 10, borderRadius: 5, backgroundColor: item.color, marginRight: 8 }} />
+                                                                <Text style={{ color: COLORS.text, fontSize: 12, fontWeight: '500' }} numberOfLines={1}>{item.name}</Text>
+                                                            </View>
+                                                            <Text style={{ color: COLORS.text, fontSize: 12, fontWeight: 'bold' }}>
+                                                                {formatCurrency(item.population, userInfo?.currency)}
+                                                            </Text>
+                                                        </View>
+                                                    ))}
+                                                </ScrollView>
+                                            </View>
+                                        </View>
+                                    ) : (
+                                        <Text style={{ fontSize: 12, color: COLORS.textMuted, marginTop: 20 }}>No income recorded.</Text>
+                                    )}
+                                </View>
+                            )}
                         </Animated.View>
                     </TouchableOpacity>
 
@@ -876,7 +830,7 @@ export default function HomeScreen({ navigation }) {
 
                             <View style={[styles.filterPills, { marginTop: 0, flexDirection: 'column', gap: 6, position: 'relative' }]}>
                                 {/* Animated Sliding Pill */}
-                                <Animated.View 
+                                <Animated.View
                                     style={{
                                         position: 'absolute',
                                         top: 0, left: 0, right: 0,
@@ -940,6 +894,89 @@ export default function HomeScreen({ navigation }) {
                     </ScrollView>
                 </View>
 
+                {/* ── Spending Forecaster Card ── */}
+                <View style={[styles.forecastCard, { backgroundColor: COLORS.surface }]}>
+                    <View style={styles.forecastHeader}>
+                        <View style={[styles.forecastIconWrap, { backgroundColor: COLORS.primary + '15' }]}>
+                            <MaterialCommunityIcons name="crystal-ball" size={20} color={COLORS.primary} />
+                        </View>
+                        <View>
+                            <Text style={[styles.forecastTitle, { color: COLORS.text }]}>Spending Forecast</Text>
+                            <Text style={[styles.forecastSub, { color: COLORS.textMuted }]}>Based on your recent habits</Text>
+                        </View>
+                    </View>
+
+                    <View style={styles.forecastContent}>
+                        <View style={styles.runwaySection}>
+                            <Text style={[styles.runwayLabel, { color: COLORS.textMuted }]}>Est. Runway</Text>
+                            <View style={{ flexDirection: 'row', alignItems: 'baseline', gap: 4 }}>
+                                <Text style={[styles.runwayValue, { color: forecast.runwayDays > 30 ? '#22c55e' : (forecast.runwayDays > 14 ? '#f59e0b' : '#ef4444') }]}>
+                                    {forecast.runwayDays > 90 ? '90+' : forecast.runwayDays}
+                                </Text>
+                                <Text style={[styles.runwayUnit, { color: COLORS.textMuted }]}>days</Text>
+                            </View>
+                        </View>
+
+                        <View style={styles.forecastDivider} />
+
+                        <View style={styles.projectionSection}>
+                            <Text style={[styles.runwayLabel, { color: COLORS.textMuted }]}>End of Month Est.</Text>
+                            <Text style={[styles.projectionValue, { color: forecast.endOfMonthBalance > 0 ? COLORS.text : '#ef4444' }]}>
+                                {formatCurrency(forecast.endOfMonthBalance, userInfo?.currency)}
+                            </Text>
+                        </View>
+                    </View>
+
+                    {/* Pro-tip / Alert line */}
+                    <View style={[styles.forecastAlert, { backgroundColor: COLORS.background + '80' }]}>
+                        <Feather
+                            name={forecast.runwayDays < 15 ? "alert-triangle" : "info"}
+                            size={14}
+                            color={forecast.runwayDays < 15 ? '#ef4444' : COLORS.primary}
+                        />
+                        <Text style={[styles.forecastAlertText, { color: COLORS.textMuted }]}>
+                            {forecast.runwayDays < 15
+                                ? "Watch out! Your balance might run low soon."
+                                : `You're spending ~${formatCurrency(forecast.dailyBurn, userInfo?.currency)} daily.`}
+                        </Text>
+                    </View>
+                </View>
+
+                {/* Active Trips scroller */}
+                {activeTrips.length > 0 && (
+                    <View style={[styles.section, { marginBottom: 0 }]}>
+                        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+                            <Text style={[styles.sectionTitle, { color: COLORS.text, marginBottom: 0 }]}>Active Trips</Text>
+                            <TouchableOpacity onPress={() => navigation.navigate('GroupWalletScreen')}>
+                                <Text style={{ fontSize: 12, color: COLORS.primary, fontWeight: '700' }}>Manage</Text>
+                            </TouchableOpacity>
+                        </View>
+                        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 12, paddingBottom: 10 }}>
+                            {activeTrips.map(trip => {
+                                return (
+                                    <TouchableOpacity
+                                        key={trip._id}
+                                        onPress={() => navigation.navigate('GroupWalletDetailScreen', { id: trip._id })}
+                                        style={[styles.tripHomeCard, { backgroundColor: COLORS.surface, borderColor: COLORS.border }]}
+                                        activeOpacity={0.8}
+                                    >
+                                        <View style={[styles.tripHomeEmoji, { backgroundColor: trip.color + '20' }]}>
+                                            <Text style={{ fontSize: 20 }}>{trip.emoji}</Text>
+                                        </View>
+                                        <View style={{ flex: 1, marginRight: 8 }}>
+                                            <Text style={[styles.tripHomeName, { color: COLORS.text }]} numberOfLines={1}>{trip.name}</Text>
+                                            <Text style={[styles.tripHomeStatus, { color: COLORS.textMuted }]}>
+                                                {trip.expenses?.length || 0} expenses logged
+                                            </Text>
+                                        </View>
+                                        <Feather name="chevron-right" size={16} color={COLORS.textMuted} />
+                                    </TouchableOpacity>
+                                );
+                            })}
+                        </ScrollView>
+                    </View>
+                )}
+
                 {/* Recent Transactions */}
                 <View style={styles.section}>
                     <Text style={[styles.sectionTitle, { color: COLORS.text }]}>Recent Activity</Text>
@@ -966,7 +1003,7 @@ export default function HomeScreen({ navigation }) {
                                         setTxModalVisible(true);
                                     }}
                                     onLongPress={() => {
-                                        Vibration.vibrate(60);
+                                        triggerHaptic(hapticsEnabled, 'impactMedium');
                                         if (tx.relatedType === 'Debt') {
                                             setAlert({
                                                 visible: true,
@@ -1034,6 +1071,17 @@ export default function HomeScreen({ navigation }) {
                 message="Are you sure you want to sign out of your OTTER account?"
                 type="confirm"
                 confirmText="Sign Out"
+            />
+
+            <CustomAlertModal
+                visible={achievementModal.visible}
+                onClose={() => setAchievementModal({ visible: false, badge: null })}
+                title="🏆 Achievement Unlocked!"
+                message={achievementModal.badge ? `You've earned the "${achievementModal.badge.name}" badge!\n\n${achievementModal.badge.description}` : ''}
+                type="success"
+                confirmText="Awesome!"
+                iconName={achievementModal.badge?.icon}
+                iconColor={achievementModal.badge?.color}
             />
 
             <CustomAlertModal
@@ -1189,7 +1237,7 @@ const styles = StyleSheet.create({
     balanceLabel: { color: 'rgba(255,255,255,0.7)', fontSize: 12, fontWeight: '600', letterSpacing: 1 },
     balanceAmount: { color: '#fff', fontSize: 36, fontWeight: '800', marginTop: 4 },
     analyticsRow: { flexDirection: 'row', paddingHorizontal: spacing.lg, marginBottom: spacing.md, height: 170 },
-    quickActionsCard: { marginHorizontal: spacing.lg, marginBottom: spacing.lg, borderRadius: radius.xl, paddingVertical: 14 },
+    quickActionsCard: { marginHorizontal: spacing.lg, marginBottom: spacing.md, borderRadius: radius.xl, paddingVertical: 14 },
     quickActionsTitle: { fontSize: 10, fontWeight: '900', letterSpacing: 1.2, marginBottom: 12, paddingHorizontal: spacing.md },
     quickActionsRow: { flexDirection: 'row', gap: 20, paddingHorizontal: spacing.md },
     quickActionItem: { alignItems: 'center', gap: 6, width: 60 },
@@ -1214,7 +1262,7 @@ const styles = StyleSheet.create({
     filterPills: { flexDirection: 'row', justifyContent: 'space-between', backgroundColor: 'transparent', marginTop: 'auto' },
     filterPill: { paddingHorizontal: 8, paddingVertical: 4, borderRadius: 12 },
     filterPillText: { fontSize: 9, fontWeight: '700' },
-    section: { paddingHorizontal: spacing.lg, marginBottom: spacing.lg },
+    section: { paddingHorizontal: spacing.lg, marginTop: 16 },
     sectionTitle: { ...typography.h3, marginBottom: spacing.sm },
     emptyState: { alignItems: 'center', paddingVertical: spacing.xl },
     emptyEmoji: { fontSize: 40, marginBottom: spacing.sm },
@@ -1294,5 +1342,54 @@ const styles = StyleSheet.create({
         color: 'white',
         fontSize: 8,
         fontWeight: '900'
+    },
+
+    // Forecast Styles
+    forecastCard: {
+        marginHorizontal: spacing.lg, borderRadius: 24, padding: 20,
+        borderWidth: 1, borderColor: 'rgba(0,0,0,0.05)', marginBottom: spacing.md
+    },
+    forecastHeader: { flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 20 },
+    forecastIconWrap: { width: 40, height: 40, borderRadius: 12, justifyContent: 'center', alignItems: 'center' },
+    forecastTitle: { fontSize: 16, fontWeight: '800' },
+    forecastSub: { fontSize: 12, marginTop: 2 },
+    forecastContent: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20 },
+    runwaySection: { flex: 1 },
+    runwayLabel: { fontSize: 11, fontWeight: '700', letterSpacing: 0.5, marginBottom: 4 },
+    runwayValue: { fontSize: 24, fontWeight: '900' },
+    runwayUnit: { fontSize: 14, fontWeight: '700' },
+    forecastDivider: { width: 1, height: 40, backgroundColor: 'rgba(0,0,0,0.1)', marginHorizontal: 20 },
+    projectionSection: { flex: 1.5 },
+    projectionValue: { fontSize: 18, fontWeight: '800' },
+    forecastAlert: {
+        flexDirection: 'row', alignItems: 'center', gap: 8, padding: 12, borderRadius: 12,
+    },
+    forecastAlertText: { fontSize: 12, fontWeight: '600' },
+
+    // Trip Home Card Styles
+    tripHomeCard: {
+        width: 220,
+        flexDirection: 'row',
+        alignItems: 'center',
+        padding: 12,
+        borderRadius: 18,
+        borderWidth: 1,
+    },
+    tripHomeEmoji: {
+        width: 44,
+        height: 44,
+        borderRadius: 12,
+        justifyContent: 'center',
+        alignItems: 'center',
+        marginRight: 12
+    },
+    tripHomeName: {
+        fontSize: 14,
+        fontWeight: '700'
+    },
+    tripHomeStatus: {
+        fontSize: 10,
+        fontWeight: '600',
+        marginTop: 2
     }
 });

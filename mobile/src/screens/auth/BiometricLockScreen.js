@@ -14,6 +14,7 @@ import { spacing, radius } from '../../theme/colors';
 export default function BiometricLockScreen() {
     const { authenticate, biometricType, isLocked } = useBiometric();
     const COLORS = useTheme(state => state.COLORS);
+    const isDarkMode = useTheme(state => state.isDarkMode);
     const { logout } = useAuth();
 
     const [error, setError] = useState('');
@@ -96,19 +97,15 @@ export default function BiometricLockScreen() {
     };
 
     return (
-        <View style={StyleSheet.absoluteFill}>
-            <StatusBar barStyle="light-content" backgroundColor="#0d0d1a" />
-            <LinearGradient
-                colors={['#0d0d1a', '#1a0a1c', '#12062b']}
-                style={StyleSheet.absoluteFill}
-            />
+        <View style={[StyleSheet.absoluteFill, { backgroundColor: COLORS.background }]}>
+            <StatusBar barStyle={isDarkMode ? "light-content" : "dark-content"} backgroundColor={COLORS.background} />
 
             <Animated.View style={[styles.container, { opacity: fadeAnim }]}>
                 <SafeAreaView style={styles.safe}>
                     {/* Top Wordmark */}
                     <View style={styles.top}>
                         <Image source={otterIcon} style={styles.logo} />
-                        <Text style={styles.wordmarkSub}>Finance</Text>
+                        <Text style={[styles.wordmarkSub, { color: COLORS.textMuted }]}>Finance</Text>
                     </View>
 
                     {/* Icon */}
@@ -116,25 +113,22 @@ export default function BiometricLockScreen() {
                         styles.iconWrap,
                         { transform: [{ translateX: shakeAnim }, { scale: pulseAnim }] }
                     ]}>
-                        <LinearGradient
-                            colors={['#E91E8C', '#7b0f4e']}
-                            style={styles.iconGrad}
-                        >
-                            <MaterialCommunityIcons name={getIcon()} size={52} color="#fff" />
-                        </LinearGradient>
+                        <View style={[styles.iconGrad, { backgroundColor: COLORS.primary + '20', shadowColor: COLORS.primary }]}>
+                            <MaterialCommunityIcons name={getIcon()} size={52} color={COLORS.primary} />
+                        </View>
                     </Animated.View>
 
                     {/* Text */}
-                    <Text style={styles.title}>App Locked</Text>
-                    <Text style={styles.subtitle}>
+                    <Text style={[styles.title, { color: COLORS.text }]}>App Locked</Text>
+                    <Text style={[styles.subtitle, { color: COLORS.textMuted }]}>
                         Use {getLabel()} to unlock your OTTER account
                     </Text>
 
                     {/* Error */}
                     {error ? (
-                        <View style={styles.errorBox}>
-                            <Feather name="alert-circle" size={14} color="#ef4444" />
-                            <Text style={styles.errorText}>{error}</Text>
+                        <View style={[styles.errorBox, { backgroundColor: COLORS.expense + '20', borderColor: COLORS.expense + '40' }]}>
+                            <Feather name="alert-circle" size={14} color={COLORS.expense} />
+                            <Text style={[styles.errorText, { color: COLORS.expense }]}>{error}</Text>
                         </View>
                     ) : null}
 
@@ -147,7 +141,7 @@ export default function BiometricLockScreen() {
                             disabled={loading}
                         >
                             <LinearGradient
-                                colors={['#E91E8C', '#B0146A']}
+                                colors={[COLORS.primary, COLORS.primary + 'CC']}
                                 style={styles.unlockGrad}
                                 start={{ x: 0, y: 0 }}
                                 end={{ x: 1, y: 0 }}
@@ -163,9 +157,9 @@ export default function BiometricLockScreen() {
                             </LinearGradient>
                         </TouchableOpacity>
                     ) : (
-                        <TouchableOpacity style={styles.signOutBtn} onPress={logout}>
-                            <Feather name="log-out" size={16} color="#ef4444" style={{ marginRight: 6 }} />
-                            <Text style={styles.signOutText}>Sign out & Re-login</Text>
+                        <TouchableOpacity style={[styles.signOutBtn, { borderColor: COLORS.expense + '60' }]} onPress={logout}>
+                            <Feather name="log-out" size={16} color={COLORS.expense} style={{ marginRight: 6 }} />
+                            <Text style={[styles.signOutText, { color: COLORS.expense }]}>Sign out & Re-login</Text>
                         </TouchableOpacity>
                     )}
                 </SafeAreaView>
@@ -178,24 +172,23 @@ const styles = StyleSheet.create({
     container: { flex: 1 },
     safe: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: spacing.xl },
     top: { alignItems: 'center', marginBottom: spacing.xxl },
-    wordmark: { fontSize: 28, fontWeight: '900', color: '#fff', letterSpacing: 2 },
-    wordmarkSub: { fontSize: 12, fontWeight: '600', color: 'rgba(255,255,255,0.4)', letterSpacing: 6, textTransform: 'uppercase' },
+    wordmarkSub: { fontSize: 12, fontWeight: '600', letterSpacing: 6, textTransform: 'uppercase' },
     iconWrap: { marginBottom: spacing.xl },
     iconGrad: {
         width: 110, height: 110, borderRadius: 55,
         justifyContent: 'center', alignItems: 'center',
-        shadowColor: '#E91E8C', shadowOffset: { width: 0, height: 0 },
+        shadowOffset: { width: 0, height: 0 },
         shadowOpacity: 0.6, shadowRadius: 24, elevation: 12,
     },
-    title: { fontSize: 28, fontWeight: '800', color: '#fff', marginBottom: spacing.sm, textAlign: 'center' },
-    subtitle: { fontSize: 15, color: 'rgba(255,255,255,0.55)', textAlign: 'center', lineHeight: 22, marginBottom: spacing.xl },
+    title: { fontSize: 28, fontWeight: '800', marginBottom: spacing.sm, textAlign: 'center' },
+    subtitle: { fontSize: 15, textAlign: 'center', lineHeight: 22, marginBottom: spacing.xl },
     errorBox: {
         flexDirection: 'row', alignItems: 'center', gap: 6,
-        backgroundColor: 'rgba(239,68,68,0.12)', borderRadius: radius.md,
+        borderRadius: radius.md,
         paddingHorizontal: spacing.md, paddingVertical: spacing.sm,
-        marginBottom: spacing.lg, borderWidth: 1, borderColor: 'rgba(239,68,68,0.3)'
+        marginBottom: spacing.lg, borderWidth: 1
     },
-    errorText: { fontSize: 13, color: '#ef4444', fontWeight: '500' },
+    errorText: { fontSize: 13, fontWeight: '500' },
     unlockBtn: { width: '100%', borderRadius: radius.xl, overflow: 'hidden' },
     unlockGrad: {
         flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
@@ -205,9 +198,9 @@ const styles = StyleSheet.create({
     signOutBtn: {
         flexDirection: 'row', alignItems: 'center',
         paddingVertical: spacing.md, paddingHorizontal: spacing.lg,
-        borderRadius: radius.lg, borderWidth: 1, borderColor: 'rgba(239,68,68,0.3)',
+        borderRadius: radius.lg, borderWidth: 1,
     },
-    signOutText: { color: '#ef4444', fontSize: 15, fontWeight: '700' },
+    signOutText: { fontSize: 15, fontWeight: '700' },
     logo: {
         width: 100, height: 100, marginRight: 5, marginTop: 5
     },

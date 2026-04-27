@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import {
     View, Text, StyleSheet, TouchableOpacity,
-    Animated, StatusBar, Vibration, TextInput,
+    Animated, StatusBar, TextInput,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -10,13 +10,14 @@ import axios from 'axios';
 import { API_BASE, useAuth } from '../../context/AuthContext';
 import { spacing, radius } from '../../theme/colors';
 import { useTheme } from '../../context/ThemeContext';
+import { triggerHaptic } from '../../utils/haptics';
 
 const OTP_LENGTH = 6;
 const RESEND_COOLDOWN = 60; // seconds
 
 export default function TwoFAScreen({ route, navigation }) {
     const { tempToken, maskedEmail } = route.params;
-    const { _finalize2FALogin } = useAuth();
+    const { _finalize2FALogin, hapticsEnabled } = useAuth();
     const COLORS = useTheme(state => state.COLORS);
 
     const [otp, setOtp] = useState('');
@@ -44,7 +45,7 @@ export default function TwoFAScreen({ route, navigation }) {
     }, [otp]);
 
     const shake = () => {
-        Vibration.vibrate([0, 60, 60, 60]);
+        triggerHaptic(hapticsEnabled, 'notificationError');
         Animated.sequence([
             Animated.timing(shakeAnim, { toValue: 10, duration: 60, useNativeDriver: true }),
             Animated.timing(shakeAnim, { toValue: -10, duration: 60, useNativeDriver: true }),

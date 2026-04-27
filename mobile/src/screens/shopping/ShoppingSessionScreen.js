@@ -17,9 +17,7 @@ import CustomAlertModal from '../../components/CustomAlertModal';
 import ProductResultModal from '../../components/ProductResultModal';
 import { getSocket, connectSocket } from '../../utils/socket';
 import { getCachedBarcode, saveBarcodePriceCache } from '../../utils/barcodePriceCache';
-
-const formatCurrency = (amount, currency = 'PHP') =>
-    new Intl.NumberFormat('en-PH', { style: 'currency', currency }).format(amount || 0);
+import { formatCurrency } from '../../utils/formatters';
 
 const OPEN_FOOD_API = 'https://world.openfoodfacts.org/api/v0/product/';
 const UPC_API = 'https://api.upcitemdb.com/prod/trial/lookup?upc=';

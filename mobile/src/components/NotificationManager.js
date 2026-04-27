@@ -1,33 +1,41 @@
 import React, { useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
+import * as Notifications from 'expo-notifications';
 import { 
-    registerForPushNotificationsAsync, 
     setupNotificationCategories, 
+    registerForPushNotificationsAsync, 
     setupNotificationResponseListener 
 } from '../utils/notifications';
 
-/**
- * Global component to handle Push Notification setup and listeners
- */
 export default function NotificationManager() {
     const { userToken } = useAuth();
 
     useEffect(() => {
-        // Setup categories once on mount
-        setupNotificationCategories();
-    }, []);
-
-    useEffect(() => {
         if (!userToken) return;
 
-        // Register token whenever user is logged in
-        registerForPushNotificationsAsync();
+        let responseListener;
+        let foregroundListener;
 
-        // Listen for responses (clicks/replies)
-        const listener = setupNotificationResponseListener();
+        const initNotifications = async () => {
+            try {
+                await setupNotificationCategories();
+                await registerForPushNotificationsAsync();
+            } catch (error) {
+                console.warn('[NotificationManager] Init error:', error);
+            }
+        };
+
+        initNotifications();
+
+        responseListener = setupNotificationResponseListener();
+
+        foregroundListener = Notifications.addNotificationReceivedListener(notification => {
+            console.log('[NotificationManager] Foreground notification received');
+        });
 
         return () => {
-            if (listener) listener.remove();
+            responseListener?.remove?.();
+            foregroundListener?.remove?.();
         };
     }, [userToken]);
 

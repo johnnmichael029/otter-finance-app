@@ -6,10 +6,10 @@ import { useAuth } from '../context/AuthContext';
 import { spacing, radius } from '../theme/colors';
 import BottomSheetModal from './BottomSheetModal';
 import { getTransactionSummary, getSavingsGoals } from '../api/api';
+import { formatCurrency } from '../utils/formatters';
 
 const SavingsQuickAddSheet = ({ visible, onClose, navigation, activeGoals = [] }) => {
     const COLORS = useTheme(state => state.COLORS);
-    const { userInfo } = useAuth();
     const styles = getStyles(COLORS);
 
     const [showSourceSelection, setShowSourceSelection] = useState(false);
@@ -26,7 +26,7 @@ const SavingsQuickAddSheet = ({ visible, onClose, navigation, activeGoals = [] }
                     const goalsRes = await getSavingsGoals();
                     const master = goalsRes.goals?.find(g => g.name === 'Savings Balance');
                     if (master) setSavingsPot(master);
-                } catch (e) {}
+                } catch (e) { }
             };
             fetchBalances();
         } else {
@@ -34,12 +34,11 @@ const SavingsQuickAddSheet = ({ visible, onClose, navigation, activeGoals = [] }
         }
     }, [visible]);
 
-    const formatCurrency = (amount) =>
-        new Intl.NumberFormat('en-PH', { style: 'currency', currency: userInfo?.currency || 'PHP' }).format(amount);
+    const { userInfo } = useAuth();
 
     const QuickAddOption = ({ icon, color, title, subtitle, onPress, isMCI = false }) => (
-        <TouchableOpacity 
-            style={[styles.quickOption, { backgroundColor: COLORS.background, borderColor: COLORS.border }]} 
+        <TouchableOpacity
+            style={[styles.quickOption, { backgroundColor: COLORS.background, borderColor: COLORS.border }]}
             onPress={onPress}
         >
             <View style={[styles.quickIconBox, { backgroundColor: color + '20' }]}>
@@ -64,8 +63,8 @@ const SavingsQuickAddSheet = ({ visible, onClose, navigation, activeGoals = [] }
         } else {
             // If from savings balance, we go directly to picking the TARGET goal
             // We pass the savingsPot as the sourceGoal
-            navigation.navigate('SavingsGoalSelector', { 
-                action: 'move_to', 
+            navigation.navigate('SavingsGoalSelector', {
+                action: 'move_to',
                 sourceGoal: savingsPot,
                 titleOverride: 'Select Target Goal'
             });
@@ -73,41 +72,40 @@ const SavingsQuickAddSheet = ({ visible, onClose, navigation, activeGoals = [] }
     };
 
     return (
-        <BottomSheetModal 
-            visible={visible} 
+        <BottomSheetModal
+            visible={visible}
             onClose={onClose}
             title={showSourceSelection ? "Select Source" : "Quick Add (Savings)"}
         >
             {!showSourceSelection ? (
                 <>
                     <View style={styles.quickHeader}>
-                        <View style={styles.quickHandle} />
                         <Text style={[styles.quickMainTitle, { color: COLORS.text }]}>Quick Add (Savings)</Text>
                         <Text style={[styles.quickTagline, { color: COLORS.textMuted }]}>What would you like to record?</Text>
                     </View>
 
                     <View style={styles.quickList}>
-                        <QuickAddOption 
-                            icon="target" 
-                            color="#E91E8C" 
-                            title="Add New Goal" 
-                            subtitle="Start a new dream or saving target" 
-                            onPress={() => { onClose(); navigation.navigate('AddSavingsGoal'); }} 
+                        <QuickAddOption
+                            icon="target"
+                            color="#E91E8C"
+                            title="Add New Goal"
+                            subtitle="Start a new dream or saving target"
+                            onPress={() => { onClose(); navigation.navigate('AddSavingsGoal'); }}
                         />
-                        <QuickAddOption 
-                            icon="plus-circle" 
-                            color="#22c55e" 
-                            title="Add Money to Goal" 
-                            subtitle="Save from your wallet or savings pot" 
-                            onPress={() => setShowSourceSelection(true)} 
+                        <QuickAddOption
+                            icon="plus-circle"
+                            color="#22c55e"
+                            title="Add Money to Goal"
+                            subtitle="Save from your wallet or savings pot"
+                            onPress={() => setShowSourceSelection(true)}
                         />
-                        <QuickAddOption 
-                            icon="piggy-bank-outline" 
-                            color="#3b82f6" 
+                        <QuickAddOption
+                            icon="piggy-bank-outline"
+                            color="#3b82f6"
                             isMCI={true}
-                            title="Move Money" 
-                            subtitle="Transfer funds between different goals" 
-                            onPress={() => { onClose(); navigation.navigate('SavingsGoalSelector', { action: 'move_from' }); }} 
+                            title="Move Money"
+                            subtitle="Transfer funds between different goals"
+                            onPress={() => { onClose(); navigation.navigate('SavingsGoalSelector', { action: 'move_from' }); }}
                         />
                     </View>
                 </>
@@ -142,7 +140,7 @@ const SavingsQuickAddSheet = ({ visible, onClose, navigation, activeGoals = [] }
                         </TouchableOpacity>
                     </View>
 
-                    <TouchableOpacity 
+                    <TouchableOpacity
                         style={styles.backBtn}
                         onPress={() => setShowSourceSelection(false)}
                     >
@@ -151,8 +149,8 @@ const SavingsQuickAddSheet = ({ visible, onClose, navigation, activeGoals = [] }
                 </View>
             )}
 
-            <TouchableOpacity 
-                style={[styles.quickCancel, { backgroundColor: COLORS.background }]} 
+            <TouchableOpacity
+                style={[styles.quickCancel, { backgroundColor: COLORS.background }]}
                 onPress={onClose}
             >
                 <Text style={[styles.quickCancelText, { color: COLORS.text }]}>Cancel</Text>

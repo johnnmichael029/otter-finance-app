@@ -11,9 +11,7 @@ import { spacing, radius } from '../../theme/colors';
 import CustomAlertModal from '../../components/CustomAlertModal';
 import { useFinanceStore } from '../../store/financeStore';
 import { calcNativeDeduct, hasEnoughBalance } from '../../components/WalletSelector';
-
-const formatCurrency = (amount, currency = 'PHP') =>
-    new Intl.NumberFormat('en-PH', { style: 'currency', currency }).format(amount || 0);
+import { formatCurrency } from '../../utils/formatters';
 
 const PAYMENT_METHODS = [
     { id: 'cash', label: 'Cash', icon: 'cash', color: '#22c55e' },

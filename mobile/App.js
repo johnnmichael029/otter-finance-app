@@ -23,7 +23,6 @@ Sentry.init({
 import { AuthProvider, useAuth } from './src/context/AuthContext';
 import { ThemeProvider, useTheme } from './src/context/ThemeContext';
 import { SecurityProvider, useSecurity } from './src/context/SecurityContext';
-import { useUIStore } from './src/store/uiStore';
 
 // Auth Screens
 import LoginScreen from './src/screens/auth/LoginScreen';
@@ -53,6 +52,7 @@ import AllServicesScreen from './src/screens/main/AllServicesScreen';
 import DebtPlannerScreen from './src/screens/main/DebtPlannerScreen';
 import AnalyticsScreen from './src/screens/main/AnalyticsScreen';
 import NotificationsScreen from './src/screens/main/NotificationsScreen';
+import BillCalendarScreen from './src/screens/main/BillCalendarScreen';
 
 // Savings Screens
 import SavingsHomeScreen from './src/screens/savings/SavingsHomeScreen';
@@ -61,6 +61,9 @@ import SavingsTransferScreen from './src/screens/savings/SavingsTransferScreen';
 import SavingsTransferHistoryScreen from './src/screens/savings/SavingsTransferHistoryScreen';
 import AddSavingsGoalScreen from './src/screens/savings/AddSavingsGoalScreen';
 import SavingsGoalSelectorScreen from './src/screens/savings/SavingsGoalSelectorScreen';
+import SavingsChallengesScreen from './src/screens/savings/SavingsChallengesScreen';
+import CreateChallengeScreen from './src/screens/savings/CreateChallengeScreen';
+import ChallengeDetailScreen from './src/screens/savings/ChallengeDetailScreen';
 import SavingsArchiveScreen from './src/screens/savings/SavingsArchiveScreen';
 
 // Shopping Screens
@@ -72,9 +75,15 @@ import ShoppingTemplatesScreen from './src/screens/shopping/ShoppingTemplatesScr
 import ManageCategoriesScreen from './src/screens/main/ManageCategoriesScreen';
 import FriendsScreen from './src/screens/friends/FriendsScreen';
 import ChatScreen from './src/screens/friends/ChatScreen';
+import SplitBillScreen from './src/screens/friends/SplitBillScreen';
 import ProfileScreen from './src/screens/main/ProfileScreen';
+import GroupWalletScreen from './src/screens/main/GroupWalletScreen';
+import CreateTripScreen from './src/screens/main/CreateTripScreen';
+import GroupWalletDetailScreen from './src/screens/main/GroupWalletDetailScreen';
 
 import { StatusBar } from 'expo-status-bar';
+
+import NetWorthScreen from './src/screens/main/NetWorthScreen';
 
 const Stack = createNativeStackNavigator();
 const Tab = createBottomTabNavigator();
@@ -103,7 +112,7 @@ const AuthStack = () => (
 // ── Shared Custom Tab Bar ──────────────────────────────────────
 const CustomTabBar = ({ state, descriptors, navigation: tabNav, onPressAdd }) => {
     const COLORS = useTheme(state => state.COLORS);
-    const setIsSavingsMode = useUIStore(state => state.setIsSavingsMode);
+    const setIsSavingsMode = useTheme(state => state.setIsSavingsMode);
     const leftTabs = state.routes.slice(0, 2);
     const rightTabs = state.routes.slice(2);
 
@@ -182,7 +191,7 @@ const MainTabs = ({ navigation }) => {
 // ── Savings Mode Tabs ──────────────────────────────────────────
 const SavingsTabs = ({ navigation: rootNav }) => {
     const COLORS = useTheme(state => state.COLORS);
-    const setIsSavingsMode = useUIStore(state => state.setIsSavingsMode);
+    const setIsSavingsMode = useTheme(state => state.setIsSavingsMode);
     return (
         <View style={{ flex: 1, backgroundColor: COLORS.background }}>
             <Tab.Navigator
@@ -212,7 +221,7 @@ const AppNavigator = () => {
     const { userToken, userInfo, isSplashLoading } = useAuth();
     const COLORS = useTheme(state => state.COLORS);
     const isDarkMode = useTheme(state => state.isDarkMode);
-    const isSavingsMode = useUIStore(state => state.isSavingsMode);
+    const isSavingsMode = useTheme(state => state.isSavingsMode);
 
     const navTheme = isDarkMode
         ? { ...DarkTheme, colors: { ...DarkTheme.colors, background: COLORS.background, card: COLORS.surface } }
@@ -244,8 +253,8 @@ const AppNavigator = () => {
                             <Stack.Screen
                                 name="HomeRoot"
                                 component={isSavingsMode ? SavingsTabs : MainTabs}
-                                options={{ 
-                                    animation: isSavingsMode ? 'slide_from_right' : 'slide_from_left' 
+                                options={{
+                                    animation: isSavingsMode ? 'slide_from_right' : 'slide_from_left'
                                 }}
                             />
 
@@ -259,6 +268,9 @@ const AppNavigator = () => {
                             <Stack.Screen name="SavingsTransferHistory" component={SavingsTransferHistoryScreen} />
                             <Stack.Screen name="AddSavingsGoal" component={AddSavingsGoalScreen} />
                             <Stack.Screen name="SavingsGoalSelector" component={SavingsGoalSelectorScreen} />
+                            <Stack.Screen name="SavingsChallenges" component={SavingsChallengesScreen} />
+                            <Stack.Screen name="CreateChallenge" component={CreateChallengeScreen} />
+                            <Stack.Screen name="ChallengeDetail" component={ChallengeDetailScreen} />
                             <Stack.Screen name="SavingsArchive" component={SavingsArchiveScreen} />
                             <Stack.Screen name="ShoppingHome" component={ShoppingHomeScreen} />
                             <Stack.Screen name="ShoppingSession" component={ShoppingSessionScreen} />
@@ -276,7 +288,13 @@ const AppNavigator = () => {
                             <Stack.Screen name="Notifications" component={NotificationsScreen} />
                             <Stack.Screen name="FriendsScreen" component={FriendsScreen} />
                             <Stack.Screen name="ChatScreen" component={ChatScreen} />
+                            <Stack.Screen name="SplitBillScreen" component={SplitBillScreen} />
                             <Stack.Screen name="ProfileScreen" component={ProfileScreen} />
+                            <Stack.Screen name="NetWorth" component={NetWorthScreen} />
+                            <Stack.Screen name="BillCalendar" component={BillCalendarScreen} />
+                            <Stack.Screen name="GroupWalletScreen" component={GroupWalletScreen} />
+                            <Stack.Screen name="CreateTripScreen" component={CreateTripScreen} />
+                            <Stack.Screen name="GroupWalletDetailScreen" component={GroupWalletDetailScreen} />
                         </Stack.Navigator>
                     )
                 ) : <AuthStack />}

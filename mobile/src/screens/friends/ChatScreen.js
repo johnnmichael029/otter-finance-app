@@ -8,14 +8,7 @@ import { getConversation, sendMessage, markAsRead } from '../../api/api';
 import { getSocket } from '../../utils/socket';
 import { API_BASE } from '../../store/authStore';
 
-const formatTime = (isoString) => {
-    const d = new Date(isoString);
-    let h = d.getHours();
-    const m = d.getMinutes().toString().padStart(2, '0');
-    const ampm = h >= 12 ? 'PM' : 'AM';
-    h = h % 12 || 12;
-    return `${h}:${m} ${ampm}`;
-};
+import { formatTime } from '../../utils/formatters';
 
 const isSameDay = (date1, date2) => {
     const d1 = new Date(date1);
@@ -145,7 +138,11 @@ export default function ChatScreen({ route, navigation }) {
             if (pageNum === 1) {
                 setMessages(data.messages);
             } else {
-                setMessages(prev => [...prev, ...data.messages]);
+                setMessages(prev => {
+                    const existingIds = new Set(prev.map(m => m._id));
+                    const newMsgs = data.messages.filter(m => !existingIds.has(m._id));
+                    return [...prev, ...newMsgs];
+                });
             }
         } catch (e) {
             console.warn('[Chat] Load error:', e.message);
@@ -318,7 +315,7 @@ export default function ChatScreen({ route, navigation }) {
                             ref={flatListRef}
                             data={messages}
                             inverted={true}
-                            keyExtractor={item => item._id}
+                            keyExtractor={(item, index) => item._id ?? `msg-fallback-${index}`}
                             renderItem={renderMessage}
                             contentContainerStyle={{ paddingHorizontal: spacing.lg, paddingVertical: 20 }}
                             showsVerticalScrollIndicator={false}

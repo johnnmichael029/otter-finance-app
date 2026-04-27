@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import {
     View, Text, StyleSheet, TouchableOpacity,
-    Animated, StatusBar, Vibration, TextInput,
+    Animated, StatusBar, TextInput,
     ActivityIndicator, KeyboardAvoidingView, Platform
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -10,6 +10,7 @@ import { Feather } from '@expo/vector-icons';
 import { spacing, radius } from '../../theme/colors';
 import { useTheme } from '../../context/ThemeContext';
 import { useAuth } from '../../context/AuthContext';
+import { triggerHaptic } from '../../utils/haptics';
 
 const OTP_LENGTH = 6;
 const RESEND_COOLDOWN = 60;
@@ -33,7 +34,7 @@ const Cursor = () => {
 
 export default function VerifyEmailScreen({ route, navigation }) {
     const COLORS = useTheme(state => state.COLORS);
-    const { verifyRegister, register } = useAuth(); // register to resend OTP
+    const { verifyRegister, register, hapticsEnabled } = useAuth(); // register to resend OTP
     const { email, tempToken, name, password } = route.params;
 
     const [otp, setOtp] = useState('');
@@ -47,7 +48,7 @@ export default function VerifyEmailScreen({ route, navigation }) {
     const cooldownRef = useRef(null);
 
     const shake = () => {
-        Vibration.vibrate([0, 60, 60, 60]);
+        triggerHaptic(hapticsEnabled, 'notificationError');
         Animated.sequence([
             Animated.timing(shakeAnim, { toValue: 10, duration: 60, useNativeDriver: true }),
             Animated.timing(shakeAnim, { toValue: -10, duration: 60, useNativeDriver: true }),

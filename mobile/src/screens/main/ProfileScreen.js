@@ -12,13 +12,17 @@ import { useSecurity } from '../../context/SecurityContext';
 import { spacing, radius } from '../../theme/colors';
 import { updateProfile as apiUpdateProfile, uploadAvatar as apiUploadAvatar, checkTagAvailability, getProfile as apiGetProfile } from '../../api/api';
 import { API_BASE } from '../../store/authStore';
+import { useFinanceStore } from '../../store/financeStore';
+import { BADGES } from '../../constants/badges';
 import CustomAlertModal from '../../components/CustomAlertModal';
+import { IconRenderer } from '../../utils/formatters';
 import * as ImagePicker from 'expo-image-picker';
 
 export default function ProfileScreen({ navigation }) {
     const COLORS = useTheme(state => state.COLORS);
     const { userInfo, updateLocalUser } = useAuth();
     const { setShouldIgnoreLock } = useSecurity();
+    const achievements = useFinanceStore(state => state.achievements);
 
     // Editable form state seeded from current user info
     const [name, setName] = useState(userInfo?.name || '');
@@ -300,6 +304,51 @@ export default function ProfileScreen({ navigation }) {
                         </View>
                     </View>
                 </LinearGradient>
+
+                {/* ── Badges & Achievements Section ───────────────────── */}
+                <View style={[styles.sectionCard, { backgroundColor: COLORS.surface, marginTop: 16 }]}>
+                    <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: spacing.md, paddingTop: spacing.md, paddingBottom: 8 }}>
+                        <Text style={[styles.sectionTitle, { color: COLORS.primary, paddingHorizontal: 0, paddingTop: 0 }]}>
+                            <MaterialCommunityIcons name="trophy-outline" size={13} color={COLORS.primary} />
+                            {'  '}ACHIEVEMENTS
+                        </Text>
+                        <Text style={{ fontSize: 11, fontWeight: '700', color: COLORS.textMuted }}>{achievements.length} / {BADGES.length}</Text>
+                    </View>
+
+                    <ScrollView
+                        horizontal
+                        showsHorizontalScrollIndicator={false}
+                        contentContainerStyle={{ paddingHorizontal: spacing.md, paddingBottom: spacing.md, gap: 12 }}
+                    >
+                        {BADGES.map((badge) => {
+                            const isEarned = achievements.includes(badge.id);
+                            return (
+                                <TouchableOpacity
+                                    key={badge.id}
+                                    onPress={() => showAlert('info', badge.name, isEarned ? badge.description : `Keep going to earn this badge!\n\nCondition: ${badge.condition}`)}
+                                    style={[
+                                        styles.badgeCard,
+                                        { backgroundColor: isEarned ? badge.color + '15' : COLORS.border + '30' }
+                                    ]}
+                                >
+                                    <View style={[
+                                        styles.badgeIconWrap,
+                                        { backgroundColor: isEarned ? badge.color : COLORS.textMuted + '40' }
+                                    ]}>
+                                        <IconRenderer
+                                            name={isEarned ? badge.icon : 'lock'}
+                                            size={20}
+                                            color="#fff"
+                                        />
+                                    </View>
+                                    <Text style={[styles.badgeName, { color: isEarned ? COLORS.text : COLORS.textMuted }]} numberOfLines={1}>
+                                        {badge.name}
+                                    </Text>
+                                </TouchableOpacity>
+                            );
+                        })}
+                    </ScrollView>
+                </View>
 
                 {/* ── Identity Section ─────────────────────────────────── */}
                 <View style={[styles.sectionCard, { backgroundColor: COLORS.surface }]}>
@@ -595,4 +644,14 @@ const styles = StyleSheet.create({
         marginHorizontal: spacing.lg, marginTop: 24, paddingVertical: 16, borderRadius: radius.xl,
     },
     editCTAText: { color: '#fff', fontSize: 16, fontWeight: '800' },
+    
+    // Achievement Styles
+    badgeCard: {
+        width: 100, padding: 12, borderRadius: 16, alignItems: 'center', gap: 8,
+    },
+    badgeIconWrap: {
+        width: 44, height: 44, borderRadius: 22, justifyContent: 'center', alignItems: 'center',
+        shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.1, shadowRadius: 4, elevation: 2,
+    },
+    badgeName: { fontSize: 10, fontWeight: '800', textAlign: 'center' },
 });

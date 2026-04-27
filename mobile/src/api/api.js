@@ -2,7 +2,7 @@ import axios from 'axios';
 import { API_BASE } from '../context/AuthContext';
 
 // Set global defaults
-axios.defaults.timeout = 5000;
+axios.defaults.timeout = 10000;
 axios.defaults.headers.post['Content-Type'] = 'application/json';
 
 // ─── Core / Utils ─────────────────────────────────────────────────────────────
@@ -34,6 +34,7 @@ export const archiveTransaction = (id) =>
 
 export const emptyArchives = () =>
     axios.delete(`${API_BASE}/transactions/archive/empty`).then(r => r.data);
+
 export const getAnalytics = (params = {}) =>
     axios.get(`${API_BASE}/transactions/analytics`, { params }).then(r => r.data);
 
@@ -51,9 +52,6 @@ export const updateDebt = (id, data) =>
 export const deleteDebt = (id, params = {}) =>
     axios.delete(`${API_BASE}/debts/${id}`, { params }).then(r => r.data);
 
-export const sendDebtReminder = (id) =>
-    axios.post(`${API_BASE}/debts/${id}/remind`).then(r => r.data);
-
 export const logDebtPayment = (id, data) =>
     axios.post(`${API_BASE}/debts/${id}/payments`, data).then(r => r.data);
 
@@ -65,6 +63,9 @@ export const remindDebt = (id) =>
 
 export const respondDebtRequest = (id, status) =>
     axios.post(`${API_BASE}/debts/${id}/respond`, { status }).then(r => r.data);
+
+export const splitDebt = (data) =>
+    axios.post(`${API_BASE}/debts/split`, data).then(r => r.data);
 
 export const getProfile = () =>
     axios.get(`${API_BASE}/users/me`).then(r => r.data);
@@ -159,6 +160,9 @@ export const upsertBudget = (data) =>
 export const deleteBudget = (id) =>
     axios.delete(`${API_BASE}/budgets/${id}`).then(r => r.data);
 
+export const respondToBudgetInvite = (id, status) =>
+    axios.post(`${API_BASE}/budgets/respond/${id}`, { status }).then(r => r.data);
+
 // ─── Savings ──────────────────────────────────────────────────────────────────
 
 export const getSavingsGoals = (params = {}) =>
@@ -188,11 +192,18 @@ export const archiveSavingsTransfer = (id) =>
 export const emptySavingsArchives = () =>
     axios.delete(`${API_BASE}/savings/transfers/archive/empty`).then(r => r.data);
 
+export const deleteSavingsTransfer = (id) =>
+    axios.delete(`${API_BASE}/savings/transfers/${id}`).then(r => r.data);
+
 export const completeSavingsGoal = (id, data) =>
+
     axios.post(`${API_BASE}/savings/goals/complete/${id}`, data).then(r => r.data);
 
 export const bulkSavingsAction = (data) =>
     axios.post(`${API_BASE}/savings/bulk-action`, data).then(r => r.data);
+
+export const emptySavingsGoalArchives = () =>
+    axios.delete(`${API_BASE}/savings/goals/archive/empty`).then(r => r.data);
 
 // ─── Wallets ──────────────────────────────────────────────────────────────────
 
@@ -323,4 +334,70 @@ export const sendMessage = (friendId, content) =>
 
 export const markAsRead = (friendId) =>
     axios.patch(`${API_BASE}/chat/${friendId}/read`).then(r => r.data);
+
+// ── Net Worth ───────────────────────────────────────────────────────────────
+
+export const getNetWorth = () =>
+    axios.get(`${API_BASE}/net-worth`).then(r => r.data);
+
+export const getNetWorthHistory = () =>
+    axios.get(`${API_BASE}/net-worth/history`).then(r => r.data);
+
+export const createNetWorthSnapshot = () =>
+    axios.post(`${API_BASE}/net-worth/snapshot`).then(r => r.data);
+
+// ── Savings Challenges ────────────────────────────────────────────────────────
+
+export const getChallenges = () =>
+    axios.get(`${API_BASE}/challenges`).then(r => r.data);
+
+export const createChallenge = (data) =>
+    axios.post(`${API_BASE}/challenges`, data).then(r => r.data);
+
+export const updateChallenge = (id, data) =>
+    axios.patch(`${API_BASE}/challenges/${id}`, data).then(r => r.data);
+
+export const updateChallengeProgress = (id, data) =>
+    axios.post(`${API_BASE}/challenges/${id}/progress`, data).then(r => r.data);
+
+export const respondToChallengeInvite = (id, status) =>
+    axios.post(`${API_BASE}/challenges/${id}/respond`, { status }).then(r => r.data);
+
+export const deleteChallenge = (id) =>
+    axios.delete(`${API_BASE}/challenges/${id}`).then(r => r.data);
+
+export const emptyChallengeArchives = () =>
+    axios.delete(`${API_BASE}/challenges/archives`).then(r => r.data);
+
+// ─── Group Trip Wallets ───────────────────────────────────────────────────────
+
+export const getGroupWallets = () =>
+    axios.get(`${API_BASE}/group-wallets`).then(r => r.data);
+
+export const createGroupWallet = (data) =>
+    axios.post(`${API_BASE}/group-wallets`, data).then(r => r.data);
+
+export const getGroupWalletDetail = (id) =>
+    axios.get(`${API_BASE}/group-wallets/${id}`).then(r => r.data);
+
+export const respondToTripInvite = (id, status) =>
+    axios.post(`${API_BASE}/group-wallets/${id}/respond`, { status }).then(r => r.data);
+
+export const addTripExpense = (id, data) =>
+    axios.post(`${API_BASE}/group-wallets/${id}/expense`, data).then(r => r.data);
+
+export const getTripSettlementPreview = (id) =>
+    axios.get(`${API_BASE}/group-wallets/${id}/settle-preview`).then(r => r.data);
+
+export const settleTrip = (id) =>
+    axios.post(`${API_BASE}/group-wallets/${id}/settle`).then(r => r.data);
+
+export const updateTrip = (id, data) =>
+    axios.patch(`${API_BASE}/group-wallets/${id}`, data).then(r => r.data);
+
+export const leaveTrip = (id) =>
+    axios.delete(`${API_BASE}/group-wallets/${id}/leave`).then(r => r.data);
+
+export const deleteTrip = (id) =>
+    axios.delete(`${API_BASE}/group-wallets/${id}`).then(r => r.data);
 

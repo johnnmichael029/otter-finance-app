@@ -16,20 +16,17 @@ import { useFinanceStore } from '../../store/financeStore';
 import { spacing, radius } from '../../theme/colors';
 import {
     getDebts, createDebt, updateDebt, deleteDebt,
-    logDebtPayment, getDebtPayments, getFriends, respondDebtRequest
+    logDebtPayment, getDebtPayments, getFriends, respondDebtRequest,
+    deleteTransaction
 } from '../../api/api';
+import { Swipeable } from 'react-native-gesture-handler';
 import { connectSocket, getSocket } from '../../utils/socket';
 import CustomAlertModal from '../../components/CustomAlertModal';
 import Skeleton from '../../components/Skeleton';
 import WalletSelector, { calcNativeDeduct, hasEnoughBalance } from '../../components/WalletSelector';
+import { formatCurrency, formatDate } from '../../utils/formatters';
 
-const formatCurrency = (v) =>
-    new Intl.NumberFormat('en-PH', { style: 'currency', currency: 'PHP' }).format(v ?? 0);
 
-const formatDate = (d) => {
-    if (!d) return '—';
-    return new Intl.DateTimeFormat('en-PH', { month: 'short', day: 'numeric', year: 'numeric' }).format(new Date(d));
-};
 
 const daysUntil = (dateStr) => {
     if (!dateStr) return null;
@@ -358,7 +355,11 @@ export default function DebtScreen({ navigation }) {
             load();
             showAlert('success', 'Debt Added!', 'Your debt record has been created.');
         } catch (e) {
-            showAlert('error', 'Failed', e?.response?.data?.error || 'Could not save.');
+            const isNetworkError = !e.response && e.request;
+            const msg = isNetworkError
+                ? 'Unable to connect to the server. Please check your internet connection and try again.'
+                : (e?.response?.data?.error || 'Could not save.');
+            showAlert('error', isNetworkError ? 'Network Error' : 'Failed', msg);
         } finally {
             setSaving(false);
         }
@@ -410,7 +411,11 @@ export default function DebtScreen({ navigation }) {
             load();
             showAlert('success', 'Payment Logged!', `${formatCurrency(amount)} recorded as paid.`);
         } catch (e) {
-            showAlert('error', 'Failed', e?.response?.data?.error || 'Could not log payment.');
+            const isNetworkError = !e.response && e.request;
+            const msg = isNetworkError
+                ? 'Unable to connect to the server. Please check your internet connection and try again.'
+                : (e?.response?.data?.error || 'Could not log payment.');
+            showAlert('error', isNetworkError ? 'Network Error' : 'Failed', msg);
         } finally {
             setSaving(false);
         }
@@ -462,10 +467,38 @@ export default function DebtScreen({ navigation }) {
                     await deleteDebt(debt._id);
                     load();
                 } catch (e) {
-                    showAlert('error', 'Failed', 'Could not delete.');
+                    const isNetworkError = !e.response && e.request;
+                    const msg = isNetworkError
+                        ? 'Unable to connect to the server. Please check your internet connection and try again.'
+                        : (e?.response?.data?.error || 'Could not delete.');
+                    showAlert('error', isNetworkError ? 'Network Error' : 'Failed', msg);
                 }
             });
         }
+    };
+
+    const handleDeletePayment = (payment) => {
+        if (!payment.transactionId) {
+            return showAlert('error', 'Error', 'This payment log is not linked to a transaction and cannot be deleted.');
+        }
+
+        showAlert('confirm', 'Delete Payment?', 'Are you sure you want to delete this payment log? This will revert the debt balance and wallet history.', async () => {
+            try {
+                // This will call the backend which now blocks debt transaction deletion
+                // But the user wants us to SHOW THE MESSAGE, so we call it.
+                await deleteTransaction(payment.transactionId);
+
+                // Refresh data if it somehow succeeded (e.g. if we changed our mind in backend)
+                load();
+                setDetailModal(s => ({ ...s, visible: false }));
+            } catch (e) {
+                const isNetworkError = !e.response && e.request;
+                const msg = isNetworkError
+                    ? 'Unable to connect to the server. Please check your internet connection and try again.'
+                    : (e?.response?.data?.error || 'Could not delete payment.');
+                showAlert('error', isNetworkError ? 'Network Error' : 'Action Restricted', msg);
+            }
+        });
     };
 
     const resetForm = () => setForm({
@@ -480,7 +513,11 @@ export default function DebtScreen({ navigation }) {
             showAlert('success', 'Success', status === 'linked' ? 'Debt request accepted.' : 'Debt request rejected.');
             load();
         } catch (e) {
-            showAlert('error', 'Failed', e?.response?.data?.error || 'Failed to respond to request.');
+            const isNetworkError = !e.response && e.request;
+            const msg = isNetworkError
+                ? 'Unable to connect to the server. Please check your internet connection and try again.'
+                : (e?.response?.data?.error || 'Failed to respond to request.');
+            showAlert('error', isNetworkError ? 'Network Error' : 'Failed', msg);
         }
     };
 
@@ -550,13 +587,22 @@ export default function DebtScreen({ navigation }) {
                     <Text style={[styles.headerTitle, { color: COLORS.text }]}>Debt Tracker</Text>
                     <Text style={[styles.headerSub, { color: COLORS.textMuted }]}>Installments & loans</Text>
                 </View>
-                <TouchableOpacity
-                    onPress={() => { resetForm(); setAddModal(true); }}
-                    style={[styles.addBtn, { backgroundColor: COLORS.primary }]}
-                >
-                    <Feather name="plus" size={20} color="#fff" />
-                    <Text style={styles.startBtnText}>Debt</Text>
-                </TouchableOpacity>
+                <View style={{ flexDirection: 'row', gap: 8, marginLeft: "auto" }}>
+                    <TouchableOpacity
+                        onPress={() => navigation.navigate('SplitBillScreen')}
+                        style={[styles.addBtn, { backgroundColor: COLORS.surface, borderColor: COLORS.border, borderWidth: 1, paddingHorizontal: 12 }]}
+                    >
+                        <MaterialCommunityIcons name="call-split" size={20} color={COLORS.text} />
+                        <Text style={[styles.startBtnText, { color: COLORS.text, marginLeft: 6 }]}>Split</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                        onPress={() => { resetForm(); setAddModal(true); }}
+                        style={[styles.addBtn, { backgroundColor: COLORS.primary }]}
+                    >
+                        <Feather name="plus" size={20} color="#fff" />
+                        <Text style={styles.startBtnText}>Debt</Text>
+                    </TouchableOpacity>
+                </View>
             </View>
 
             {/* Summary Cards */}
@@ -1019,24 +1065,44 @@ export default function DebtScreen({ navigation }) {
                             </Text>
                         ) : (
                             detailModal.payments.map(pay => (
-                                <View key={pay._id} style={[styles.paymentItem, { borderBottomColor: COLORS.border }]}>
-                                    <View style={[styles.payDot, { backgroundColor: '#22c55e' }]} />
-                                    <View style={{ flex: 1 }}>
-                                        <Text style={[styles.payAmount, { color: '#22c55e' }]}>
-                                            {formatCurrency(pay.amount)}
-                                            <Text style={{ fontSize: 10, color: COLORS.textMuted, fontWeight: '400' }}>
-                                                {pay.wallet ? ` via ${pay.wallet.name}` : ' (HAND)'}
+                                <Swipeable
+                                    key={pay._id}
+                                    renderRightActions={() => (
+                                        <TouchableOpacity
+                                            onPress={() => handleDeletePayment(pay)}
+                                            style={{
+                                                backgroundColor: '#ef4444',
+                                                justifyContent: 'center',
+                                                alignItems: 'center',
+                                                width: 80,
+                                                height: '100%',
+                                                borderBottomRightRadius: radius.lg,
+                                                borderTopRightRadius: radius.lg,
+                                            }}
+                                        >
+                                            <Feather name="trash-2" size={20} color="#fff" />
+                                        </TouchableOpacity>
+                                    )}
+                                >
+                                    <View style={[styles.paymentItem, { borderBottomColor: COLORS.border, backgroundColor: COLORS.surface }]}>
+                                        <View style={[styles.payDot, { backgroundColor: '#22c55e' }]} />
+                                        <View style={{ flex: 1 }}>
+                                            <Text style={[styles.payAmount, { color: '#22c55e' }]}>
+                                                {formatCurrency(pay.amount)}
+                                                <Text style={{ fontSize: 10, color: COLORS.textMuted, fontWeight: '400' }}>
+                                                    {pay.wallet ? ` via ${pay.wallet.name}` : ' (HAND)'}
+                                                </Text>
                                             </Text>
-                                        </Text>
-                                        {pay.walletAmount !== null && pay.walletAmount !== undefined && (
-                                            <Text style={{ fontSize: 11, color: COLORS.primary, fontWeight: '600', marginTop: 1 }}>
-                                                {pay.walletAmount.toLocaleString(undefined, { maximumFractionDigits: 8 })} {pay.walletCurrency}
-                                            </Text>
-                                        )}
-                                        {pay.note ? <Text style={[styles.payNote, { color: COLORS.textMuted, marginTop: 2 }]}>{pay.note}</Text> : null}
+                                            {pay.walletAmount !== null && pay.walletAmount !== undefined && (
+                                                <Text style={{ fontSize: 11, color: COLORS.primary, fontWeight: '600', marginTop: 1 }}>
+                                                    {pay.walletAmount.toLocaleString(undefined, { maximumFractionDigits: 8 })} {pay.walletCurrency}
+                                                </Text>
+                                            )}
+                                            {pay.note ? <Text style={[styles.payNote, { color: COLORS.textMuted, marginTop: 2 }]}>{pay.note}</Text> : null}
+                                        </View>
+                                        <Text style={[styles.payDate, { color: COLORS.textMuted }]}>{formatDate(pay.paidAt)}</Text>
                                     </View>
-                                    <Text style={[styles.payDate, { color: COLORS.textMuted }]}>{formatDate(pay.paidAt)}</Text>
-                                </View>
+                                </Swipeable>
                             ))
                         )}
                     </ScrollView>

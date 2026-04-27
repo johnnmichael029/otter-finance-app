@@ -1,16 +1,17 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import {
     View, Text, StyleSheet, TouchableOpacity,
-    Animated, StatusBar, Vibration, TextInput,
+    Animated, StatusBar, TextInput,
     ActivityIndicator, Dimensions, KeyboardAvoidingView, Platform
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { MaterialCommunityIcons, Feather } from '@expo/vector-icons';
 import axios from 'axios';
-import { API_BASE } from '../../context/AuthContext';
+import { API_BASE, useAuth } from '../../context/AuthContext';
 import { spacing, radius, typography } from '../../theme/colors';
 import { useTheme } from '../../context/ThemeContext';
+import { triggerHaptic } from '../../utils/haptics';
 
 const { width } = Dimensions.get('window');
 const OTP_LENGTH = 6;
@@ -35,6 +36,7 @@ const Cursor = () => {
 
 export default function ForgotPasswordScreen({ navigation }) {
     const COLORS = useTheme(state => state.COLORS);
+    const hapticsEnabled = useAuth(state => state.hapticsEnabled);
 
     // ── Steps: 0 (Email), 1 (OTP), 2 (Reset Password) ──
     const [step, setStep] = useState(0);
@@ -92,7 +94,7 @@ export default function ForgotPasswordScreen({ navigation }) {
     };
 
     const shake = () => {
-        Vibration.vibrate([0, 60, 60, 60]);
+        triggerHaptic(hapticsEnabled, 'notificationError');
         Animated.sequence([
             Animated.timing(shakeAnim, { toValue: 10, duration: 60, useNativeDriver: true }),
             Animated.timing(shakeAnim, { toValue: -10, duration: 60, useNativeDriver: true }),

@@ -16,6 +16,7 @@ import { useSecurity } from '../../context/SecurityContext';
 import { useFinanceStore } from '../../store/financeStore';
 import WalletSelector, { calcNativeDeduct, hasEnoughBalance } from '../../components/WalletSelector';
 import CalculatorSheet from '../../components/CalculatorSheet';
+import { IconRenderer } from '../../utils/formatters';
 
 const CATEGORIES = {
     income: [
@@ -34,24 +35,6 @@ const CATEGORIES = {
     ],
 };
 
-
-const DynamicIcon = ({ name, size, color, style }) => {
-    const MCI_ICONS = ['piggy-bank-outline', 'account-cash', 'jeepney', 'car', 'noodles', 'egg-fried', 'cup',
-        'controller-classic-outline'
-    ];
-    const ION_ICONS = ['train-outline', 'boat-outline', 'egg-outline', 'game-controller-outline'];
-    const FA5_ICONS = ['hospital'];
-    if (MCI_ICONS.includes(name)) {
-        return <MaterialCommunityIcons name={name} size={size} color={color} style={style} />;
-    }
-    if (ION_ICONS.includes(name)) {
-        return <Ionicons name={name} size={size} color={color} style={style} />;
-    }
-    if (FA5_ICONS.includes(name)) {
-        return <FontAwesome5 name={name} size={size} color={color} style={style} />;
-    }
-    return <Feather name={name} size={size} color={color} style={style} />;
-};
 
 
 export default function AddTransactionScreen({ navigation, route }) {
@@ -464,7 +447,7 @@ export default function AddTransactionScreen({ navigation, route }) {
                                         style={[styles.templateChip, { backgroundColor: COLORS.surface, borderColor: COLORS.border }]}
                                     >
                                         <View style={[styles.templateIcon, { backgroundColor: (tx.categoryColor || accentColor) + '20' }]}>
-                                            <DynamicIcon name={tx.categoryIcon || 'tag'} size={14} color={tx.categoryColor || accentColor} />
+                                            <IconRenderer name={tx.categoryIcon || 'tag'} size={14} color={tx.categoryColor || accentColor} />
                                         </View>
                                         <View>
                                             <Text style={[styles.templateCat, { color: COLORS.text }]}>{tx.category}</Text>
@@ -708,7 +691,7 @@ export default function AddTransactionScreen({ navigation, route }) {
                                         onPress={() => setCategory(cat)}
                                         activeOpacity={0.75}
                                     >
-                                        <DynamicIcon name={cat.icon} size={18} color={isSelected ? '#fff' : cat.color} />
+                                        <IconRenderer name={cat.icon} size={18} color={isSelected ? '#fff' : cat.color} />
                                         <Text style={[styles.categoryLabel, { color: isSelected ? '#fff' : COLORS.text }]}>
                                             {cat.label}
                                         </Text>

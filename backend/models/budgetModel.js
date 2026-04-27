@@ -38,6 +38,12 @@ const budgetSchema = new mongoose.Schema({
         amount: { type: Number, required: true, min: 0 },
         icon: { type: String, default: 'tag' }
     }],
+    isShared: { type: Boolean, default: false },
+    participants: [{
+        user: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+        status: { type: String, enum: ['pending', 'accepted', 'rejected'], default: 'pending' },
+        joinedAt: { type: Date }
+    }],
 }, { timestamps: true });
 
 // Each user can only have one budget rule per category per period

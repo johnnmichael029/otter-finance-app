@@ -1,50 +1,140 @@
 import React from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, ScrollView, SafeAreaView } from 'react-native';
-import { Feather, MaterialCommunityIcons } from '@expo/vector-icons';
-import * as Sentry from '@sentry/react-native';
+import {
+    View, Text, TouchableOpacity, StyleSheet,
+    SafeAreaView, StatusBar, Animated, ScrollView, Image,
+} from 'react-native';
+import { Feather } from '@expo/vector-icons';
 
-export default class ErrorBoundary extends React.Component {
+const otterIcon = require('../../assets/icon/welcomeOtter.png');
+
+class ErrorBoundary extends React.Component {
     constructor(props) {
         super(props);
-        this.state = { hasError: false, error: null };
+        this.state = {
+            hasError: false,
+            error: null,
+            showDetails: false,
+        };
+        this.fadeAnim = new Animated.Value(0);
+        this.slideAnim = new Animated.Value(40);
     }
 
     static getDerivedStateFromError(error) {
-        // Update state so the next render will show the fallback UI.
         return { hasError: true, error };
     }
 
     componentDidCatch(error, errorInfo) {
-        // Log the error to an error reporting service like Sentry
-        console.error("ErrorBoundary caught an error:", error, errorInfo);
-        Sentry.captureException(error);
+        console.error('ErrorBoundary caught an error:', error, errorInfo);
+        Animated.parallel([
+            Animated.timing(this.fadeAnim, {
+                toValue: 1,
+                duration: 400,
+                useNativeDriver: true,
+            }),
+            Animated.spring(this.slideAnim, {
+                toValue: 0,
+                tension: 60,
+                friction: 10,
+                useNativeDriver: true,
+            }),
+        ]).start();
     }
 
-    handleRestart = () => {
-        // Optional: you could try to re-render or push a navigation reset
-        this.setState({ hasError: false, error: null });
+    resetError = () => {
+        this.fadeAnim.setValue(0);
+        this.slideAnim.setValue(40);
+        this.setState({ hasError: false, error: null, showDetails: false });
+    };
+
+    toggleDetails = () => {
+        this.setState(prev => ({ showDetails: !prev.showDetails }));
     };
 
     render() {
         if (this.state.hasError) {
+            const { error, showDetails } = this.state;
+            const errorMessage = error?.message || 'An unknown error occurred.';
+
             return (
-                <SafeAreaView style={styles.container}>
-                    <View style={styles.content}>
-                        <MaterialCommunityIcons name="alert-circle-outline" size={80} color="#ef4444" style={styles.icon} />
-                        <Text style={styles.title}>Oops, something went wrong.</Text>
-                        <Text style={styles.subtitle}>Our app encountered an unexpected error. The development team has been automatically notified.</Text>
+                <SafeAreaView style={styles.safe}>
+                    <StatusBar barStyle="light-content" backgroundColor="#0d0d14" />
 
-                        <ScrollView style={styles.errorBox}>
-                            <Text style={styles.errorText}>
-                                {this.state.error && this.state.error.toString()}
+                    {/* Background blobs */}
+                    <View style={styles.blobTop} />
+                    <View style={styles.blobBottom} />
+
+                    <Animated.View
+                        style={[
+                            styles.content,
+                            {
+                                opacity: this.fadeAnim,
+                                transform: [{ translateY: this.slideAnim }],
+                            },
+                        ]}
+                    >
+                        {/* Mascot */}
+                        <View style={styles.mascotWrap}>
+                            <Image
+                                source={otterIcon}
+                                style={styles.mascot}
+                                resizeMode="contain"
+                            />
+                        </View>
+
+                        {/* Card */}
+                        <View style={styles.card}>
+                            <View style={styles.iconBadge}>
+                                <Feather name="alert-triangle" size={28} color="#E91E8C" />
+                            </View>
+
+                            <Text style={styles.title}>Something went wrong</Text>
+                            <Text style={styles.subtitle}>
+                                Otter ran into an unexpected hiccup. Don't worry — your data is safe.
                             </Text>
-                        </ScrollView>
 
-                        <TouchableOpacity style={styles.button} onPress={this.handleRestart}>
-                            <Feather name="refresh-ccw" size={18} color="#fff" style={{ marginRight: 8 }} />
-                            <Text style={styles.buttonText}>Try Again</Text>
-                        </TouchableOpacity>
-                    </View>
+                            {/* Error detail toggle */}
+                            <TouchableOpacity
+                                style={styles.detailToggle}
+                                onPress={this.toggleDetails}
+                                activeOpacity={0.7}
+                            >
+                                <Text style={styles.detailToggleText}>
+                                    {showDetails ? 'Hide' : 'Show'} error details
+                                </Text>
+                                <Feather
+                                    name={showDetails ? 'chevron-up' : 'chevron-down'}
+                                    size={14}
+                                    color="#E91E8C"
+                                />
+                            </TouchableOpacity>
+
+                            {showDetails && (
+                                <ScrollView
+                                    style={styles.errorBox}
+                                    nestedScrollEnabled
+                                    showsVerticalScrollIndicator={false}
+                                >
+                                    <Text style={styles.errorText} selectable>
+                                        {errorMessage}
+                                    </Text>
+                                </ScrollView>
+                            )}
+
+                            {/* Actions */}
+                            <TouchableOpacity
+                                style={styles.primaryBtn}
+                                onPress={this.resetError}
+                                activeOpacity={0.85}
+                            >
+                                <Feather name="refresh-cw" size={16} color="#fff" style={{ marginRight: 8 }} />
+                                <Text style={styles.primaryBtnText}>Try Again</Text>
+                            </TouchableOpacity>
+                        </View>
+
+                        <Text style={styles.footer}>
+                            Otter Finance · Error Recovery
+                        </Text>
+                    </Animated.View>
                 </SafeAreaView>
             );
         }
@@ -53,61 +143,161 @@ export default class ErrorBoundary extends React.Component {
     }
 }
 
+const PINK = '#E91E8C';
+const DARK_BG = '#0d0d14';
+const CARD_BG = '#161622';
+const BORDER = '#2a2a3a';
+
 const styles = StyleSheet.create({
-    container: {
+    safe: {
         flex: 1,
-        backgroundColor: '#121212', // standard dark
+        backgroundColor: DARK_BG,
     },
+
+    // Decorative blobs
+    blobTop: {
+        position: 'absolute',
+        width: 300,
+        height: 300,
+        borderRadius: 150,
+        backgroundColor: PINK,
+        opacity: 0.08,
+        top: -80,
+        right: -80,
+    },
+    blobBottom: {
+        position: 'absolute',
+        width: 250,
+        height: 250,
+        borderRadius: 125,
+        backgroundColor: '#7b0f4e',
+        opacity: 0.12,
+        bottom: -60,
+        left: -60,
+    },
+
     content: {
         flex: 1,
-        padding: 24,
-        alignItems: 'center',
         justifyContent: 'center',
+        alignItems: 'center',
+        paddingHorizontal: 24,
     },
-    icon: {
-        marginBottom: 20,
+
+    // Mascot
+    mascotWrap: {
+        marginBottom: 8,
     },
+    mascot: {
+        width: 110,
+        height: 110,
+    },
+
+    // Card
+    card: {
+        width: '100%',
+        backgroundColor: CARD_BG,
+        borderRadius: 24,
+        padding: 24,
+        borderWidth: 1,
+        borderColor: BORDER,
+        alignItems: 'center',
+        // Shadow
+        shadowColor: PINK,
+        shadowOffset: { width: 0, height: 4 },
+        shadowOpacity: 0.15,
+        shadowRadius: 20,
+        elevation: 10,
+    },
+
+    iconBadge: {
+        width: 60,
+        height: 60,
+        borderRadius: 18,
+        backgroundColor: PINK + '18',
+        borderWidth: 1,
+        borderColor: PINK + '40',
+        justifyContent: 'center',
+        alignItems: 'center',
+        marginBottom: 16,
+    },
+
     title: {
-        fontSize: 24,
-        fontWeight: '900',
-        color: '#ffffff',
-        marginBottom: 12,
+        fontSize: 20,
+        fontWeight: '800',
+        color: '#FFFFFF',
+        marginBottom: 8,
         textAlign: 'center',
+        letterSpacing: -0.3,
     },
     subtitle: {
-        fontSize: 15,
-        color: '#a1a1aa',
+        fontSize: 14,
+        color: '#8888aa',
         textAlign: 'center',
-        marginBottom: 30,
-        lineHeight: 22,
+        lineHeight: 21,
+        marginBottom: 20,
     },
+
+    // Detail toggle
+    detailToggle: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 4,
+        marginBottom: 12,
+    },
+    detailToggleText: {
+        fontSize: 12,
+        color: PINK,
+        fontWeight: '600',
+    },
+
+    // Error box
     errorBox: {
         width: '100%',
-        maxHeight: 150,
-        backgroundColor: '#1e1e1e',
-        borderRadius: 12,
-        padding: 16,
-        marginBottom: 30,
+        maxHeight: 90,
+        backgroundColor: '#0a0a12',
+        borderRadius: 10,
+        padding: 12,
+        marginBottom: 20,
         borderWidth: 1,
-        borderColor: '#3f3f46',
+        borderColor: BORDER,
     },
     errorText: {
+        fontSize: 11,
+        color: '#ff6b6b',
         fontFamily: 'monospace',
-        color: '#ef4444',
-        fontSize: 12,
-        lineHeight: 18,
+        lineHeight: 16,
     },
-    button: {
+
+    // Button
+    primaryBtn: {
         flexDirection: 'row',
-        backgroundColor: '#E91E8C',
-        paddingVertical: 14,
-        paddingHorizontal: 24,
-        borderRadius: 12,
         alignItems: 'center',
+        justifyContent: 'center',
+        backgroundColor: PINK,
+        paddingVertical: 14,
+        paddingHorizontal: 32,
+        borderRadius: 14,
+        width: '100%',
+        shadowColor: PINK,
+        shadowOffset: { width: 0, height: 4 },
+        shadowOpacity: 0.4,
+        shadowRadius: 10,
+        elevation: 6,
     },
-    buttonText: {
-        color: '#ffffff',
-        fontSize: 16,
-        fontWeight: '800',
-    }
+    primaryBtnText: {
+        color: '#FFFFFF',
+        fontSize: 15,
+        fontWeight: '700',
+        letterSpacing: 0.3,
+    },
+
+    footer: {
+        marginTop: 24,
+        fontSize: 11,
+        color: '#3a3a55',
+        letterSpacing: 0.5,
+        fontWeight: '600',
+    },
 });
+
+export default ErrorBoundary;

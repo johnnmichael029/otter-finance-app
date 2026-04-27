@@ -43,7 +43,13 @@ const debtPaymentSchema = new mongoose.Schema({
         type: String,
         default: null,
     },
+    transactionId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Transaction',
+        default: null,
+    },
 }, { timestamps: true });
+
 
 debtPaymentSchema.index({ debt: 1, paidAt: -1 });
 

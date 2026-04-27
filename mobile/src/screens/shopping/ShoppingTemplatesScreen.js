@@ -13,9 +13,7 @@ import { getShoppingTemplates, createShoppingTemplate, deleteShoppingTemplate, u
 import { spacing, radius } from '../../theme/colors';
 import Skeleton from '../../components/Skeleton';
 import CustomAlertModal from '../../components/CustomAlertModal';
-
-const formatCurrency = (amount, currency = 'PHP') =>
-    new Intl.NumberFormat('en-PH', { style: 'currency', currency }).format(amount || 0);
+import { formatCurrency } from '../../utils/formatters';
 
 export default function ShoppingTemplatesScreen({ navigation }) {
     const COLORS = useTheme(state => state.COLORS);

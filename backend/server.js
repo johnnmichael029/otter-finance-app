@@ -48,6 +48,8 @@ const notificationRoutes = require('./routes/notificationRoutes');
 const categoryRoutes = require('./routes/categoryRoutes');
 const walletRoutes = require('./routes/walletRoutes');
 const friendRoutes = require('./routes/friendRoutes');
+const netWorthRoutes = require('./routes/netWorthRoutes');
+const groupWalletRoutes = require('./routes/groupWalletRoutes');
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  HELMET — Secure HTTP headers
@@ -177,7 +179,7 @@ io.on('connection', (socket) => {
         const userId = socketToUser.get(socket.id);
         if (userId) {
             socketToUser.delete(socket.id);
-            
+
             // Check if user has other active sockets before declaring offline
             const activeSockets = await io.in(`user:${userId}`).fetchSockets();
             if (activeSockets.length === 0) {
@@ -345,6 +347,16 @@ app.use('/api/wallets', walletRoutes);
 const chatRoutes = require('./routes/chatRoutes');
 app.use('/api/friends', friendRoutes);
 app.use('/api/chat', chatRoutes);
+
+// Net Worth Tracker
+app.use('/api/net-worth', netWorthRoutes);
+
+// Savings Challenges
+const challengeRoutes = require('./routes/challengeRoutes');
+app.use('/api/challenges', challengeRoutes);
+
+// Group Trip Wallets
+app.use('/api/group-wallets', groupWalletRoutes);
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  GLOBAL ERROR HANDLER

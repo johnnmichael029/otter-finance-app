@@ -17,16 +17,33 @@ export const useFinanceStore = create(
             recurringBills: [],
             transactions: [],
             transactionSummary: { totalIncome: 0, totalExpenses: 0, balance: 0, incomeDist: [], expenseDist: [] },
+            netBalance: 0,
             savingsGoals: [],
+            challenges: [],
             savingsMasterPot: null,
             wallets: [],
             cryptoPrices: {},
+            budgets: [],
+            unreadNotifCount: 0,
+            pendingRequestsCount: 0,
+            activeTrips: [],
 
             // ─── UI State ───
+            currentSummaryRange: 'week',
+            setCurrentSummaryRange: (range) => set({ currentSummaryRange: range }),
             hideGlobalBalance: false,
             setHideGlobalBalance: (val) => set({ hideGlobalBalance: val }),
             currencyModalVisible: false,
             setCurrencyModalVisible: (val) => set({ currencyModalVisible: val }),
+            achievements: [],
+            addAchievement: (badgeId) => {
+                const current = get().achievements;
+                if (!current.includes(badgeId)) {
+                    set({ achievements: [...current, badgeId] });
+                    return true; // Newly earned
+                }
+                return false;
+            },
 
             // ─── Loading States ───
             isLoadingDebts: false,
@@ -34,7 +51,9 @@ export const useFinanceStore = create(
             isLoadingTransactions: false,
             isLoadingSummary: false,
             isLoadingSavings: false,
+            isLoadingChallenges: false,
             isLoadingWallets: false,
+            isLoadingBudgets: false,
 
             // ─── Fetch Methods ───
             fetchWallets: async (force = false) => {
@@ -117,6 +136,9 @@ export const useFinanceStore = create(
                 try {
                     const data = await api.getTransactionSummary({ range });
                     set({ transactionSummary: data || {} });
+                    if (range === 'all') {
+                        set({ netBalance: data?.netBalance || 0 });
+                    }
                 } catch (e) {
                     console.warn('[FinanceStore] fetchSummary error:', e.message);
                 } finally {
@@ -140,6 +162,32 @@ export const useFinanceStore = create(
                 }
             },
 
+            fetchChallenges: async (force = false) => {
+                if (!force && get().challenges.length > 0) return;
+                set({ isLoadingChallenges: true });
+                try {
+                    const res = await api.getChallenges();
+                    set({ challenges: res.challenges || [] });
+                } catch (e) {
+                    console.warn('[FinanceStore] fetchChallenges error:', e.message);
+                } finally {
+                    set({ isLoadingChallenges: false });
+                }
+            },
+
+            fetchBudgets: async (force = false) => {
+                if (!force && get().budgets.length > 0) return;
+                set({ isLoadingBudgets: true });
+                try {
+                    const res = await api.getBudgets();
+                    set({ budgets: res.budgets || [] });
+                } catch (e) {
+                    console.warn('[FinanceStore] fetchBudgets error:', e.message);
+                } finally {
+                    set({ isLoadingBudgets: false });
+                }
+            },
+
             // ─── Global Refresher ───
             // Temporarily disabled to prevent 429 Too Many Requests errors
             // refreshAll: async () => {
@@ -149,24 +197,41 @@ export const useFinanceStore = create(
             //     await get().fetchRecurringBills(true);
             //     await get().fetchTransactions(true);
             // },
-
             refreshAll: async (force = true) => {
                 const now = Date.now();
                 if (force && now - lastRefreshTime < 1000) return;
                 if (force) lastRefreshTime = now;
 
-                const { fetchDebts, fetchRecurringBills, fetchTransactions, fetchTransactionSummary, fetchSavings, fetchWallets } = get();
+                const { fetchDebts, fetchRecurringBills, fetchTransactions, fetchTransactionSummary, fetchSavings, fetchChallenges, fetchWallets, fetchBudgets } = get();
                 try {
-                    await Promise.all([
+                    // Start core financial fetches
+                    const financialPromises = [
+                        fetchWallets(force),
                         fetchDebts(force),
                         fetchRecurringBills(force),
                         fetchTransactions(force),
-                        fetchTransactionSummary('week', force),
                         fetchSavings(force),
-                        fetchWallets(force)
-                    ].filter(Boolean));
+                        fetchChallenges(force),
+                        fetchBudgets(force)
+                    ];
+
+                    // Start UI meta fetches
+                    const metaPromises = [
+                        api.getNotifications().then(res => set({ unreadNotifCount: res?.unreadCount || 0 })).catch(() => {}),
+                        api.getFriendRequests().then(res => set({ pendingRequestsCount: Array.isArray(res) ? res.length : 0 })).catch(() => {}),
+                        api.getGroupWallets().then(res => set({ activeTrips: Array.isArray(res) ? res.filter(t => !t.isArchived) : [] })).catch(() => {})
+                    ];
+
+                    await Promise.all([...financialPromises, ...metaPromises]);
+
+                    // Summary is secondary
+                    if (refreshAllTimeout) clearTimeout(refreshAllTimeout);
+                    refreshAllTimeout = setTimeout(() => {
+                        get().fetchTransactionSummary(get().currentSummaryRange, force);
+                        get().fetchTransactionSummary('all', force);
+                    }, 500);
                 } catch (e) {
-                    console.warn('[FinanceStore] refreshAll error:', e.message);
+                    console.warn('[FinanceStore] refreshAll Error:', e);
                 }
             },
 
@@ -178,10 +243,10 @@ export const useFinanceStore = create(
                 }, 400);
             },
 
-            debouncedRefreshSummary: (range = 'week', force = true) => {
+            debouncedRefreshSummary: (force = true) => {
                 if (summaryTimeout) clearTimeout(summaryTimeout);
                 summaryTimeout = setTimeout(() => {
-                    get().fetchTransactionSummary(range, force);
+                    get().fetchTransactionSummary(get().currentSummaryRange, force);
                     get().fetchWallets(force);
                 }, 400);
             },
@@ -234,6 +299,11 @@ export const useFinanceStore = create(
                     return { transactions: [...state.transactions, ...uniqueNew] };
                 });
             },
+            setNotifCount: (count) => set({ unreadNotifCount: count }),
+            updateNotifCount: (delta) => set(state => ({ unreadNotifCount: Math.max(0, state.unreadNotifCount + delta) })),
+            setRequestsCount: (count) => set({ pendingRequestsCount: count }),
+            updateRequestsCount: (delta) => set(state => ({ pendingRequestsCount: Math.max(0, state.pendingRequestsCount + delta) })),
+            setActiveTrips: (trips) => set({ activeTrips: trips }),
         }),
         {
             name: 'otter-finance-storage',
@@ -246,6 +316,11 @@ export const useFinanceStore = create(
                 savingsGoals: state.savingsGoals,
                 savingsMasterPot: state.savingsMasterPot,
                 wallets: state.wallets,
+                achievements: state.achievements,
+                budgets: state.budgets,
+                unreadNotifCount: state.unreadNotifCount,
+                pendingRequestsCount: state.pendingRequestsCount,
+                activeTrips: state.activeTrips
             })
         }
     )

@@ -10,37 +10,21 @@ import { Feather, MaterialCommunityIcons } from '@expo/vector-icons';
 import { Swipeable } from 'react-native-gesture-handler';
 import { useTheme } from '../../context/ThemeContext';
 import { useAuth } from '../../context/AuthContext';
-import { getSavingsTransfers, deleteTransaction, archiveSavingsTransfer, emptySavingsArchives } from '../../api/api';
+import { getSavingsTransfers, deleteTransaction, archiveSavingsTransfer, emptySavingsArchives, deleteSavingsTransfer } from '../../api/api';
 import { spacing, radius } from '../../theme/colors';
 import Skeleton from '../../components/Skeleton';
 import { useDebounce } from '../../utils/debounce';
 import CustomAlertModal from '../../components/CustomAlertModal';
+import { formatCurrency, formatDate, formatDateTime } from '../../utils/formatters';
+import { useFinanceStore } from '../../store/financeStore';
 
-const formatCurrency = (amount, currency = 'PHP') =>
-    new Intl.NumberFormat('en-PH', { style: 'currency', currency }).format(amount);
 
-const formatDateTime = (dateString, isLong = false) => {
-    if (!dateString) return '';
-    return new Intl.DateTimeFormat('en-US', {
-        month: 'short',
-        day: 'numeric',
-        year: isLong ? 'numeric' : undefined,
-        hour: 'numeric',
-        minute: '2-digit'
-    }).format(new Date(dateString));
-};
-
-const formatDate = (dateString) => {
-    if (!dateString) return '';
-    return new Intl.DateTimeFormat('en-US', {
-        month: 'short', day: 'numeric', year: 'numeric',
-    }).format(new Date(dateString));
-};
 
 export default function SavingsTransferHistoryScreen({ navigation }) {
     const COLORS = useTheme(state => state.COLORS);
     const { userInfo } = useAuth();
     const styles = getStyles(COLORS);
+    const savingsGoals = useFinanceStore(state => state.savingsGoals);
 
     const [transfers, setTransfers] = useState([]);
     const [loading, setLoading] = useState(true);
@@ -83,31 +67,14 @@ export default function SavingsTransferHistoryScreen({ navigation }) {
 
     useEffect(() => {
         load(transfers.length === 0);
-
-        // Register Socket Listeners
-        const { getSocket } = require('../../utils/socket');
-        const socket = getSocket();
-        
-        if (socket) {
-            const handleDelete = (data) => {
-                // Remove the transfer from the list instantly
-                setTransfers(prev => prev.filter(t => 
-                    !(t.goal === data.goalId && t.amount === data.amount)
-                ));
-            };
-            const handleUpdate = () => load(); // Refresh list on goal updates
-
-            socket.on('delete_savings_transfer', handleDelete);
-            socket.on('update_savings_goal', handleUpdate);
-            socket.on('new_savings_transfer', handleUpdate);
-
-            return () => {
-                socket.off('delete_savings_transfer', handleDelete);
-                socket.off('update_savings_goal', handleUpdate);
-                socket.off('new_savings_transfer', handleUpdate);
-            };
-        }
     }, [load]);
+
+    // Refresh history if global savings state changes (indicating a transfer occurred or was deleted)
+    useEffect(() => {
+        if (!loading && !refreshing) {
+            load(false);
+        }
+    }, [savingsGoals]);
 
     const fetchMore = async () => {
         if (!hasMore || loadingMore) return;
@@ -137,6 +104,17 @@ export default function SavingsTransferHistoryScreen({ navigation }) {
             load();
         }
     };
+
+    const handleDeleteTransfer = async (id) => {
+        try {
+            setTransfers(prev => prev.filter(t => t._id !== id));
+            await deleteSavingsTransfer(id);
+        } catch (e) {
+            console.error('Delete failed:', e);
+            load();
+        }
+    };
+
 
     const handleEmptyArchivesConfirm = async () => {
         try {
@@ -240,13 +218,38 @@ export default function SavingsTransferHistoryScreen({ navigation }) {
             </TouchableOpacity>
         );
 
+        const renderLeftActions = () => {
+            if (!isArchiveView) return null;
+            return (
+                <TouchableOpacity
+                    style={styles.deleteAction}
+                    onPress={() => handleDeleteTransfer(t._id)}
+                    activeOpacity={0.8}
+                >
+                    <MaterialCommunityIcons name="trash-can-outline" size={28} color="#fff" />
+                    <Text style={styles.archiveActionText}>Delete</Text>
+                </TouchableOpacity>
+            );
+        };
+
+
         return (
             <Animated.View key={t._id} layout={LinearTransition.springify()} entering={ZoomIn.springify().damping(50).mass(0.9)} exiting={ZoomOut.duration(100)}>
                 <Swipeable 
-                    renderRightActions={renderRightActions} 
-                    onSwipeableOpen={(direction) => direction === 'right' && handleArchiveToggle(t._id)}
+                    renderRightActions={renderRightActions}
+                    renderLeftActions={renderLeftActions} 
+                    onSwipeableOpen={(direction) => {
+                        if (direction === 'right' && !isArchiveView) {
+                            handleArchiveToggle(t._id);
+                        } else if (direction === 'left' && isArchiveView) {
+                            handleDeleteTransfer(t._id);
+                        } else if (direction === 'right' && isArchiveView) {
+                            handleArchiveToggle(t._id); // Restore
+                        }
+                    }}
                     friction={2}
                     overshootRight={false}
+                    overshootLeft={false}
                 >
                     <TouchableOpacity
                         style={[styles.row, { backgroundColor: COLORS.surface }]}
@@ -547,5 +550,14 @@ const getStyles = (COLORS) => StyleSheet.create({
         fontSize: 10,
         fontWeight: '700',
         marginTop: 4,
+    },
+    deleteAction: {
+        backgroundColor: COLORS.error || '#ef4444',
+        justifyContent: 'center',
+        alignItems: 'center',
+        width: 80,
+        height: '95%',
+        borderRadius: radius.md,
+        marginRight: spacing.sm,
     },
 });

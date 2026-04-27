@@ -2,7 +2,7 @@ import React, { useState, useCallback, useEffect } from 'react';
 import {
     View, Text, StyleSheet, TouchableOpacity, ScrollView,
     ActivityIndicator, RefreshControl, TouchableWithoutFeedback,
-    TextInput, Alert, Animated as RNAnimated, KeyboardAvoidingView, Platform
+    TextInput, Alert, Animated as RNAnimated, KeyboardAvoidingView, Platform, Image
 } from 'react-native';
 import Animated, { ZoomIn, ZoomOut } from 'react-native-reanimated';
 import { Swipeable } from 'react-native-gesture-handler';
@@ -11,43 +11,17 @@ import { Feather, MaterialCommunityIcons, Ionicons, FontAwesome5 } from '@expo/v
 import BottomSheetModal from '../../components/BottomSheetModal';
 import { useTheme } from '../../context/ThemeContext';
 import { useAuth } from '../../context/AuthContext';
-import { getBudgets, upsertBudget, deleteBudget, getCategories, createCategory } from '../../api/api';
+import { getBudgets, upsertBudget, deleteBudget, getCategories, createCategory, getFriends } from '../../api/api';
+import { API_BASE } from '../../context/AuthContext';
 import { spacing, radius } from '../../theme/colors';
 import Skeleton from '../../components/Skeleton';
 import CustomAlertModal from '../../components/CustomAlertModal';
 import { useFinanceStore } from '../../store/financeStore';
+import { formatCurrency, IconRenderer, FALLBACK_ICONS } from '../../utils/formatters';
 
-const DynamicIcon = ({ name, size, color, style }) => {
-    const MCI_ICONS = ['piggy-bank-outline', 'account-cash', 'jeepney', 'car', 'noodles', 'egg-fried', 'cup',
-        'controller-classic-outline', 'rice'];
-    const ION_ICONS = ['train-outline', 'boat-outline', 'egg-outline', 'game-controller-outline'];
-    const FA5_ICONS = ['hospital', 'steam'];
-    if (MCI_ICONS.includes(name)) {
-        return <MaterialCommunityIcons name={name} size={size} color={color} style={style} />;
-    }
-    else if (ION_ICONS.includes(name)) {
-        return <Ionicons name={name} size={size} color={color} style={style} />;
-    }
-    else if (FA5_ICONS.includes(name)) {
-        return <FontAwesome5 name={name} size={size} color={color} style={style} />;
-    }
-    return <Feather name={name} size={size} color={color} style={style} />;
-};
 
-const formatCurrency = (amount, currency = 'PHP') =>
-    new Intl.NumberFormat('en-PH', { style: 'currency', currency }).format(amount);
 
-const ICONS = Array.from(new Set([
-    'briefcase', 'trending-up', 'gift', 'plus-circle', 'coffee', 'truck', 'shopping-bag', 'file-text',
-    'heart', 'tv', 'wifi', 'home', 'monitor', 'smartphone', 'headphones', 'book', 'pen-tool',
-    'aperture', 'camera', 'music', 'map', 'navigation', 'compass', 'award', 'star', 'sun', 'moon', 'zap',
-    'tag', 'speaker', 'watch', 'anchor', 'box', 'cloud', 'cpu', 'database', 'droplet', 'feather',
-    'flag', 'globe', 'image', 'key', 'layers', 'mic', 'package', 'paperclip',
-    'phone', 'printer', 'radio', 'scissors', 'shield', 'tool', 'trash', 'umbrella', 'unlock', 'user', 'video',
-    'smile', 'piggy-bank-outline', 'account-cash', 'jeepney', 'car', 'train-outline', 'boat-outline', 'hospital', 'noodles', 'egg-outline',
-    'egg-fried', 'cup', 'game-controller-outline', 'controller-classic-outline', 'rice', 'steam'
-]));
-
+const ICONS = FALLBACK_ICONS
 const COLORS_PALETTE = [
     '#ef4444', '#f97316', '#f59e0b', '#84cc16', '#22c55e', '#10b981', '#14b8a6', '#06b6d4',
     '#0ea5e9', '#3b82f6', '#6366f1', '#8b5cf6', '#a855f7', '#d946ef', '#ec4899', '#f43f5e',
@@ -78,6 +52,7 @@ export default function BudgetScreen() {
     const [totalSpent, setTotalSpent] = useState(0);
     const [loading, setLoading] = useState(true);
     const [refreshing, setRefreshing] = useState(false);
+    const [friends, setFriends] = useState([]);
     const [modalVisible, setModalVisible] = useState(false);
     const [saving, setSaving] = useState(false);
     const [showAllCats, setShowAllCats] = useState(false);
@@ -92,7 +67,9 @@ export default function BudgetScreen() {
         customCategory: '',
         customIcon: 'tag',
         customColor: '#6b7280',
-        subBudgets: [] // Array of { tag: '', amount: '', icon: '' }
+        subBudgets: [], // Array of { tag: '', amount: '', icon: '' }
+        isShared: false,
+        participantIds: []
     });
     const [subIconIndex, setSubIconIndex] = useState(null);
     const [useCustom, setUseCustom] = useState(false);
@@ -111,6 +88,9 @@ export default function BudgetScreen() {
                     .map(c => ({ label: c.name, icon: c.icon, color: c.color }));
                 setRemoteCats(expCats);
             }
+
+            const fRes = await getFriends();
+            setFriends(Array.isArray(fRes) ? fRes : (fRes.friends || []));
         } catch (e) {
             console.warn(e.message);
         } finally {
@@ -133,7 +113,6 @@ export default function BudgetScreen() {
 
         if (socket) {
             const handleRefresh = () => {
-                console.log('[SOCKET] Budget refresh triggered');
                 load();
             };
 
@@ -175,7 +154,9 @@ export default function BudgetScreen() {
             categoryColor: useCustom ? form.customColor : form.categoryColor,
             allocatedAmount: limit,
             reminderAmount: reminder,
-            subBudgets: cleanedSubBudgets
+            subBudgets: cleanedSubBudgets,
+            isShared: form.isShared,
+            participantIds: form.participantIds
         };
 
         setSaving(true);
@@ -204,7 +185,9 @@ export default function BudgetScreen() {
                 customCategory: '',
                 customIcon: 'tag',
                 customColor: '#6b7280',
-                subBudgets: []
+                subBudgets: [],
+                isShared: false,
+                participantIds: []
             });
             setUseCustom(false);
             load();
@@ -289,7 +272,7 @@ export default function BudgetScreen() {
                     return (
                         <View key={index} style={styles.subBudgetRow}>
                             <View style={[styles.subBudgetIconBg, { backgroundColor: COLORS.surfaceAlt }]}>
-                                <DynamicIcon name={sub.icon || 'tag'} size={12} color={COLORS.primary} />
+                                <IconRenderer name={sub.icon || 'tag'} size={12} color={COLORS.primary} />
                             </View>
                             <Text style={[styles.subBudgetTag, { color: COLORS.textMuted }]}>{sub.tag}</Text>
                             <View style={{ flex: 1 }} />
@@ -302,6 +285,45 @@ export default function BudgetScreen() {
             </View>
         );
     }
+
+    const renderParticipants = (budget) => {
+        if (!budget.isShared || !budget.participants || budget.participants.length === 0) return null;
+
+        return (
+            <View style={styles.participantsContainer}>
+                {budget.participants.map((p, idx) => {
+                    const participantUser = typeof p.user === 'object' ? p.user : { _id: p.user };
+                    // If it's just ID, we might not have the avatar yet unless enriched by backend
+                    // But our backend 'getBudgets' should populate 'participants.user'
+                    const avatar = participantUser.avatar || participantUser.avatarUrl;
+                    const name = participantUser.name || 'User';
+
+                    return (
+                        <View key={idx} style={[styles.participantMiniAvatar, { marginLeft: idx === 0 ? 0 : -8, zIndex: 10 - idx, borderColor: COLORS.surface }]}>
+                            {participantUser.avatar || participantUser.avatarUrl ? (
+                                <Image
+                                    source={{
+                                        uri: (participantUser.avatar || participantUser.avatarUrl).startsWith('http')
+                                            ? (participantUser.avatar || participantUser.avatarUrl)
+                                            : `${API_BASE.replace('/api', '')}/${participantUser.avatar || participantUser.avatarUrl}`
+                                    }}
+                                    style={styles.miniAvatarImg}
+                                    resizeMode="cover"
+                                />
+                            ) : (
+                                <View style={[styles.miniAvatarFallback, { backgroundColor: COLORS.surfaceAlt }]}>
+                                    <Feather name="user" size={10} color={COLORS.textMuted} />
+                                </View>
+                            )}
+                        </View>
+                    );
+                })}
+                <Text style={{ fontSize: 10, color: COLORS.textMuted, marginLeft: 6 }}>
+                    Shared with {budget.participants.length} friend{budget.participants.length > 1 ? 's' : ''}
+                </Text>
+            </View>
+        );
+    };
 
     const renderBudgetCard = (budget) => {
         const pct = budget.allocatedAmount > 0 ? Math.min((budget.spent / budget.allocatedAmount) * 100, 100) : 0;
@@ -316,7 +338,7 @@ export default function BudgetScreen() {
                     <View style={[styles.budgetCard, { backgroundColor: COLORS.surface, marginBottom: 0 }]}>
                         <View style={styles.budgetCardTop}>
                             <View style={[styles.budgetIcon, { backgroundColor: (budget.categoryColor || '#E91E8C') + '20' }]}>
-                                <DynamicIcon name={budget.categoryIcon || 'pie-chart'} size={18} color={budget.categoryColor || '#E91E8C'} />
+                                <IconRenderer name={budget.categoryIcon || 'pie-chart'} size={18} color={budget.categoryColor || '#E91E8C'} />
                             </View>
                             <View style={{ flex: 1 }}>
                                 <Text style={[styles.budgetCat, { color: COLORS.text }]}>{budget.category}</Text>
@@ -343,6 +365,9 @@ export default function BudgetScreen() {
 
                         {/* Sub-Budgets rendering */}
                         {renderSubBudgets(budget)}
+
+                        {/* Participants rendering */}
+                        {renderParticipants(budget)}
                     </View>
                 </Swipeable>
             </Animated.View>
@@ -469,7 +494,7 @@ export default function BudgetScreen() {
                                     return (
                                         <TouchableOpacity key={cat.label} onPress={() => { setUseCustom(false); setForm(f => ({ ...f, category: cat.label, categoryIcon: cat.icon, categoryColor: cat.color })); }}
                                             style={[styles.catChipGrid, { backgroundColor: selected ? cat.color : COLORS.background, borderColor: selected ? cat.color : COLORS.border }]}>
-                                            <DynamicIcon name={cat.icon} size={14} color={selected ? '#fff' : cat.color} />
+                                            <IconRenderer name={cat.icon} size={14} color={selected ? '#fff' : cat.color} />
                                             <Text style={{ color: selected ? '#fff' : COLORS.text, fontSize: 12, fontWeight: '600' }} numberOfLines={1}>{cat.label}</Text>
                                         </TouchableOpacity>
                                     );
@@ -486,7 +511,7 @@ export default function BudgetScreen() {
                                     return (
                                         <TouchableOpacity key={cat.label} onPress={() => { setUseCustom(false); setForm(f => ({ ...f, category: cat.label, categoryIcon: cat.icon, categoryColor: cat.color })); }}
                                             style={[styles.catChip, { backgroundColor: selected ? cat.color : COLORS.background, borderColor: selected ? cat.color : COLORS.border }]}>
-                                            <DynamicIcon name={cat.icon} size={14} color={selected ? '#fff' : cat.color} />
+                                            <IconRenderer name={cat.icon} size={14} color={selected ? '#fff' : cat.color} />
                                             <Text style={{ color: selected ? '#fff' : COLORS.text, fontSize: 12, fontWeight: '600' }}>{cat.label}</Text>
                                         </TouchableOpacity>
                                     );
@@ -511,7 +536,7 @@ export default function BudgetScreen() {
                                     <View style={styles.iconGrid}>
                                         {ICONS.map(ix => (
                                             <TouchableOpacity key={ix} onPress={() => setForm(f => ({ ...f, customIcon: ix }))} style={[styles.iconBoxSmall, { backgroundColor: form.customIcon === ix ? COLORS.primary + '20' : COLORS.background, borderColor: form.customIcon === ix ? COLORS.primary : COLORS.border, width: '18%' }]}>
-                                                <DynamicIcon name={ix} size={18} color={form.customIcon === ix ? COLORS.primary : COLORS.textMuted} />
+                                                <IconRenderer name={ix} size={18} color={form.customIcon === ix ? COLORS.primary : COLORS.textMuted} />
                                             </TouchableOpacity>
                                         ))}
                                     </View>
@@ -519,7 +544,7 @@ export default function BudgetScreen() {
                                     <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8, paddingBottom: spacing.sm }}>
                                         {ICONS.slice(0, 15).map(ix => (
                                             <TouchableOpacity key={ix} onPress={() => setForm(f => ({ ...f, customIcon: ix }))} style={[styles.iconBoxSmall, { backgroundColor: form.customIcon === ix ? COLORS.primary + '20' : COLORS.background, borderColor: form.customIcon === ix ? COLORS.primary : COLORS.border }]}>
-                                                <DynamicIcon name={ix} size={18} color={form.customIcon === ix ? COLORS.primary : COLORS.textMuted} />
+                                                <IconRenderer name={ix} size={18} color={form.customIcon === ix ? COLORS.primary : COLORS.textMuted} />
                                             </TouchableOpacity>
                                         ))}
                                     </ScrollView>
@@ -548,7 +573,7 @@ export default function BudgetScreen() {
                                             style={[styles.input, { width: 44, height: 44, justifyContent: 'center', alignItems: 'center', paddingVertical: 0, paddingHorizontal: 0, marginBottom: 0, backgroundColor: COLORS.background, borderColor: COLORS.border }]}
                                             onPress={() => setSubIconIndex(subIconIndex === index ? null : index)}
                                         >
-                                            <DynamicIcon name={sub.icon || 'tag'} size={18} color={COLORS.primary} />
+                                            <IconRenderer name={sub.icon || 'tag'} size={18} color={COLORS.primary} />
                                         </TouchableOpacity>
                                         <TextInput
                                             style={[styles.input, { flex: 1.5, backgroundColor: COLORS.background, color: COLORS.text, borderColor: COLORS.border, paddingVertical: 8, height: 44, marginBottom: 0 }]}
@@ -592,7 +617,7 @@ export default function BudgetScreen() {
                                                     setForm(f => ({ ...f, subBudgets: newSub }));
                                                     setSubIconIndex(null);
                                                 }} style={[styles.iconBoxSmall, { backgroundColor: sub.icon === ix ? COLORS.primary + '20' : COLORS.background, borderColor: sub.icon === ix ? COLORS.primary : COLORS.border, width: 36, height: 36 }]}>
-                                                    <DynamicIcon name={ix} size={14} color={sub.icon === ix ? COLORS.primary : COLORS.textMuted} />
+                                                    <IconRenderer name={ix} size={14} color={sub.icon === ix ? COLORS.primary : COLORS.textMuted} />
                                                 </TouchableOpacity>
                                             ))}
                                         </ScrollView>
@@ -611,6 +636,67 @@ export default function BudgetScreen() {
                         <Text style={[styles.label, { color: COLORS.textMuted, marginTop: spacing.md }]}>SET REMINDER AT (₱)</Text>
                         <TextInput style={[styles.input, { backgroundColor: COLORS.background, color: COLORS.text, borderColor: COLORS.border }]} placeholder="e.g. 4000 (Optional)" placeholderTextColor={COLORS.textMuted} keyboardType="decimal-pad" value={form.reminderAmount} onChangeText={v => setForm(f => ({ ...f, reminderAmount: v }))} />
                         <Text style={{ fontSize: 10, color: COLORS.textMuted, marginTop: -2 }}>We'll notify you when you hit this amount.</Text>
+
+                        {/* Sharing Section */}
+                        <View style={{ marginTop: spacing.md }}>
+                            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+                                <View>
+                                    <Text style={[styles.label, { color: COLORS.textMuted, marginTop: 0 }]}>SHARED BUDGET</Text>
+                                    <Text style={{ fontSize: 10, color: COLORS.textMuted }}>Collaborate on spending with friends.</Text>
+                                </View>
+                                <TouchableOpacity
+                                    onPress={() => setForm(f => ({ ...f, isShared: !f.isShared }))}
+                                    style={[styles.toggleBtn, { backgroundColor: form.isShared ? COLORS.primary : COLORS.border }]}
+                                >
+                                    <View style={[styles.toggleCircle, { transform: [{ translateX: form.isShared ? 20 : 0 }], backgroundColor: '#fff' }]} />
+                                </TouchableOpacity>
+                            </View>
+
+                            {form.isShared && friends.length > 0 && (
+                                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8, paddingBottom: 4 }}>
+                                    {friends.map(friend => {
+                                        const isSelected = form.participantIds.includes(friend._id);
+                                        return (
+                                            <TouchableOpacity
+                                                key={friend._id}
+                                                onPress={() => {
+                                                    const newIds = isSelected
+                                                        ? form.participantIds.filter(id => id !== friend._id)
+                                                        : [...form.participantIds, friend._id];
+                                                    setForm(f => ({ ...f, participantIds: newIds }));
+                                                }}
+                                                style={[styles.friendChip, {
+                                                    backgroundColor: isSelected ? COLORS.primary + '15' : COLORS.background,
+                                                    borderColor: isSelected ? COLORS.primary : COLORS.border
+                                                }]}
+                                            >
+                                                <View style={styles.friendAvatar}>
+                                                    {(friend.avatar || friend.avatarUrl) ? (
+                                                        <Image
+                                                            source={{
+                                                                uri: (friend.avatar || friend.avatarUrl).startsWith('http')
+                                                                    ? (friend.avatar || friend.avatarUrl)
+                                                                    : `${API_BASE.replace('/api', '')}/${friend.avatar || friend.avatarUrl}`
+                                                            }}
+                                                            style={styles.avatarImg}
+                                                            resizeMode="cover"
+                                                        />
+                                                    ) : (
+                                                        <Feather name="user" size={14} color={isSelected ? COLORS.primary : COLORS.textMuted} />
+                                                    )}
+                                                </View>
+                                                <Text style={{ fontSize: 12, fontWeight: '700', color: isSelected ? COLORS.primary : COLORS.text }}>{friend.name}</Text>
+                                                {isSelected && <Feather name="check-circle" size={12} color={COLORS.primary} style={{ marginLeft: 4 }} />}
+                                            </TouchableOpacity>
+                                        );
+                                    })}
+                                </ScrollView>
+                            )}
+
+                            {form.isShared && friends.length === 0 && (
+                                <Text style={{ fontSize: 11, color: '#ef4444', fontStyle: 'italic' }}>You don't have any friends to share with yet.</Text>
+                            )}
+                        </View>
 
                         <TouchableOpacity onPress={handleSave} disabled={saving} style={[styles.saveBtn, { backgroundColor: COLORS.primary }]}>
                             {saving ? <ActivityIndicator color="#fff" /> : <Text style={styles.saveBtnText}>Save Budget</Text>}
@@ -674,4 +760,21 @@ const getStyles = (COLORS) => StyleSheet.create({
     catGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: spacing.sm },
     catChipGrid: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 10, paddingVertical: 8, borderRadius: 20, borderWidth: 1.5, width: '31%' },
     iconGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: spacing.sm },
+    toggleBtn: { width: 44, height: 24, borderRadius: 12, padding: 2, justifyContent: 'center' },
+    toggleCircle: { width: 20, height: 20, borderRadius: 10 },
+    friendChip: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, paddingVertical: 8, borderRadius: 16, borderWidth: 1.5 },
+    participantsContainer: { flexDirection: 'row', alignItems: 'center', marginTop: 12, borderTopWidth: 1, borderTopColor: COLORS.border, paddingTop: 12 },
+    participantMiniAvatar: { width: 22, height: 22, borderRadius: 11, borderWidth: 1.5, overflow: 'hidden' },
+    miniAvatarImg: { width: '100%', height: '100%' },
+    miniAvatarFallback: { width: '100%', height: '100%', justifyContent: 'center', alignItems: 'center' },
+    friendAvatar: {
+        width: 24,
+        height: 24,
+        borderRadius: 12,
+        backgroundColor: 'rgba(0,0,0,0.05)',
+        justifyContent: 'center',
+        alignItems: 'center',
+        marginRight: 8
+    },
+    avatarImg: { width: '100%', height: '100%', borderRadius: 12 },
 });

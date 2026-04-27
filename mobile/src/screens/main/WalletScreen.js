@@ -117,22 +117,30 @@ const getConvertedBalance = (wallet, prices) => {
 };
 
 // ─── Net Worth Header ─────────────────────────────────────────────────────────
-const NetWorthHeader = ({ wallets, prices, hideVal, onToggleHide, COLORS }) => {
+const NetWorthHeader = ({ wallets, prices, hideVal, onToggleHide, COLORS, navigation }) => {
     const assets = wallets.filter(w => w.type !== 'Credit').reduce((s, w) => s + getConvertedBalance(w, prices), 0);
     const liabilities = wallets.filter(w => w.type === 'Credit').reduce((s, w) => s + Math.abs(getConvertedBalance(w, prices)), 0);
     const netWorth = assets - liabilities;
 
     return (
         <LinearGradient colors={['#E91E8C', '#9C27B0']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.netWorthCard}>
-            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
-                <Text style={styles.nwLabel}>TOTAL NET WORTH</Text>
-                <TouchableOpacity onPress={onToggleHide} hitSlop={{ top: 15, bottom: 15, left: 15, right: 15 }}>
-                    <Feather name={hideVal ? 'eye-off' : 'eye'} size={18} color="rgba(255,255,255,0.8)" />
-                </TouchableOpacity>
-            </View>
-            <Text style={styles.nwAmount}>
-                {hideVal ? '••••••••' : `₱ ${netWorth.toLocaleString('en-US', { minimumFractionDigits: 2 })}`}
-            </Text>
+            <TouchableOpacity 
+                activeOpacity={0.9} 
+                onPress={() => navigation.navigate('NetWorth')}
+            >
+                <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <Text style={styles.nwLabel}>TOTAL NET WORTH</Text>
+                    <TouchableOpacity onPress={onToggleHide} hitSlop={{ top: 15, bottom: 15, left: 15, right: 15 }}>
+                        <Feather name={hideVal ? 'eye-off' : 'eye'} size={18} color="rgba(255,255,255,0.8)" />
+                    </TouchableOpacity>
+                </View>
+                <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                    <Text style={styles.nwAmount}>
+                        {hideVal ? '••••••••' : `₱ ${netWorth.toLocaleString('en-US', { minimumFractionDigits: 2 })}`}
+                    </Text>
+                    <Feather name="chevron-right" size={20} color="rgba(255,255,255,0.5)" style={{ marginLeft: 8, marginBottom: 12 }} />
+                </View>
+            </TouchableOpacity>
             <View style={styles.nwRow}>
                 <View style={styles.nwPill}>
                     <Feather name="trending-up" size={12} color="rgba(255,255,255,0.8)" />
@@ -339,7 +347,7 @@ export default function WalletScreen({ navigation }) {
     }, [wallets]);
 
     const renderItem = ({ item }) => {
-        if (item.isNetWorth) return <NetWorthHeader wallets={wallets} prices={cryptoPrices} hideVal={hideGlobalBalance} onToggleHide={() => setHideGlobalBalance(!hideGlobalBalance)} COLORS={COLORS} />;
+        if (item.isNetWorth) return <NetWorthHeader wallets={wallets} prices={cryptoPrices} hideVal={hideGlobalBalance} onToggleHide={() => setHideGlobalBalance(!hideGlobalBalance)} COLORS={COLORS} navigation={navigation} />;
         if (item.isInsights) return <InsightsPanel wallets={wallets} prices={cryptoPrices} hideVal={hideGlobalBalance} COLORS={COLORS} />;
         if (item.isHeader) return (
             <Text style={[styles.groupHeader, { color: COLORS.textMuted }]}>

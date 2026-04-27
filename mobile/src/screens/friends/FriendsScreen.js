@@ -267,13 +267,20 @@ export default function FriendsScreen({ navigation }) {
                     renderItem={({ item }) => (
                         <View style={[styles.userCard, { backgroundColor: COLORS.surface }]}>
                             <View style={[styles.avatarPlaceholder, { backgroundColor: COLORS.border, overflow: 'hidden' }]}>
-                                {item.sender.avatarUrl ? (
+                                {(item.sender.avatarUrl || item.sender.avatar) ? (
                                     <Image
-                                        source={{ uri: item.sender.avatarUrl.startsWith('http') ? item.sender.avatarUrl : `${API_BASE.replace('/api', '')}/${item.sender.avatarUrl}` }}
+                                        source={{
+                                            uri: (item.sender.avatarUrl || item.sender.avatar).startsWith('http')
+                                                ? (item.sender.avatarUrl || item.sender.avatar)
+                                                : `${API_BASE.replace('/api', '')}/${item.sender.avatarUrl || item.sender.avatar}`
+                                        }}
                                         style={styles.avatarImg}
+                                        resizeMode="cover"
                                     />
                                 ) : (
-                                    <Text style={{ color: COLORS.text, fontWeight: 'bold' }}>{item.sender.name.charAt(0)}</Text>
+                                    <View style={[styles.avatarImg, { backgroundColor: COLORS.primary + '15', justifyContent: 'center', alignItems: 'center' }]}>
+                                        <Text style={{ color: COLORS.primary, fontWeight: '800' }}>{item.sender.name[0]}</Text>
+                                    </View>
                                 )}
                             </View>
                             <View style={styles.userInfo}>

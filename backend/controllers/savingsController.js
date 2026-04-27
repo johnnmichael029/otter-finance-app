@@ -3,8 +3,10 @@ const SavingsTransfer = require('../models/savingsTransferModel');
 const Transaction = require('../models/transactionModel');
 const Notification = require('../models/Notification');
 const Wallet = require('../models/walletModel');
+const User = require('../models/userModel');
 const { invalidatePrefixes } = require('../utils/cache');
 const mongoose = require('mongoose');
+const { sendPushNotification } = require('../utils/pushNotification');
 
 // GET /api/savings/goals
 const getGoals = async (req, res) => {
@@ -13,17 +15,14 @@ const getGoals = async (req, res) => {
         const limit = parseInt(req.query.limit) || 20;
         const skip = (page - 1) * limit;
 
-        const allUserGoals = await SavingsGoal.find({
-            $or: [
-                { user: req.userId },
-                { "participants.user": req.userId }
-            ]
-        }).sort({ createdAt: -1 })
-            .populate('user', 'name otterTag avatarUrl')
-            .populate('participants.user', 'name otterTag avatarUrl');
+        const isArchivedParam = req.query.isArchived === 'true';
 
-        // Ensure master pot exists logic
-        let masterPot = allUserGoals.find(g => g.name === 'Savings Balance');
+        // 1. Always ensure Master Pot exists and get it
+        let masterPot = await SavingsGoal.findOne({
+            user: req.userId,
+            name: 'Savings Balance'
+        });
+
         if (!masterPot) {
             masterPot = await SavingsGoal.create({
                 user: req.userId,
@@ -33,15 +32,36 @@ const getGoals = async (req, res) => {
                 icon: 'piggy-bank-outline',
                 family: 'MaterialCommunityIcons',
                 color: '#E91E8C',
-                isCompleted: false
+                isCompleted: false,
+                isArchived: false
             });
-            allUserGoals.unshift(masterPot); // add to top
-        } else if (masterPot.icon !== 'piggy-bank-outline' || masterPot.family !== 'MaterialCommunityIcons' || masterPot.isCompleted) {
-            masterPot.icon = 'piggy-bank-outline';
-            masterPot.family = 'MaterialCommunityIcons';
-            masterPot.isCompleted = false;
-            await masterPot.save();
+        } else {
+            // Self-healing for master pot
+            if (masterPot.icon !== 'piggy-bank-outline' || masterPot.family !== 'MaterialCommunityIcons' || masterPot.isArchived) {
+                masterPot.icon = 'piggy-bank-outline';
+                masterPot.family = 'MaterialCommunityIcons';
+                masterPot.isArchived = false;
+                await masterPot.save();
+            }
         }
+
+        // 2. Fetch the filtered goals
+        const query = {
+            $and: [
+                { $or: [{ user: req.userId }, { "participants.user": req.userId }] },
+                { name: { $ne: 'Savings Balance' } }, // Exclude master pot from main list to avoid duplication
+                { isArchived: isArchivedParam ? true : { $ne: true } }
+            ]
+        };
+
+        const otherGoals = await SavingsGoal.find(query)
+            .sort({ createdAt: -1 })
+            .populate('user', 'name otterTag avatarUrl')
+            .populate('participants.user', 'name otterTag avatarUrl');
+
+        // 3. Combine for results
+        // Master Pot only appears in the non-archived view
+        const allUserGoals = isArchivedParam ? otherGoals : [masterPot, ...otherGoals];
 
         const totalSaved = allUserGoals
             .filter(g => !g.isCompleted)
@@ -166,18 +186,33 @@ const createGoal = async (req, res) => {
         // ── Notifications for Participants ────────────────────────
         if (isShared) {
             const io = req.app.get('io');
-            const creator = await mongoose.model('User').findById(req.userId);
+            const creator = await User.findById(req.userId);
 
             for (const p of participants) {
-                await Notification.create({
+                const n = await Notification.create({
                     user: p.user,
-                    type: 'savings_goal',
+                    type: 'goal_invite',
                     title: '🤝 Shared Goal Invite',
                     message: `${creator.name} invited you to join the "${goal.name}" goal!`,
                     data: { goalId: goal._id, type: 'goal_invite' }
-                }).then(n => {
-                    if (io) io.to(`user:${p.user}`).emit('new_notification', n);
-                }).catch(() => { });
+                });
+
+                if (io) io.to(`user:${p.user}`).emit('new_notification', n);
+
+                // Send Push Notification
+                try {
+                    const invitedUser = await User.findById(p.user).select('pushToken');
+                    if (invitedUser?.pushToken) {
+                        await sendPushNotification(
+                            invitedUser.pushToken,
+                            '🤝 Shared Goal Invite',
+                            `${creator.name} invited you to join the "${goal.name}" goal!`,
+                            { goalId: goal._id.toString() }
+                        );
+                    }
+                } catch (pushErr) {
+                    console.error('[SAVINGS] Push failed:', pushErr.message);
+                }
             }
         }
 
@@ -707,8 +742,21 @@ const getTransfers = async (req, res) => {
 // PATCH /api/savings/transfers/:id/archive
 const archiveTransfer = async (req, res) => {
     try {
-        const transfer = await SavingsTransfer.findOne({ _id: req.params.id, user: req.userId });
+        const transfer = await SavingsTransfer.findById(req.params.id);
         if (!transfer) return res.status(404).json({ error: 'Transfer not found.' });
+
+        // Check if user has access to the goal associated with this transfer
+        const goal = await SavingsGoal.findOne({
+            _id: transfer.goal,
+            $or: [
+                { user: req.userId },
+                { "participants.user": req.userId, "participants.status": "accepted" }
+            ]
+        });
+
+        if (!goal && transfer.user.toString() !== req.userId) {
+            return res.status(403).json({ error: 'Access denied.' });
+        }
 
         transfer.isArchived = !transfer.isArchived;
         await transfer.save();
@@ -724,6 +772,41 @@ const archiveTransfer = async (req, res) => {
         res.status(500).json({ error: 'Failed to toggle archive status.' });
     }
 };
+
+// DELETE /api/savings/transfers/:id
+const deleteTransfer = async (req, res) => {
+    try {
+        const transfer = await SavingsTransfer.findById(req.params.id);
+        if (!transfer) return res.status(404).json({ error: 'Transfer not found.' });
+
+        // Check if user has access to the goal associated with this transfer
+        const goal = await SavingsGoal.findOne({
+            _id: transfer.goal,
+            $or: [
+                { user: req.userId },
+                { "participants.user": req.userId, "participants.status": "accepted" }
+            ]
+        });
+
+        if (!goal && transfer.user.toString() !== req.userId) {
+            return res.status(403).json({ error: 'Access denied.' });
+        }
+
+        await transfer.deleteOne();
+
+        const io = req.app.get('io');
+        if (io) {
+            io.to(`user:${req.userId}`).emit('delete_savings_transfer', { _id: transfer._id });
+        }
+
+        res.json({ message: 'Transfer deleted successfully.' });
+    } catch (err) {
+        console.error('[DeleteTransfer Error]:', err);
+        res.status(500).json({ error: 'Failed to delete transfer.' });
+    }
+};
+
+
 
 // DELETE /api/savings/transfers/archive/empty
 const emptyTransfersArchives = async (req, res) => {
@@ -808,10 +891,16 @@ const bulkAction = async (req, res) => {
             let totalDistributed = 0;
 
             for (const r of remainingTargets) {
-                // Proportional distribution
-                let share = (r.needed / totalNeeded) * available;
-                // Round to 2 decimal places
-                share = Math.floor(share * 100) / 100;
+                let share = 0;
+                if (available >= totalNeeded) {
+                    // Full coverage: Each goal gets exactly what it needs
+                    share = r.needed;
+                } else {
+                    // Limited funds: Proportional distribution
+                    share = (r.needed / totalNeeded) * available;
+                    // Round down to 2 decimal places to be safe
+                    share = Math.floor(share * 100) / 100;
+                }
 
                 if (share > 0) {
                     r.goal.currentAmount += share;
@@ -883,7 +972,7 @@ const respondToGoalInvite = async (req, res) => {
         const notification = await Notification.findOne({
             user: req.userId,
             'data.goalId': goal._id,
-            type: 'savings_goal', // Checking for type
+            type: 'goal_invite', // Corrected type
             'data.type': 'goal_invite'
         });
         if (notification) {
@@ -891,7 +980,7 @@ const respondToGoalInvite = async (req, res) => {
             notification.message = status === 'accepted'
                 ? `You joined "${goal.name}". Let's start saving!`
                 : `You declined the invite to join "${goal.name}".`;
-            notification.read = true;
+            notification.isRead = true; // Corrected property
             notification.data = { ...notification.data, processed: true };
             await notification.save();
             const io = req.app.get('io');
@@ -910,15 +999,30 @@ const respondToGoalInvite = async (req, res) => {
         }
 
         // Notification for the owner
-        await Notification.create({
+        const n = await Notification.create({
             user: goal.user,
             type: 'savings_goal',
             title: `🤝 Goal ${status === 'accepted' ? 'Accepted' : 'Declined'}`,
             message: `${responder.name} has ${status} your invite to join "${goal.name}".`,
             data: { goalId: goal._id, type: 'goal_invite_response', status }
-        }).then(n => {
-            if (io) io.to(`user:${goal.user}`).emit('new_notification', n);
-        }).catch(() => { });
+        });
+
+        if (io) io.to(`user:${goal.user}`).emit('new_notification', n);
+
+        // Send Push Notification to owner
+        try {
+            const owner = await User.findById(goal.user).select('pushToken');
+            if (owner?.pushToken) {
+                await sendPushNotification(
+                    owner.pushToken,
+                    `🤝 Goal ${status === 'accepted' ? 'Accepted' : 'Declined'}`,
+                    `${responder.name} has ${status} your invite to join "${goal.name}".`,
+                    { goalId: goal._id.toString() }
+                );
+            }
+        } catch (pushErr) {
+            console.error('[SAVINGS] Response push failed:', pushErr.message);
+        }
 
         // If rejected, maybe remove from participants entirely to clean up the user's view?
         if (status === 'rejected') {
@@ -933,4 +1037,15 @@ const respondToGoalInvite = async (req, res) => {
     }
 };
 
-module.exports = { getGoals, createGoal, updateGoal, deleteGoal, transfer, getTransfers, completeGoal, bulkAction, respondToGoalInvite, archiveTransfer, emptyTransfersArchives };
+// DELETE /api/savings/goals/archive/empty
+const emptyGoalArchives = async (req, res) => {
+    try {
+        const result = await SavingsGoal.deleteMany({ user: req.userId, isArchived: true });
+        invalidatePrefixes('savings');
+        res.json({ message: 'Goal archives emptied.', count: result.deletedCount });
+    } catch (err) {
+        res.status(500).json({ error: 'Failed to empty archives.' });
+    }
+};
+
+module.exports = { getGoals, createGoal, updateGoal, deleteGoal, transfer, getTransfers, completeGoal, bulkAction, respondToGoalInvite, archiveTransfer, emptyTransfersArchives, deleteTransfer, emptyGoalArchives };

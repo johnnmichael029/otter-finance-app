@@ -11,7 +11,8 @@ const {
     logPayment,
     getPayments,
     sendDebtReminder,
-    respondDebtRequest
+    respondDebtRequest,
+    splitDebt
 } = require('../controllers/debtController');
 
 // All debt routes require authentication
@@ -22,6 +23,9 @@ router.get('/', cache('debt', 30), getDebts);
 
 // POST /api/debts            — create debt
 router.post('/', validate.createDebt, createDebt);
+
+// POST /api/debts/split      — atomatically create multiple debts for split bill
+router.post('/split', splitDebt);
 
 // PATCH /api/debts/:id       — update (edit details, mark partial/settled)
 router.patch('/:id', validate.updateDebt, updateDebt);
