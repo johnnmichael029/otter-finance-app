@@ -184,7 +184,7 @@ const respondToInvite = async (req, res) => {
 // POST /api/group-wallets/:id/expense
 const addExpense = async (req, res) => {
     try {
-        const { amount, description, category, categoryIcon, categoryColor, splitAmongIds } = req.body;
+        const { amount, description, category, categoryIcon, categoryColor, splitAmongIds, walletId, sourceType, walletDeductAmount } = req.body;
         const group = await GroupWallet.findById(req.params.id);
         if (!group) return res.status(404).json({ error: 'Trip not found.' });
 
@@ -197,9 +197,10 @@ const addExpense = async (req, res) => {
             return res.status(403).json({ error: 'You must accept the invite to add expenses.' });
         }
 
+        const amountNum = parseFloat(amount);
         const expense = {
             paidBy: req.userId,
-            amount: parseFloat(amount),
+            amount: amountNum,
             description,
             category: category || 'General',
             categoryIcon,
@@ -207,6 +208,49 @@ const addExpense = async (req, res) => {
             date: new Date(),
             splitAmong: splitAmongIds || [] // Empty means everyone accepted
         };
+
+        // ── Process Instant Deduction ──
+        const User = mongoose.model('User');
+        const Wallet = mongoose.model('Wallet');
+        const SavingsGoal = mongoose.model('SavingsGoal');
+        const Transaction = mongoose.model('Transaction');
+
+        if (sourceType === 'hand') {
+            const user = await User.findById(req.userId);
+            user.handBalance -= amountNum;
+            await user.save();
+        } else if (sourceType === 'savings_balance') {
+            const masterPot = await SavingsGoal.findOne({ user: req.userId, name: 'Savings Balance' });
+            if (masterPot) {
+                masterPot.currentAmount -= amountNum;
+                await masterPot.save();
+            }
+        } else if (walletId) {
+            const wallet = await Wallet.findOne({ _id: walletId, userId: req.userId });
+            if (wallet) {
+                // If walletDeductAmount is provided (e.g. from frontend conversion), use it.
+                // Otherwise fallback to amountNum (PHP)
+                const deductAmount = walletDeductAmount || amountNum;
+                if (wallet.type === 'Credit') wallet.balance += deductAmount;
+                else wallet.balance -= deductAmount;
+                await wallet.save();
+            }
+        }
+
+        // ── Create Transaction Log (Non-Reversible) ──
+        await Transaction.create({
+            user: req.userId,
+            type: 'expense',
+            amount: amountNum,
+            description: `[Trip] ${description}`,
+            category: category || 'General',
+            categoryIcon: categoryIcon || 'briefcase',
+            categoryColor: categoryColor || '#6366f1',
+            wallet: (sourceType === 'hand' || sourceType === 'savings_balance') ? null : walletId,
+            paymentSource: sourceType === 'hand' ? 'HAND' : (sourceType === 'savings_balance' ? 'Savings Balance' : null),
+            isNonReversible: true,
+            note: `Group Trip: ${group.name}`
+        });
 
         group.expenses.push(expense);
 
@@ -235,12 +279,15 @@ const addExpense = async (req, res) => {
             const uniqueUsers = [...new Set(activeUsers)];
             uniqueUsers.forEach(uId => {
                 io.to(`user:${uId}`).emit('update_group_wallet', { groupId: group._id });
+                io.to(`user:${uId}`).emit('wallet_updated');
             });
         }
 
         invalidatePrefixes('group_wallet');
+        invalidatePrefixes('transaction');
         res.status(201).json(group);
     } catch (err) {
+        console.error('[AddExpense] Error:', err);
         res.status(500).json({ error: 'Failed to add expense.' });
     }
 };
@@ -343,6 +390,7 @@ const calculateTransfers = (balances) => {
 // POST /api/group-wallets/:id/settle
 const settleGroupWallet = async (req, res) => {
     try {
+        const { walletId, sourceType, walletDeductAmount, note } = req.body;
         const group = await GroupWallet.findById(req.params.id);
         if (!group) return res.status(404).json({ error: 'Trip not found.' });
 
@@ -357,26 +405,85 @@ const settleGroupWallet = async (req, res) => {
         const io = req.app.get('io');
         const DebtModel = mongoose.model('Debt');
         const UserModel = mongoose.model('User');
+        const TransactionModel = mongoose.model('Transaction');
+        const WalletModel = mongoose.model('Wallet');
+        const SavingsGoalModel = mongoose.model('SavingsGoal');
+
+        const settlerId = req.userId;
+        let settlerPaymentProcessed = false;
 
         // Atomically create debts for these transfers
         for (const t of transfers) {
-            const creditor = await UserModel.findById(t.to).select('name');
-            const debtor = await UserModel.findById(t.from).select('name');
+            const creditor = await UserModel.findById(t.to).select('name avatarUrl');
+            const debtor = await UserModel.findById(t.from).select('name avatarUrl');
 
+            const isSettlerPaying = t.from === settlerId && (walletId || sourceType);
+            
             // 1. Create debt for the debtor (You owe Creditor)
-            const debt = await DebtModel.create({
+            const debtData = {
                 user: t.from,
                 direction: 'owed_by_me',
                 personName: creditor.name,
                 amount: t.amount,
                 description: `Settlement: ${group.name}`,
                 linkedUserId: t.to,
-                syncStatus: 'pending' // Creditor must accept
-            });
+                syncStatus: 'pending' // Default for others
+            };
+
+            // ── Feature: Instant Payment for Settler ──
+            if (isSettlerPaying && !settlerPaymentProcessed) {
+                // Process payment from chosen source
+                const amount = t.amount;
+                const user = await UserModel.findById(settlerId);
+
+                if (sourceType === 'hand' || !walletId) {
+                    user.handBalance -= amount;
+                    await user.save();
+                } else if (sourceType === 'savings_balance') {
+                    const masterPot = await SavingsGoalModel.findOne({ user: settlerId, name: 'Savings Balance' });
+                    if (masterPot) {
+                        masterPot.currentAmount -= amount;
+                        await masterPot.save();
+                    }
+                } else if (walletId) {
+                    const wallet = await WalletModel.findById(walletId);
+                    if (wallet) {
+                        const nativeAmount = walletDeductAmount || amount;
+                        if (wallet.type === 'Credit') wallet.balance += nativeAmount;
+                        else wallet.balance -= nativeAmount;
+                        await wallet.save();
+                    }
+                }
+
+                // Create Non-Reversible Transaction
+                await TransactionModel.create({
+                    user: settlerId,
+                    type: 'expense',
+                    amount: amount,
+                    category: 'Travel',
+                    categoryIcon: 'briefcase',
+                    categoryColor: group.color || '#6366f1',
+                    description: `Settle Trip: ${group.name}`,
+                    note: `Settled payment to ${creditor.name}. ${note || ''}`,
+                    isNonReversible: true,
+                    wallet: (sourceType === 'hand' || sourceType === 'savings_balance') ? null : walletId,
+                    paymentSource: sourceType === 'hand' ? 'HAND' : (sourceType === 'savings_balance' ? 'Savings Balance' : null)
+                });
+
+                debtData.amountPaid = amount;
+                debtData.status = 'settled';
+                debtData.syncStatus = 'linked'; // Auto-link since paid
+                settlerPaymentProcessed = true;
+            }
+
+            const debt = await DebtModel.create(debtData);
 
             if (io) {
                 io.to(`user:${t.from}`).emit('new_debt', debt);
                 io.to(`user:${t.to}`).emit('new_debt_request', debt);
+                if (isSettlerPaying) {
+                    io.to(`user:${settlerId}`).emit('wallet_updated');
+                }
             }
         }
 
@@ -394,8 +501,9 @@ const settleGroupWallet = async (req, res) => {
 
         invalidatePrefixes('group_wallet');
         invalidatePrefixes('debt');
+        invalidatePrefixes('transaction');
 
-        res.json({ message: 'Trip settled and archived. Debt records created.', transfers });
+        res.json({ message: 'Trip settled and archived.', transfers });
     } catch (err) {
         console.error('[SETTLE] Error:', err);
         res.status(500).json({ error: 'Settlement failed.' });

@@ -5,10 +5,12 @@ import {
 } from 'react-native';
 import { Feather, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useTheme } from '../../context/ThemeContext';
-import { addTripExpense } from '../../api/api';
+import { addTripExpense, getWallets, getSavingsGoals, getExchangeRates, getProfile, scanReceipt } from '../../api/api';
+import { useAuth } from '../../context/AuthContext';
+import * as ImagePicker from 'expo-image-picker';
 import { API_BASE } from '../../store/authStore';
 import { radius, spacing } from '../../theme/colors';
-import { FALLBACK_ICONS, IconRenderer } from '../../utils/formatters';
+import { FALLBACK_ICONS, IconRenderer, formatCurrency } from '../../utils/formatters';
 import CalculatorSheet from '../../components/CalculatorSheet';
 import CustomAlertModal from '../../components/CustomAlertModal';
 
@@ -51,6 +53,15 @@ export default function GroupWalletExpenseModal({ visible, onClose, onSuccess, g
     const [loading, setLoading] = useState(false);
     const [showCalc, setShowCalc] = useState(false);
     const [alert, setAlert] = useState({ visible: false, title: '', message: '', type: 'info' });
+    const { userInfo: authUserInfo, updateLocalUser } = useAuth();
+    const [freshUserInfo, setFreshUserInfo] = useState(null);
+    const userInfo = freshUserInfo || authUserInfo;
+
+    const [wallets, setWallets] = useState([]);
+    const [savingsGoals, setSavingsGoals] = useState([]);
+    const [rates, setRates] = useState({ PHP: 1 });
+    const [conversionInfo, setConversionInfo] = useState(null); // { nativeAmount, rateLabel }
+    const [selectedSource, setSelectedSource] = useState({ id: null, type: 'hand' }); // { id, type: 'hand' | 'savings' | 'wallet' }
     const scrollRef = React.useRef(null);
 
     const fadeAnim = React.useRef(new Animated.Value(0)).current;
@@ -60,6 +71,7 @@ export default function GroupWalletExpenseModal({ visible, onClose, onSuccess, g
     useEffect(() => {
         if (visible) {
             setModalVisible(true);
+            loadSources();
             Animated.parallel([
                 Animated.timing(fadeAnim, { toValue: 1, duration: 280, useNativeDriver: true }),
                 Animated.spring(slideAnim, { toValue: 0, tension: 65, friction: 11, useNativeDriver: true })
@@ -73,6 +85,68 @@ export default function GroupWalletExpenseModal({ visible, onClose, onSuccess, g
             });
         }
     }, [visible]);
+
+    const loadSources = async () => {
+        try {
+            const [wData, sData, rData, pData] = await Promise.all([
+                getWallets(),
+                getSavingsGoals(),
+                getExchangeRates(userInfo?.currency || 'PHP'),
+                getProfile()
+            ]);
+            setWallets(wData?.wallets || wData || []);
+
+            // Unbox savings goals correctly
+            const goalsArray = sData?.goals || sData || [];
+            setSavingsGoals(Array.isArray(goalsArray) ? goalsArray : []);
+
+            setRates(rData?.rates || { [userInfo?.currency || 'PHP']: 1 });
+
+            if (pData) {
+                setFreshUserInfo(pData);
+                updateLocalUser(pData);
+            }
+        } catch (err) {
+            console.error('[ExpenseModal] Load sources error:', err);
+        }
+    };
+
+    const handleScanReceipt = async () => {
+        try {
+            const { status } = await ImagePicker.requestCameraPermissionsAsync();
+            if (status !== 'granted') {
+                setAlert({ visible: true, title: 'Permission Required', message: 'Allow camera access to scan receipts.', type: 'warning' });
+                return;
+            }
+
+            const result = await ImagePicker.launchCameraAsync({
+                allowsEditing: true,
+                quality: 0.8,
+            });
+
+            if (!result.canceled) {
+                const uri = result.assets[0].uri;
+                setLoading(true);
+
+                const formData = new FormData();
+                formData.append('receipt', {
+                    uri: Platform.OS === 'ios' ? uri.replace('file://', '') : uri,
+                    type: 'image/jpeg',
+                    name: 'receipt.jpg',
+                });
+
+                const data = await scanReceipt(formData);
+
+                if (data.amount) setAmount(String(data.amount));
+                if (data.merchant) setDescription(data.merchant);
+            }
+        } catch (e) {
+            console.warn('OCR error:', e);
+            setAlert({ visible: true, title: 'Scan Failed', message: 'Failed to read the receipt. Please try again or enter details manually.', type: 'error' });
+        } finally {
+            setLoading(false);
+        }
+    };
 
     const handleSave = async () => {
         if (!amount || parseFloat(amount) <= 0) {
@@ -107,10 +181,50 @@ export default function GroupWalletExpenseModal({ visible, onClose, onSuccess, g
             setAlert({
                 visible: true,
                 title: 'Selection Required',
-                message: 'You need to add at least 1 people to split.',
+                message: 'Who is sharing this expense? Please select participants.',
                 type: 'warning'
             });
             return;
+        }
+
+        // Balance Validation
+        const amountNum = parseFloat(amount);
+        if (selectedSource.type === 'hand') {
+            const hBal = userInfo?.handBalance || 0;
+            if (hBal < amountNum) {
+                setAlert({ visible: true, title: 'Insufficient HAND', message: `You need ${formatCurrency(amountNum, userInfo?.currency)} but only have ${formatCurrency(hBal, userInfo?.currency)} in your HAND wallet.`, type: 'error' });
+                return;
+            }
+        } else if (selectedSource.type === 'savings') {
+            const masterPot = savingsGoals?.find?.(g => g.name === 'Savings' || g.name === 'Savings Balance');
+            const available = masterPot?.currentAmount || 0;
+            if (available < amountNum) {
+                setAlert({ visible: true, title: 'Insufficient Savings', message: `You need ${formatCurrency(amountNum, userInfo?.currency)} but only have ${formatCurrency(available, userInfo?.currency)} in your Savings Stash.`, type: 'error' });
+                return;
+            }
+        } else if (selectedSource.type === 'wallet') {
+            const wallet = wallets?.find?.(w => w._id === selectedSource.id);
+            if (wallet && wallet.type !== 'Credit') {
+                const symbol = (wallet.coinSymbol || wallet.currency || '').toUpperCase();
+                const rate = rates[symbol] || 1;
+
+                // If rate is e.g. 0.0000002 (BTC per 1 PHP)
+                // then nativeNeeded = 2000 PHP * 0.0000002 = 0.0004 BTC
+                const nativeNeeded = amountNum * rate;
+                const currentBalance = wallet.balance || 0;
+
+                if (currentBalance < nativeNeeded) {
+                    const unit = wallet.type === 'Crypto' ? wallet.coinSymbol : wallet.currency;
+                    const marketPrice = 1 / (rate || 1);
+                    setAlert({
+                        visible: true,
+                        title: 'Insufficient Balance',
+                        message: `Your ${wallet.name} wallet doesn't have enough funds. You need ${nativeNeeded.toFixed(wallet.type === 'Crypto' ? 8 : 2)} ${unit} (₱${amountNum.toLocaleString()}) but only have ${currentBalance.toFixed(wallet.type === 'Crypto' ? 8 : 2)} ${unit}.\n\nMarket Rate: 1 ${unit} ≈ ₱${marketPrice.toLocaleString()}`,
+                        type: 'error'
+                    });
+                    return;
+                }
+            }
         }
 
 
@@ -119,13 +233,28 @@ export default function GroupWalletExpenseModal({ visible, onClose, onSuccess, g
             const isCustom = selectedCategory === 'Custom';
             const catObj = allCategories.find(c => c.name === selectedCategory);
 
+            let walletDeductAmount = null;
+            if (selectedSource.type === 'wallet') {
+                const wallet = wallets?.find?.(w => w._id === selectedSource.id);
+                if (wallet && (wallet.type === 'Crypto' || wallet.currency !== 'PHP')) {
+                    const symbol = (wallet.coinSymbol || wallet.currency || '').toUpperCase();
+                    const rate = rates[symbol] || 0;
+                    if (rate > 0) {
+                        walletDeductAmount = parseFloat(amount) * rate;
+                    }
+                }
+            }
+
             await addTripExpense(groupId, {
                 amount: parseFloat(amount),
                 description: description.trim(),
                 category: isCustom ? (customCategoryName.trim() || 'Custom') : selectedCategory,
                 categoryIcon: isCustom ? customCategoryIcon : catObj?.icon,
                 categoryColor: isCustom ? customCategoryColor : (catObj?.color || '#64748b'),
-                splitAmongIds
+                splitAmongIds,
+                walletId: selectedSource.type === 'wallet' ? selectedSource.id : null,
+                sourceType: selectedSource.type === 'hand' ? 'hand' : (selectedSource.type === 'savings' ? 'savings_balance' : null),
+                walletDeductAmount
             });
             reset();
             onSuccess();
@@ -178,16 +307,22 @@ export default function GroupWalletExpenseModal({ visible, onClose, onSuccess, g
                 >
                     <View style={styles.header}>
                         <Text style={[styles.title, { color: COLORS.text }]}>Add Expense</Text>
-                        <TouchableOpacity onPress={onClose}>
-                            <Feather name="x" size={24} color={COLORS.textMuted} />
-                        </TouchableOpacity>
+                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 15 }}>
+                            <TouchableOpacity onPress={handleScanReceipt} style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                                <Feather name="maximize" size={18} color={COLORS.primary} />
+                                <Text style={{ fontSize: 12, fontWeight: '800', color: COLORS.primary }}>SCAN</Text>
+                            </TouchableOpacity>
+                            <TouchableOpacity onPress={onClose}>
+                                <Feather name="x" size={24} color={COLORS.textMuted} />
+                            </TouchableOpacity>
+                        </View>
                     </View>
 
                     <ScrollView
                         ref={scrollRef}
                         showsVerticalScrollIndicator={false}
                         keyboardShouldPersistTaps="handled"
-                        contentContainerStyle={{ paddingBottom: 60, flexGrow: 1 }}
+                        contentContainerStyle={{ paddingBottom: 20, flexGrow: 1 }}
                         style={{ flexShrink: 1 }}
                     >
                         {/* Amount Input */}
@@ -201,6 +336,36 @@ export default function GroupWalletExpenseModal({ visible, onClose, onSuccess, g
                                 {amount || '0.00'}
                             </Text>
                         </TouchableOpacity>
+
+                        {/* Market Conversion Preview Label */}
+                        {selectedSource.type === 'wallet' && amount && parseFloat(amount) > 0 && (() => {
+                            const wallet = wallets?.find(w => w._id === selectedSource.id);
+                            if (wallet && (wallet.type === 'Crypto' || wallet.currency !== 'PHP')) {
+                                const symbol = (wallet.coinSymbol || wallet.currency || '').toUpperCase();
+                                const rate = rates[symbol] || 0;
+                                if (rate > 0) {
+                                    const nativeAmount = parseFloat(amount) * rate;
+                                    const marketPrice = 1 / rate;
+                                    const unit = wallet.coinSymbol || wallet.currency;
+                                    return (
+                                        <View style={styles.conversionPreviewContainer}>
+                                            <View style={styles.conversionRow}>
+                                                <MaterialCommunityIcons name="swap-horizontal" size={16} color={COLORS.textMuted} />
+                                                <Text style={[styles.conversionText, { color: COLORS.textMuted }]}>
+                                                    ≈ {nativeAmount.toLocaleString(undefined, { maximumFractionDigits: 8 })} {unit} deducted
+                                                </Text>
+                                            </View>
+                                            <View style={[styles.marketRateTag, { backgroundColor: COLORS.primary + '15' }]}>
+                                                <Text style={[styles.marketRateText, { color: COLORS.primary }]}>
+                                                    1 {unit} is ≈ to ₱{marketPrice.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                                </Text>
+                                            </View>
+                                        </View>
+                                    );
+                                }
+                            }
+                            return null;
+                        })()}
 
                         {/* Description */}
                         <View style={[styles.inputGroup, { backgroundColor: COLORS.background, borderColor: COLORS.border }]}>
@@ -403,6 +568,66 @@ export default function GroupWalletExpenseModal({ visible, onClose, onSuccess, g
                             </View>
                         )}
 
+                        {/* Payment Source Selection */}
+                        <Text style={[styles.label, { color: COLORS.textMuted }]}>PAYMENT METHOD</Text>
+                        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.sourceScroll}>
+                            {/* HAND */}
+                            <TouchableOpacity
+                                onPress={() => setSelectedSource({ id: null, type: 'hand' })}
+                                style={[styles.sourceDetailedChip, {
+                                    backgroundColor: selectedSource.type === 'hand' ? '#e91e6315' : COLORS.background,
+                                    borderColor: selectedSource.type === 'hand' ? '#e91e63' : COLORS.border
+                                }]}
+                            >
+                                <MaterialCommunityIcons name="hand-coin" size={18} color={selectedSource.type === 'hand' ? '#e91e63' : COLORS.textMuted} />
+                                <View>
+                                    <Text style={[styles.sourceTitle, { color: selectedSource.type === 'hand' ? '#e91e63' : COLORS.text }]}>HAND</Text>
+                                    <Text style={[styles.sourceSub, { color: COLORS.textMuted }]}>{formatCurrency(userInfo?.HandBalance || userInfo?.handBalance || 0, userInfo?.currency)}</Text>
+                                </View>
+                            </TouchableOpacity>
+
+                            {/* Savings */}
+                            <TouchableOpacity
+                                onPress={() => setSelectedSource({ id: null, type: 'savings' })}
+                                style={[styles.sourceDetailedChip, {
+                                    backgroundColor: selectedSource.type === 'savings' ? COLORS.primary + '15' : COLORS.background,
+                                    borderColor: selectedSource.type === 'savings' ? COLORS.primary : COLORS.border
+                                }]}
+                            >
+                                <MaterialCommunityIcons name="piggy-bank" size={18} color={selectedSource.type === 'savings' ? COLORS.primary : COLORS.textMuted} />
+                                <View>
+                                    <Text style={[styles.sourceTitle, { color: selectedSource.type === 'savings' ? COLORS.primary : COLORS.text }]}>Savings</Text>
+                                    <Text style={[styles.sourceSub, { color: COLORS.textMuted }]}>
+                                        {formatCurrency(savingsGoals?.find?.(g => g.name === 'Savings' || g.name === 'Savings Balance')?.currentAmount || 0, userInfo?.currency)}
+                                    </Text>
+                                </View>
+                            </TouchableOpacity>
+
+                            {/* Wallets */}
+                            {wallets?.map?.(w => (
+                                <TouchableOpacity
+                                    key={w._id}
+                                    onPress={() => setSelectedSource({ id: w._id, type: 'wallet' })}
+                                    style={[styles.sourceDetailedChip, {
+                                        backgroundColor: selectedSource.id === w._id ? (w.color || COLORS.primary) + '15' : COLORS.background,
+                                        borderColor: selectedSource.id === w._id ? (w.color || COLORS.primary) : COLORS.border
+                                    }]}
+                                >
+                                    <MaterialCommunityIcons
+                                        name={w.type === 'Crypto' ? 'bitcoin' : (w.type === 'Credit' ? 'credit-card' : 'wallet')}
+                                        size={18}
+                                        color={selectedSource.id === w._id ? (w.color || COLORS.primary) : COLORS.textMuted}
+                                    />
+                                    <View>
+                                        <Text style={[styles.sourceTitle, { color: selectedSource.id === w._id ? (w.color || COLORS.primary) : COLORS.text }]}>{w.name}</Text>
+                                        <Text style={[styles.sourceSub, { color: COLORS.textMuted }]}>
+                                            {w.type === 'Crypto' ? `${w.balance?.toFixed(8)} ${w.coinSymbol}` : formatCurrency(w.balance || 0, w.currency || 'PHP')}
+                                        </Text>
+                                    </View>
+                                </TouchableOpacity>
+                            ))}
+                        </ScrollView>
+
                         <TouchableOpacity
                             onPress={handleSave}
                             disabled={loading}
@@ -552,6 +777,42 @@ const styles = StyleSheet.create({
     },
     breakdownAmount: {
         fontSize: 14,
+        fontWeight: '800'
+    },
+    sourceScroll: { flexDirection: 'row', gap: 12, paddingRight: 20, paddingBottom: 5 },
+    sourceDetailedChip: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        paddingHorizontal: 16,
+        paddingVertical: 12,
+        borderRadius: 18,
+        borderWidth: 1.5,
+        gap: 12,
+        minWidth: 130
+    },
+    sourceTitle: { fontSize: 13, fontWeight: '800' },
+    sourceSub: { fontSize: 10, fontWeight: '600', marginTop: 1 },
+    conversionPreviewContainer: {
+        alignItems: 'center',
+        marginBottom: 20,
+        gap: 8
+    },
+    conversionRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 6
+    },
+    conversionText: {
+        fontSize: 14,
+        fontWeight: '700'
+    },
+    marketRateTag: {
+        paddingHorizontal: 12,
+        paddingVertical: 6,
+        borderRadius: 10,
+    },
+    marketRateText: {
+        fontSize: 11,
         fontWeight: '800'
     }
 });

@@ -15,7 +15,7 @@ import CustomAlertModal from '../../components/CustomAlertModal';
 import Skeleton from '../../components/Skeleton';
 import { formatCurrency } from '../../utils/formatters';
 import { API_BASE } from '../../store/authStore';
-import { Swipeable } from 'react-native-gesture-handler';
+import SwipeableRow from '../../components/SwipeableRow';
 import { triggerHaptic } from '../../utils/haptics';
 
 const { width } = Dimensions.get('window');
@@ -218,55 +218,7 @@ export default function GroupWalletScreen({ navigation }) {
         }
     };
 
-    const renderLeftActions = (tripId) => (
-        <View style={styles.swipeActions}>
-            <TouchableOpacity
-                onPress={() => handleDeleteTrip(tripId)}
-                style={[styles.deleteAction, { backgroundColor: COLORS.error || '#ef4444' }]}
-                activeOpacity={0.8}
-            >
-                <Feather name="trash-2" size={24} color="#fff" />
-                <Text style={styles.swipeActionText}>Delete</Text>
-            </TouchableOpacity>
-        </View>
-    );
 
-    const renderRightActions = (trip) => {
-        const isOwner = trip.owner._id === userInfo?._id;
-
-        // If it's an active trip, show "Archive"
-        if (!trip.isArchived) {
-            if (!isOwner) return null;
-            return (
-                <View style={styles.swipeActions}>
-                    <TouchableOpacity
-                        onPress={() => handleArchiveTrip(trip._id)}
-                        style={[styles.archiveAction, { backgroundColor: COLORS.primary }]}
-                        activeOpacity={0.8}
-                    >
-                        <Feather name="archive" size={24} color="#fff" />
-                        <Text style={styles.swipeActionText}>Archive</Text>
-                    </TouchableOpacity>
-                </View>
-            );
-        }
-
-        // If it's an archived trip, show "Restore" (only if not settled)
-        if (trip.isSettled || !isOwner) return null;
-
-        return (
-            <View style={styles.swipeActions}>
-                <TouchableOpacity
-                    onPress={() => handleRestoreTrip(trip._id)}
-                    style={[styles.archiveAction, { backgroundColor: COLORS.primary }]}
-                    activeOpacity={0.8}
-                >
-                    <MaterialCommunityIcons name="archive-arrow-up-outline" size={24} color="#fff" />
-                    <Text style={styles.swipeActionText}>Restore</Text>
-                </TouchableOpacity>
-            </View>
-        );
-    };
 
     const filteredTrips = trips.filter(t => {
         if (activeTab === 'Archived') return t.isArchived;
@@ -366,30 +318,42 @@ export default function GroupWalletScreen({ navigation }) {
                         )}
                     </View>
                 ) : (
-                    filteredTrips.map(trip => (
-                        <Reanimated.View entering={ZoomIn} exiting={ZoomOut} layout={LinearTransition} key={trip._id}>
-                            <Swipeable
-                                renderLeftActions={activeTab === 'Archived' ? () => renderLeftActions(trip._id) : null}
-                                renderRightActions={() => renderRightActions(trip)}
-                                onSwipeableOpen={(direction) => {
-                                    if (direction === 'left' && activeTab === 'Archived') {
-                                        handleDeleteTrip(trip._id, true);
-                                    } else if (direction === 'right') {
-                                        const isOwner = trip.owner._id === userInfo?._id;
-                                        if (isOwner) {
-                                            if (activeTab === 'Active') {
-                                                handleArchiveTrip(trip._id);
-                                            } else if (activeTab === 'Archived' && !trip.isSettled) {
-                                                handleRestoreTrip(trip._id);
-                                            }
-                                        }
-                                    }
-                                }}
-                                friction={2}
-                                overshootRight={false}
-                                overshootLeft={false}
-                                rightThreshold={40}
-                                leftThreshold={40}
+                    filteredTrips.map(trip => {
+                        const isOwner = trip.owner._id === userInfo?._id;
+                        
+                        let rightAction = null;
+                        if (!trip.isArchived && isOwner) {
+                            rightAction = {
+                                color: COLORS.primary,
+                                icon: 'archive',
+                                label: 'Archive',
+                                onPress: () => handleArchiveTrip(trip._id)
+                            };
+                        } else if (trip.isArchived && !trip.isSettled && isOwner) {
+                            rightAction = {
+                                color: COLORS.primary,
+                                icon: 'archive-arrow-up-outline',
+                                iconFamily: 'MaterialCommunityIcons',
+                                label: 'Restore',
+                                onPress: () => handleRestoreTrip(trip._id)
+                            };
+                        }
+
+                        let leftAction = null;
+                        if (activeTab === 'Archived') {
+                            leftAction = {
+                                color: COLORS.error || '#ef4444',
+                                icon: 'trash-2',
+                                label: 'Delete',
+                                onPress: () => handleDeleteTrip(trip._id, true)
+                            };
+                        }
+
+                        return (
+                            <SwipeableRow
+                                key={trip._id}
+                                rightAction={rightAction}
+                                leftAction={leftAction}
                                 containerStyle={{ marginBottom: 16 }}
                             >
                                 <TripCard
@@ -399,9 +363,9 @@ export default function GroupWalletScreen({ navigation }) {
                                     onPress={(t) => navigation.navigate('GroupWalletDetailScreen', { id: t._id })}
                                     onRespond={handleRespond}
                                 />
-                            </Swipeable>
-                        </Reanimated.View>
-                    ))
+                            </SwipeableRow>
+                        );
+                    })
                 )}
             </ScrollView>
 

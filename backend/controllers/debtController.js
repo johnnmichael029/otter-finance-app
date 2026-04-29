@@ -38,7 +38,7 @@ const calcAccruedInterest = (debt) => {
 // ─────────────────────────────────────────────────────────────────────────────
 const getDebts = async (req, res) => {
     try {
-        const { status, direction, page = 1, limit = 20 } = req.query;
+        const { status, direction, isArchived, page = 1, limit = 20 } = req.query;
 
         // Match debts owned by the user, OR debts where the user is the linkedUserId and it's pending
         const filter = {
@@ -49,6 +49,15 @@ const getDebts = async (req, res) => {
         };
 
         if (status) filter.status = status;
+        
+        // Handle archiving: if true is passed, show archived. Otherwise, show non-archived (false or undefined).
+        const isArchivedQuery = String(isArchived) === 'true';
+        if (isArchivedQuery) {
+            filter.isArchived = true;
+        } else {
+            filter.isArchived = { $ne: true };
+        }
+
         // Direction is tricky for pending requests because it's inverse for the receiver,
         // but for now we apply it normally or skip it if it breaks filtering.
         // To be safe, let's only apply direction/status if they exist and aren't over-restricting pending requests.
@@ -402,6 +411,14 @@ const logPayment = async (req, res) => {
                     }
                 }
             }
+        } else {
+            // Update persistent Hand balance
+            const user = await User.findById(req.userId);
+            if (user) {
+                user.handBalance += (txType === 'income' ? amount : -amount);
+                await user.save();
+                if (io) io.to(`user:${req.userId}`).emit('wallet_updated', { _id: 'main', balance: user.handBalance });
+            }
         }
 
         // Invalidate transaction caches since we inject a new transaction
@@ -438,6 +455,14 @@ const logPayment = async (req, res) => {
                     note: `Payment synced from ${req.user.name}`,
                     wallet: null // Received in HAND by default
                 });
+
+                // Update friend's persistent Hand balance
+                const friendUser = await User.findById(friendDebt.user._id);
+                if (friendUser) {
+                    friendUser.handBalance += amount; // Sync is always income for the receiver
+                    await friendUser.save();
+                    if (io) io.to(`user:${friendDebt.user._id}`).emit('wallet_updated', { _id: 'main', balance: friendUser.handBalance });
+                }
 
                 // Update friend's debt status
                 friendDebt.amountPaid = Math.min(friendDebt.amount, (friendDebt.amountPaid || 0) + amount);
@@ -618,6 +643,8 @@ const respondDebtRequest = async (req, res) => {
             // Cleanup notification
             await Notification.deleteMany({ 'data.debtId': new mongoose.Types.ObjectId(req.params.id) });
 
+            invalidatePrefixes('debt');
+
             if (io) io.to(`user:${originalDebt.user._id}`).emit('debt_request_rejected', originalDebt);
             return res.json({ message: 'Debt request rejected.' });
         }
@@ -786,4 +813,34 @@ const splitDebt = async (req, res) => {
     }
 };
 
-module.exports = { getDebts, createDebt, updateDebt, deleteDebt, logPayment, getPayments, sendDebtReminder, respondDebtRequest, splitDebt };
+// DELETE /api/debts/archive/empty
+const emptyDebtArchives = async (req, res) => {
+    try {
+        const result = await Debt.deleteMany({
+            user: req.userId,
+            isArchived: true
+        });
+
+        invalidatePrefixes('debt');
+
+        res.status(200).json({
+            message: `Successfully deleted ${result.deletedCount} archived debts`,
+            deletedCount: result.deletedCount
+        });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+};
+
+module.exports = { 
+    getDebts, 
+    createDebt, 
+    updateDebt, 
+    deleteDebt, 
+    logPayment, 
+    getPayments, 
+    sendDebtReminder, 
+    respondDebtRequest, 
+    splitDebt,
+    emptyDebtArchives
+};

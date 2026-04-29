@@ -106,6 +106,10 @@ const debtSchema = new mongoose.Schema({
         enum: ['none', 'pending', 'linked', 'rejected'],
         default: 'none',
     },
+    isArchived: {
+        type: Boolean,
+        default: false,
+    },
 
 }, { timestamps: true });
 

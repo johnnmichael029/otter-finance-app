@@ -154,6 +154,10 @@ const transactionSchema = new mongoose.Schema({
         default: false,
         index: true,
     },
+    isNonReversible: {
+        type: Boolean,
+        default: false,
+    },
 }, { timestamps: true });
 
 // ── Index for fast user + date range queries ──────────────────────────────────

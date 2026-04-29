@@ -13,6 +13,7 @@ const {
     archiveTransaction,
     emptyArchives
 } = require('../controllers/transactionController');
+const { exportTransactions } = require('../controllers/exportController');
 
 // All transaction routes require authentication
 router.use(requireAuth);
@@ -25,6 +26,9 @@ router.get('/summary', cache('transaction', 90), getSummary);
 
 // GET /api/transactions/analytics — deep AI analytics (cached 90s)
 router.get('/analytics', cache('transaction', 90), getAnalytics);
+
+// GET /api/transactions/export    — CSV export
+router.get('/export', exportTransactions);
 
 // POST /api/transactions         — create (invalidates cache)
 router.post('/', validate.createTransaction, createTransaction);

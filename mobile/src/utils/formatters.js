@@ -93,7 +93,7 @@ export const FALLBACK_ICONS = [
     'phone', 'printer', 'radio', 'scissors', 'shield', 'tool', 'trash', 'umbrella', 'unlock', 'user', 'video',
     'smile', 'piggy-bank-outline', 'account-cash', 'jeepney', 'car', 'train-outline', 'boat-outline', 'hospital', 'noodles', 'egg-outline',
     'egg-fried', 'cup', 'game-controller-outline', 'controller-classic-outline', 'rice', 'steam', 'motorbike', 'users', 'shield-check',
-    'calendar-day', 'motorcycle', 'fast-food', 'bed', 'ticket', 'dots-horizontal'
+    'calendar-day', 'motorcycle', 'fast-food', 'bed', 'ticket', 'dots-horizontal', 'file-csv', 'file-pdf-box',
 ];
 
 /**
@@ -132,10 +132,10 @@ export const getIconColor = (tx, COLORS) => {
 const MCI_ICONS = [
     'piggy-bank-outline', 'account-cash', 'jeepney', 'car', 'noodles', 'egg-fried', 'cup',
     'controller-classic-outline', 'piggy-bank', 'archive-arrow-up-outline', 'archive-arrow-down-outline', 'motorbike', 'rice',
-    'shield-check', 'dots-horizontal',
+    'shield-check', 'dots-horizontal', 'file-pdf-box',
 ];
 const ION_ICONS = ['train-outline', 'boat-outline', 'egg-outline', 'game-controller-outline', 'fast-food', 'ticket'];
-const FA5_ICONS = ['hospital', 'steam', 'users', 'calendar-day', 'motorcycle', 'award', 'bed', 'shopping-bag'];
+const FA5_ICONS = ['hospital', 'steam', 'users', 'calendar-day', 'motorcycle', 'award', 'bed', 'shopping-bag', 'file-csv'];
 
 /**
  * Renders a Feather, MaterialCommunityIcons, or Ionicons icon by name.

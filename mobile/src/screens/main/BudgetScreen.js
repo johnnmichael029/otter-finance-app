@@ -2,20 +2,20 @@ import React, { useState, useCallback, useEffect } from 'react';
 import {
     View, Text, StyleSheet, TouchableOpacity, ScrollView,
     ActivityIndicator, RefreshControl, TouchableWithoutFeedback,
-    TextInput, Alert, Animated as RNAnimated, KeyboardAvoidingView, Platform, Image
+    TextInput, Alert, KeyboardAvoidingView, Platform, Image, LayoutAnimation, UIManager
 } from 'react-native';
-import Animated, { ZoomIn, ZoomOut } from 'react-native-reanimated';
-import { Swipeable } from 'react-native-gesture-handler';
+import Animated, { ZoomIn, ZoomOut, FadeIn, FadeOut, LinearTransition, Easing } from 'react-native-reanimated';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Feather, MaterialCommunityIcons, Ionicons, FontAwesome5 } from '@expo/vector-icons';
 import BottomSheetModal from '../../components/BottomSheetModal';
 import { useTheme } from '../../context/ThemeContext';
 import { useAuth } from '../../context/AuthContext';
-import { getBudgets, upsertBudget, deleteBudget, getCategories, createCategory, getFriends } from '../../api/api';
+import { getBudgets, upsertBudget, updateBudget, deleteBudget, getCategories, createCategory, getFriends } from '../../api/api';
 import { API_BASE } from '../../context/AuthContext';
 import { spacing, radius } from '../../theme/colors';
 import Skeleton from '../../components/Skeleton';
 import CustomAlertModal from '../../components/CustomAlertModal';
+import SwipeableRow from '../../components/SwipeableRow';
 import { useFinanceStore } from '../../store/financeStore';
 import { formatCurrency, IconRenderer, FALLBACK_ICONS } from '../../utils/formatters';
 
@@ -27,6 +27,8 @@ const COLORS_PALETTE = [
     '#0ea5e9', '#3b82f6', '#6366f1', '#8b5cf6', '#a855f7', '#d946ef', '#ec4899', '#f43f5e',
     '#64748b', '#78716c'
 ];
+
+const AnimatedTouchableOpacity = Animated.createAnimatedComponent(TouchableOpacity);
 
 const PRESET_CATEGORIES = [
     { label: 'Overall', icon: 'pie-chart', color: '#E91E8C' },
@@ -74,6 +76,18 @@ export default function BudgetScreen() {
     const [subIconIndex, setSubIconIndex] = useState(null);
     const [useCustom, setUseCustom] = useState(false);
     const [alertConfig, setAlertConfig] = useState({ visible: false, title: '', message: '', type: 'info', onConfirm: null });
+    const [expandedBudgetIds, setExpandedBudgetIds] = useState([]);
+    const [editingBudget, setEditingBudget] = useState(null);
+
+    if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
+        UIManager.setLayoutAnimationEnabledExperimental(true);
+    }
+
+    const toggleBudget = (id) => {
+        setExpandedBudgetIds(prev =>
+            prev.includes(id) ? prev.filter(i => i !== id) : [...prev, id]
+        );
+    };
 
     const load = useCallback(async () => {
         try {
@@ -91,6 +105,11 @@ export default function BudgetScreen() {
 
             const fRes = await getFriends();
             setFriends(Array.isArray(fRes) ? fRes : (fRes.friends || []));
+
+            // Show all budgets by default
+            if (bRes.budgets) {
+                setExpandedBudgetIds(bRes.budgets.map(b => b._id));
+            }
         } catch (e) {
             console.warn(e.message);
         } finally {
@@ -161,20 +180,34 @@ export default function BudgetScreen() {
 
         setSaving(true);
         try {
-            if (useCustom) {
-                const catName = form.customCategory.trim();
-                const exists = remoteCats.find(c => c.label.toLowerCase() === catName.toLowerCase());
-                if (!exists) {
-                    try {
-                        await createCategory({ name: catName, icon: form.customIcon, color: form.customColor, type: 'expense' });
-                    } catch (catErr) {
-                        console.error('[Budget] Auto-category creation failed:', catErr);
+            if (editingBudget) {
+                // EDIT path: PATCH directly by _id to avoid duplicate key error
+                await updateBudget(editingBudget._id, {
+                    categoryIcon: useCustom ? form.customIcon : form.categoryIcon,
+                    categoryColor: useCustom ? form.customColor : form.categoryColor,
+                    allocatedAmount: limit,
+                    reminderAmount: reminder,
+                    subBudgets: cleanedSubBudgets,
+                    isShared: form.isShared,
+                    participantIds: form.participantIds,
+                });
+            } else {
+                // CREATE path: upsert by category+period
+                if (useCustom) {
+                    const catName = form.customCategory.trim();
+                    const exists = remoteCats.find(c => c.label.toLowerCase() === catName.toLowerCase());
+                    if (!exists) {
+                        try {
+                            await createCategory({ name: catName, icon: form.customIcon, color: form.customColor, type: 'expense' });
+                        } catch (catErr) {
+                            console.error('[Budget] Auto-category creation failed:', catErr);
+                        }
                     }
                 }
+                await upsertBudget(budgetData);
             }
-
-            await upsertBudget(budgetData);
             setModalVisible(false);
+            setEditingBudget(null);
             setForm({
                 period: selectedPeriod,
                 category: 'Overall',
@@ -213,6 +246,27 @@ export default function BudgetScreen() {
         });
     };
 
+    const openEditBudget = (budget) => {
+        const isCustom = !PRESET_CATEGORIES.some(c => c.label === budget.category);
+        setEditingBudget(budget);
+        setForm({
+            period: budget.period || selectedPeriod,
+            category: budget.category,
+            categoryIcon: budget.categoryIcon || 'tag',
+            categoryColor: budget.categoryColor || COLORS.primary,
+            allocatedAmount: String(budget.allocatedAmount || ''),
+            reminderAmount: budget.reminderAmount ? String(budget.reminderAmount) : '',
+            customCategory: isCustom ? budget.category : '',
+            customIcon: isCustom ? (budget.categoryIcon || 'tag') : 'tag',
+            customColor: isCustom ? (budget.categoryColor || '#6b7280') : '#6b7280',
+            subBudgets: (budget.subBudgets || []).map(s => ({ tag: s.tag, amount: String(s.amount), icon: s.icon || 'tag' })),
+            isShared: budget.isShared || false,
+            participantIds: (budget.participants || []).map(p => typeof p.user === 'object' ? p.user._id : p.user),
+        });
+        setUseCustom(isCustom);
+        setModalVisible(true);
+    };
+
     // --- Date Navigation ---
     const changeDate = (dir) => {
         const d = new Date(selectedDate);
@@ -249,17 +303,7 @@ export default function BudgetScreen() {
     const overallBudget = processedBudgets.find(b => b.category === 'Overall');
     const categoryBudgets = processedBudgets.filter(b => b.category !== 'Overall');
 
-    const renderRightActions = (progress, dragX, id) => {
-        const scale = dragX.interpolate({ inputRange: [-80, 0], outputRange: [1, 0], extrapolate: 'clamp' });
-        return (
-            <TouchableOpacity onPress={() => handleDelete(id)} style={[styles.hiddenDeleteBtn, { backgroundColor: '#ef4444' }]} activeOpacity={0.8}>
-                <RNAnimated.View style={{ transform: [{ scale }] }}>
-                    <Feather name="trash-2" size={24} color="#fff" />
-                    <Text style={{ color: '#fff', fontSize: 10, fontWeight: '800', marginTop: 4 }}>Delete</Text>
-                </RNAnimated.View>
-            </TouchableOpacity>
-        );
-    };
+
 
     const renderSubBudgets = (budget) => {
         if (!budget.subBudgets || budget.subBudgets.length === 0) return null;
@@ -331,11 +375,33 @@ export default function BudgetScreen() {
         const warn = pct >= 80 && !over;
         const barColor = over ? '#ef4444' : warn ? '#f59e0b' : budget.categoryColor || COLORS.primary;
         const remaining = budget.allocatedAmount - budget.spent;
+        const isExpanded = expandedBudgetIds.includes(budget._id);
 
         return (
-            <Animated.View key={budget._id} entering={ZoomIn.springify().damping(50).mass(0.9)} exiting={ZoomOut.duration(100)}>
-                <Swipeable renderRightActions={(prog, drag) => renderRightActions(prog, drag, budget._id)} friction={1} overshootRight={false} containerStyle={{ marginBottom: spacing.sm }}>
-                    <View style={[styles.budgetCard, { backgroundColor: COLORS.surface, marginBottom: 0 }]}>
+            <SwipeableRow
+                key={budget._id}
+                entering={ZoomIn.springify().damping(50).mass(0.9)}
+                exiting={ZoomOut.duration(100)}
+                leftAction={{
+                    color: COLORS.primary,
+                    icon: 'edit-2',
+                    label: 'Edit',
+                    onPress: () => openEditBudget(budget),
+                }}
+                rightAction={{
+                    color: '#ef4444',
+                    icon: 'trash-2',
+                    label: 'Delete',
+                    onPress: () => handleDelete(budget._id),
+                }}
+                containerStyle={{ marginBottom: spacing.sm }}
+            >
+                <AnimatedTouchableOpacity
+                    activeOpacity={0.9}
+                    onPress={() => toggleBudget(budget._id)}
+                    layout={LinearTransition.duration(200).easing(Easing.bezier(0.4, 0, 0.2, 1))}
+                    style={[styles.budgetCard, { backgroundColor: COLORS.surface, marginBottom: 0 }]}
+                >
                         <View style={styles.budgetCardTop}>
                             <View style={[styles.budgetIcon, { backgroundColor: (budget.categoryColor || '#E91E8C') + '20' }]}>
                                 <IconRenderer name={budget.categoryIcon || 'pie-chart'} size={18} color={budget.categoryColor || '#E91E8C'} />
@@ -349,6 +415,12 @@ export default function BudgetScreen() {
                             <View style={{ alignItems: 'flex-end' }}>
                                 <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 2 }}>
                                     <Text style={[styles.budgetAmt, { color: COLORS.text }]}>{formatCurrency(budget.allocatedAmount, userInfo?.currency)}</Text>
+                                    <Feather
+                                        name={isExpanded ? "chevron-up" : "chevron-down"}
+                                        size={14}
+                                        color={COLORS.textMuted}
+                                        style={{ marginLeft: 6 }}
+                                    />
                                 </View>
                                 <Text style={[styles.budgetSpent, { color: COLORS.textMuted }]}>Spent: {formatCurrency(budget.spent, userInfo?.currency)}</Text>
                             </View>
@@ -363,14 +435,15 @@ export default function BudgetScreen() {
                             {warn && <Text style={[styles.overTag, { color: '#f59e0b', backgroundColor: '#f59e0b15' }]}>Almost Full</Text>}
                         </View>
 
-                        {/* Sub-Budgets rendering */}
-                        {renderSubBudgets(budget)}
-
-                        {/* Participants rendering */}
-                        {renderParticipants(budget)}
-                    </View>
-                </Swipeable>
-            </Animated.View>
+                        {/* Sub-Budgets and Participants rendering with Reanimated */}
+                        {isExpanded && (
+                            <Animated.View entering={FadeIn.duration(400)} exiting={FadeOut.duration(400)}>
+                                {renderSubBudgets(budget)}
+                                {renderParticipants(budget)}
+                            </Animated.View>
+                        )}
+                    </AnimatedTouchableOpacity>
+            </SwipeableRow>
         );
     };
 
@@ -382,7 +455,12 @@ export default function BudgetScreen() {
                     <Text style={styles.headerTitle}>Budget</Text>
                     <Text style={[styles.headerSub, { color: COLORS.textMuted }]}>Spending limits</Text>
                 </View>
-                <TouchableOpacity style={[styles.addBtn, { backgroundColor: COLORS.primary }]} onPress={() => { setForm({ ...form, period: selectedPeriod }); setModalVisible(true); }}>
+                <TouchableOpacity style={[styles.addBtn, { backgroundColor: COLORS.primary }]} onPress={() => {
+                    setEditingBudget(null);
+                    setForm({ period: selectedPeriod, category: 'Overall', categoryIcon: 'pie-chart', categoryColor: '#E91E8C', allocatedAmount: '', reminderAmount: '', customCategory: '', customIcon: 'tag', customColor: '#6b7280', subBudgets: [], isShared: false, participantIds: [] });
+                    setUseCustom(false);
+                    setModalVisible(true);
+                }}>
                     <Feather name="plus" size={20} color="#fff" />
                 </TouchableOpacity>
             </View>
@@ -460,16 +538,23 @@ export default function BudgetScreen() {
             )}
 
             {/* Add Budget Modal */}
-            <BottomSheetModal visible={modalVisible} onClose={() => setModalVisible(false)}>
-                <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 20} style={{ flexShrink: 1 }}>
-                    <ScrollView showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled" style={{ flexShrink: 1 }} contentContainerStyle={{ paddingBottom: 24 }}>
-                        <Text style={[styles.sheetTitle, { color: COLORS.text }]}>Set Budget</Text>
+            <BottomSheetModal visible={modalVisible} onClose={() => { setModalVisible(false); setEditingBudget(null); }}>
+                <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 60} style={{ flexShrink: 1 }}>
+                    <ScrollView showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled" style={{ flexShrink: 1 }} contentContainerStyle={{ paddingBottom: 250 }}>
+                        <Text style={[styles.sheetTitle, { color: COLORS.text }]}>{editingBudget ? 'Edit Budget' : 'Set Budget'}</Text>
 
                         {/* Period Selection */}
-                        <Text style={[styles.label, { color: COLORS.textMuted, marginBottom: 8 }]}>BUDGET PERIOD</Text>
-                        <View style={styles.modalPeriodTabs}>
+                        <Text style={[styles.label, { color: COLORS.textMuted, marginBottom: 8 }]}>
+                            BUDGET PERIOD {editingBudget && <Text style={{ fontSize: 9, fontStyle: 'italic', textTransform: 'none' }}>(Cannot be changed during edit)</Text>}
+                        </Text>
+                        <View style={[styles.modalPeriodTabs, { opacity: editingBudget ? 0.6 : 1 }]}>
                             {['daily', 'weekly', 'monthly'].map(p => (
-                                <TouchableOpacity key={p} style={[styles.modalPeriodTab, form.period === p && { backgroundColor: COLORS.primary, borderColor: COLORS.primary }]} onPress={() => setForm({ ...form, period: p })}>
+                                <TouchableOpacity 
+                                    key={p} 
+                                    disabled={!!editingBudget}
+                                    style={[styles.modalPeriodTab, form.period === p && { backgroundColor: COLORS.primary, borderColor: COLORS.primary }]} 
+                                    onPress={() => setForm({ ...form, period: p })}
+                                >
                                     <Text style={[styles.modalPeriodText, { color: form.period === p ? '#fff' : COLORS.textMuted }]}>
                                         {p.charAt(0).toUpperCase() + p.slice(1)}
                                     </Text>
@@ -609,18 +694,40 @@ export default function BudgetScreen() {
                                         </TouchableOpacity>
                                     </View>
                                     {subIconIndex === index && (
-                                        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8, paddingVertical: 8, paddingHorizontal: 4 }}>
-                                            {ICONS.map(ix => (
-                                                <TouchableOpacity key={ix} onPress={() => {
-                                                    const newSub = [...form.subBudgets];
-                                                    newSub[index].icon = ix;
-                                                    setForm(f => ({ ...f, subBudgets: newSub }));
-                                                    setSubIconIndex(null);
-                                                }} style={[styles.iconBoxSmall, { backgroundColor: sub.icon === ix ? COLORS.primary + '20' : COLORS.background, borderColor: sub.icon === ix ? COLORS.primary : COLORS.border, width: 36, height: 36 }]}>
-                                                    <IconRenderer name={ix} size={14} color={sub.icon === ix ? COLORS.primary : COLORS.textMuted} />
-                                                </TouchableOpacity>
-                                            ))}
-                                        </ScrollView>
+                                        <View style={{ marginTop: 8 }}>
+                                            <Text style={{ fontSize: 10, fontWeight: '700', color: COLORS.textMuted, marginBottom: 6, marginLeft: 4 }}>
+                                                ICONS FROM YOUR CATEGORIES
+                                            </Text>
+                                            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8, paddingVertical: 4, paddingHorizontal: 4 }}>
+                                                {/* Unique icons from remoteCats */}
+                                                {[...new Set(remoteCats.map(c => c.icon))].map(ix => (
+                                                    <TouchableOpacity key={ix} onPress={() => {
+                                                        const newSub = [...form.subBudgets];
+                                                        newSub[index].icon = ix;
+                                                        // AUTO-NAME: find category name for this icon
+                                                        const matchedCat = remoteCats.find(c => c.icon === ix);
+                                                        if (matchedCat && !newSub[index].tag) {
+                                                            newSub[index].tag = matchedCat.label;
+                                                        }
+                                                        setForm(f => ({ ...f, subBudgets: newSub }));
+                                                        setSubIconIndex(null);
+                                                    }} style={[styles.iconBoxSmall, { backgroundColor: sub.icon === ix ? COLORS.primary + '20' : COLORS.background, borderColor: sub.icon === ix ? COLORS.primary : COLORS.border, width: 36, height: 36 }]}>
+                                                        <IconRenderer name={ix} size={14} color={sub.icon === ix ? COLORS.primary : COLORS.textMuted} />
+                                                    </TouchableOpacity>
+                                                ))}
+                                                {/* If remoteCats is empty or small, show some standard ones too */}
+                                                {remoteCats.length < 5 && ICONS.slice(0, 10).map(ix => (
+                                                    <TouchableOpacity key={ix} onPress={() => {
+                                                        const newSub = [...form.subBudgets];
+                                                        newSub[index].icon = ix;
+                                                        setForm(f => ({ ...f, subBudgets: newSub }));
+                                                        setSubIconIndex(null);
+                                                    }} style={[styles.iconBoxSmall, { backgroundColor: sub.icon === ix ? COLORS.primary + '20' : COLORS.background, borderColor: sub.icon === ix ? COLORS.primary : COLORS.border, width: 36, height: 36 }]}>
+                                                        <IconRenderer name={ix} size={14} color={sub.icon === ix ? COLORS.primary : COLORS.textMuted} />
+                                                    </TouchableOpacity>
+                                                ))}
+                                            </ScrollView>
+                                        </View>
                                     )}
                                 </View>
                             ))}
@@ -699,7 +806,7 @@ export default function BudgetScreen() {
                         </View>
 
                         <TouchableOpacity onPress={handleSave} disabled={saving} style={[styles.saveBtn, { backgroundColor: COLORS.primary }]}>
-                            {saving ? <ActivityIndicator color="#fff" /> : <Text style={styles.saveBtnText}>Save Budget</Text>}
+                            {saving ? <ActivityIndicator color="#fff" /> : <Text style={styles.saveBtnText}>{editingBudget ? 'Update Budget' : 'Save Budget'}</Text>}
                         </TouchableOpacity>
                     </ScrollView>
                 </KeyboardAvoidingView>
@@ -735,7 +842,7 @@ const getStyles = (COLORS) => StyleSheet.create({
     budgetSub: { fontSize: 12, marginTop: 1 },
     budgetAmt: { fontWeight: '800', fontSize: 14 },
     budgetSpent: { fontSize: 11, marginTop: 1 },
-    hiddenDeleteBtn: { width: 80, height: '100%', borderRadius: radius.lg, justifyContent: 'center', alignItems: 'center', marginLeft: 12, elevation: 1 },
+
     barBg: { height: 8, backgroundColor: COLORS.border, borderRadius: 4, overflow: 'hidden' },
     barFill: { height: '100%', borderRadius: 4 },
     barLabels: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 6 },

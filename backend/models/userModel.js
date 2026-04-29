@@ -101,6 +101,9 @@ const userSchema = new mongoose.Schema({
     twoFAOTP:         { type: String,  default: null },  // SHA-256 hashed 6-digit OTP
     twoFAExpiry:      { type: Date,    default: null },  // Expires in 10 minutes
 
+    // ── Financial Totals ──────────────────────────────────────────────────────
+    handBalance:      { type: Number,  default: 0 },     // Persistent balance for HAND money
+
 }, { timestamps: true });
 
 // ── Pre-save hook: hash password before storing ───────────────────────────────

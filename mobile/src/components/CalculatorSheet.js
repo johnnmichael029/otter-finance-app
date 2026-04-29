@@ -55,7 +55,7 @@ const CalculatorSheet = ({ visible, onClose, onConfirm, initialValue = '0', curr
             // Remove any trailing operators before evaluating
             toEval = toEval.replace(/[+\-*/.]$/, '');
             if (!toEval) return '0';
-            
+
             // Basic eval logic using Function
             const result = new Function('return ' + toEval)();
             return Number.isFinite(result) ? result.toString() : '0';
@@ -90,12 +90,12 @@ const CalculatorSheet = ({ visible, onClose, onConfirm, initialValue = '0', curr
         if (evaled !== expression && expression.match(/[+\-×÷]/)) {
             livePreview = evaled;
         }
-    } catch {}
+    } catch { }
 
     const renderBtn = (label, type = 'default', onPress, flexCount = 1, icon = null) => {
         let bgColor = COLORS.surface;
         let textColor = COLORS.text;
-        
+
         if (type === 'operator') {
             bgColor = COLORS.primary + '15';
             textColor = COLORS.primary;
@@ -107,15 +107,15 @@ const CalculatorSheet = ({ visible, onClose, onConfirm, initialValue = '0', curr
         }
 
         return (
-            <TouchableOpacity 
-                style={[styles.btn, { backgroundColor: bgColor, flex: flexCount }]} 
+            <TouchableOpacity
+                style={[styles.btn, { backgroundColor: bgColor, flex: flexCount }]}
                 onPress={onPress}
                 activeOpacity={0.7}
             >
                 {icon ? icon : (
                     <Text style={[
-                        styles.btnText, 
-                        { color: textColor }, 
+                        styles.btnText,
+                        { color: textColor },
                         type === 'operator' && { fontSize: 28, fontWeight: '500' },
                         type === 'done' && { fontSize: 18, fontWeight: '800', letterSpacing: 1 }
                     ]}>
@@ -132,7 +132,7 @@ const CalculatorSheet = ({ visible, onClose, onConfirm, initialValue = '0', curr
                 <Animated.View style={[styles.backdrop, { opacity: fadeAnim }]}>
                     <TouchableOpacity style={StyleSheet.absoluteFill} activeOpacity={1} onPress={onClose} />
                 </Animated.View>
-                
+
                 <Animated.View style={[styles.sheet, { backgroundColor: COLORS.background, borderColor: COLORS.border, transform: [{ translateY: slideAnim }] }]}>
                     {/* Handle */}
                     <View style={styles.handleContainer}>
@@ -142,7 +142,7 @@ const CalculatorSheet = ({ visible, onClose, onConfirm, initialValue = '0', curr
                     {/* Display Area */}
                     <View style={styles.displayContainer}>
                         <Text style={[styles.livePreview, { color: COLORS.textMuted }]}>
-                            {livePreview ? `${currencySymbol}${Number(livePreview).toLocaleString('en-US', {minimumFractionDigits: 0, maximumFractionDigits: 2})}` : ' '}
+                            {livePreview ? `${currencySymbol}${Number(livePreview).toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 2 })}` : ' '}
                         </Text>
                         <Text style={[styles.expression, { color: COLORS.text }]} numberOfLines={1} adjustsFontSizeToFit>
                             {currencySymbol} {expression}

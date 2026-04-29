@@ -53,6 +53,8 @@ import DebtPlannerScreen from './src/screens/main/DebtPlannerScreen';
 import AnalyticsScreen from './src/screens/main/AnalyticsScreen';
 import NotificationsScreen from './src/screens/main/NotificationsScreen';
 import BillCalendarScreen from './src/screens/main/BillCalendarScreen';
+import DebtArchiveScreen from './src/screens/main/DebtArchiveScreen';
+import ExportScreen from './src/screens/main/ExportScreen';
 
 // Savings Screens
 import SavingsHomeScreen from './src/screens/savings/SavingsHomeScreen';
@@ -72,6 +74,7 @@ import ShoppingSessionScreen from './src/screens/shopping/ShoppingSessionScreen'
 import ShoppingCheckoutScreen from './src/screens/shopping/ShoppingCheckoutScreen';
 import ShoppingHistoryDetailScreen from './src/screens/shopping/ShoppingHistoryDetailScreen';
 import ShoppingTemplatesScreen from './src/screens/shopping/ShoppingTemplatesScreen';
+import ShoppingArchiveScreen from './src/screens/shopping/ShoppingArchiveScreen';
 import ManageCategoriesScreen from './src/screens/main/ManageCategoriesScreen';
 import FriendsScreen from './src/screens/friends/FriendsScreen';
 import ChatScreen from './src/screens/friends/ChatScreen';
@@ -277,6 +280,7 @@ const AppNavigator = () => {
                             <Stack.Screen name="ShoppingCheckout" component={ShoppingCheckoutScreen} />
                             <Stack.Screen name="ShoppingHistoryDetail" component={ShoppingHistoryDetailScreen} />
                             <Stack.Screen name="ShoppingTemplates" component={ShoppingTemplatesScreen} />
+                            <Stack.Screen name="ShoppingArchive" component={ShoppingArchiveScreen} />
                             <Stack.Screen name="Settings" component={SettingsScreen} />
                             <Stack.Screen name="ManageCategories" component={ManageCategoriesScreen} />
                             <Stack.Screen name="PinSetup" component={PinSetupScreen} />
@@ -284,6 +288,7 @@ const AppNavigator = () => {
                             <Stack.Screen name="CurrencyConverter" component={CurrencyConverterScreen} />
                             <Stack.Screen name="AllServices" component={AllServicesScreen} />
                             <Stack.Screen name="DebtPlanner" component={DebtPlannerScreen} />
+                            <Stack.Screen name="DebtArchive" component={DebtArchiveScreen} />
                             <Stack.Screen name="Analytics" component={AnalyticsScreen} />
                             <Stack.Screen name="Notifications" component={NotificationsScreen} />
                             <Stack.Screen name="FriendsScreen" component={FriendsScreen} />
@@ -295,6 +300,7 @@ const AppNavigator = () => {
                             <Stack.Screen name="GroupWalletScreen" component={GroupWalletScreen} />
                             <Stack.Screen name="CreateTripScreen" component={CreateTripScreen} />
                             <Stack.Screen name="GroupWalletDetailScreen" component={GroupWalletDetailScreen} />
+                            <Stack.Screen name="ExportData" component={ExportScreen} />
                         </Stack.Navigator>
                     )
                 ) : <AuthStack />}

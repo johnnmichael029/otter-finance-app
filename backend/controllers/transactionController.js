@@ -155,25 +155,32 @@ const getSummary = async (req, res) => {
 
         summary.balance = summary.totalIncome - summary.totalExpenses;
 
-        // Calculate Lifetime Net Balance of "HAND" money (transactions with no wallet)
-        const lifetimeAgg = await Transaction.aggregate([
-            { $match: { user: new mongoose.Types.ObjectId(req.userId), wallet: null, isArchived: { $ne: true } } },
-            { $group: { _id: '$type', total: { $sum: '$amount' } } }
-        ]);
-        let netBalance = 0;
-        lifetimeAgg.forEach(r => {
-            if (r._id === 'income') netBalance += r.total;
-            if (r._id === 'expense') netBalance -= r.total;
-        });
+        // Get persistent Hand balance (with one-time migration check)
+        const user = await User.findById(req.userId);
+        const forceSync = req.query.forceSync === 'true';
 
-        // Subtract money transferred from HAND to a physical wallet
-        const handDeductionsAgg = await Transaction.aggregate([
-            { $match: { user: new mongoose.Types.ObjectId(req.userId), paymentSource: 'HAND', wallet: { $ne: null }, isArchived: { $ne: true } } },
-            { $group: { _id: null, total: { $sum: '$amount' } } }
-        ]);
-        if (handDeductionsAgg.length > 0) {
-            netBalance -= handDeductionsAgg[0].total;
+        if (user.handBalance === 0 || forceSync) {
+            const hasTxs = await Transaction.exists({ user: req.userId, wallet: null });
+            if (hasTxs || forceSync) {
+                const syncAgg = await Transaction.aggregate([
+                    { $match: { user: new mongoose.Types.ObjectId(req.userId), wallet: null, isArchived: { $ne: true } } },
+                    { $group: { _id: '$type', total: { $sum: '$amount' } } }
+                ]);
+                let syncBalance = 0;
+                syncAgg.forEach(r => {
+                    if (r._id === 'income') syncBalance += r.total;
+                    if (r._id === 'expense') syncBalance -= r.total;
+                });
+                const deductAgg = await Transaction.aggregate([
+                    { $match: { user: new mongoose.Types.ObjectId(req.userId), paymentSource: 'HAND', wallet: { $ne: null }, isArchived: { $ne: true } } },
+                    { $group: { _id: null, total: { $sum: '$amount' } } }
+                ]);
+                if (deductAgg.length > 0) syncBalance -= deductAgg[0].total;
+                user.handBalance = syncBalance;
+                await user.save();
+            }
         }
+        let netBalance = user?.handBalance || 0;
 
         // Convert to Percentages for chart (relative to max in that range)
         const maxVal = Math.max(...incomeDist, ...expenseDist, 100); 
@@ -246,26 +253,8 @@ const createTransaction = async (req, res) => {
             return res.status(400).json({ error: 'type, amount, and category are required.' });
         }
 
-        // Calculate current total balance of "HAND" money (wallet: null)
-        const balanceAgg = await Transaction.aggregate([
-            { $match: { user: req.userId ? new mongoose.Types.ObjectId(req.userId) : null, wallet: null } },
-            { $group: { _id: '$type', total: { $sum: '$amount' } } },
-        ]);
-        let currentBalance = 0;
-        balanceAgg.forEach(r => {
-            const val = parseFloat(r.total) || 0;
-            if (r._id === 'income') currentBalance += val;
-            if (r._id === 'expense') currentBalance -= val;
-        });
-
-        // Subtract money transferred from HAND to a physical wallet
-        const handDeductionsAgg = await Transaction.aggregate([
-            { $match: { user: req.userId ? new mongoose.Types.ObjectId(req.userId) : null, paymentSource: 'HAND', wallet: { $ne: null }, isArchived: { $ne: true } } },
-            { $group: { _id: null, total: { $sum: '$amount' } } }
-        ]);
-        if (handDeductionsAgg.length > 0) {
-            currentBalance -= handDeductionsAgg[0].total;
-        }
+        const user = await User.findById(req.userId);
+        let currentBalance = user?.handBalance || 0;
 
         const safeAmount = parseFloat(amount) || 0;
         // Running balance only matters for HAND transactions if this is a HAND transaction
@@ -329,13 +318,21 @@ const createTransaction = async (req, res) => {
         }
 
         // ── Feature: HAND as Source — validate sufficient balance ─────────────
+        // ONLY deduct if it's an expense or transfer. Income FROM hand doesn't make sense unless it's a top-up, 
+        // but we handle the destination side below.
         if (sourceType === 'hand') {
-            if (currentBalance < safeAmount) {
-                return res.status(400).json({
-                    error: `Insufficient HAND balance. You have ₱${currentBalance.toFixed(2)} but tried to use ₱${safeAmount.toFixed(2)}.`
-                });
+            if (type === 'expense' || type === 'transfer') {
+                if (currentBalance < safeAmount) {
+                    return res.status(400).json({
+                        error: `Insufficient HAND balance. You have ₱${currentBalance.toFixed(2)} but tried to use ₱${safeAmount.toFixed(2)}.`
+                    });
+                }
+                user.handBalance -= safeAmount;
+                // Update currentBalance for the destination logic below
+                currentBalance = user.handBalance;
+                await user.save();
             }
-            // Hand balance is dynamically computed, we just emit the updated event at end of request
+            if (io) io.to(`user:${req.userId}`).emit('wallet_updated', { _id: 'main', balance: user.handBalance });
         }
 
         // ── Feature: SAVINGS BALANCE as Source ───────────────────────────────
@@ -377,27 +374,12 @@ const createTransaction = async (req, res) => {
 
         // ── Feature: Wallet Balance Sync (Destination) ──────────────────────────
         if (!walletId) {
-            // Update HAND balance (Dynamically computed)
-            const handAgg = await Transaction.aggregate([
-                { $match: { user: new mongoose.Types.ObjectId(req.userId), wallet: null } },
-                { $group: { _id: '$type', total: { $sum: '$amount' } } }
-            ]);
-            let handBalance = 0;
-            handAgg.forEach(r => {
-                if (r._id === 'income') handBalance += r.total;
-                if (r._id === 'expense') handBalance -= r.total;
-            });
-
-            // Subtract money transferred from HAND to a physical wallet
-            const handDeductionsAgg = await Transaction.aggregate([
-                { $match: { user: new mongoose.Types.ObjectId(req.userId), paymentSource: 'HAND', wallet: { $ne: null } } },
-                { $group: { _id: null, total: { $sum: '$amount' } } }
-            ]);
-            if (handDeductionsAgg.length > 0) {
-                handBalance -= handDeductionsAgg[0].total;
-            }
-
-            if (io) io.to(`user:${req.userId}`).emit('wallet_updated', { _id: 'main', balance: handBalance });
+            // Destination is HAND
+            console.log(`[HAND_SYNC] Type: ${type}, Amount: ${safeAmount}, Prev: ${user.handBalance}`);
+            user.handBalance += (type === 'income' ? safeAmount : -safeAmount);
+            await user.save();
+            console.log(`[HAND_SYNC] New Balance: ${user.handBalance}`);
+            if (io) io.to(`user:${req.userId}`).emit('wallet_updated', { _id: 'main', balance: user.handBalance });
         } else {
             const wallet = await Wallet.findOne({ _id: walletId, userId: req.userId });
             if (wallet) {
@@ -521,6 +503,11 @@ const deleteTransaction = async (req, res) => {
         const transaction = await Transaction.findById(req.params.id);
         if (!transaction) return res.status(404).json({ error: 'Transaction not found.' });
 
+        // ── Block Non-Reversible Transaction Deletion ──
+        if (transaction.isNonReversible) {
+            return res.status(400).json({ error: 'This transaction is part of a finalized group settlement or official record and cannot be reversed to maintain financial integrity.' });
+        }
+
         // ── Block Debt Transaction Deletion ──
         if (transaction.relatedType === 'Debt') {
             return res.status(400).json({ error: 'Debt-related transactions cannot be deleted. They must remain in history to maintain accurate debt balances.' });
@@ -552,8 +539,11 @@ const deleteTransaction = async (req, res) => {
         if (!isAuthorized) return res.status(403).json({ error: 'Access denied.' });
 
         const io = req.app.get('io');
+        const isArchived = transaction.isArchived === true;
 
-        // ── Feature: Debt Payment Reversal Sync ──
+        // ── ONLY REVERT BALANCES IF NOT ARCHIVED ──────────────────────────────
+        if (!isArchived) {
+            // ── Feature: Debt Payment Reversal Sync ──
         if (transaction.relatedType === 'Debt' && transaction.relatedId) {
             const debt = await Debt.findById(transaction.relatedId);
             if (debt) {
@@ -620,17 +610,17 @@ const deleteTransaction = async (req, res) => {
             }
         }
 
-        // 2. Revert Source Wallet (for Transfers)
+        // 2. Revert Source Wallet (for Transfers / Sourced Income)
         if (transaction.sourceWallet) {
             const sWallet = await Wallet.findOne({ _id: transaction.sourceWallet, userId: transaction.user });
             if (sWallet) {
                 const srcRevAmount = transaction.sourceWalletAmount != null ? transaction.sourceWalletAmount : transaction.amount;
                 if (sWallet.type === 'Credit') {
-                    if (transaction.type === 'expense') sWallet.balance -= srcRevAmount;
-                    else sWallet.balance += srcRevAmount;
+                    // Credit card debt was increased when sourced, so we decrease it now
+                    sWallet.balance -= srcRevAmount;
                 } else {
-                    if (transaction.type === 'expense') sWallet.balance += srcRevAmount;
-                    else sWallet.balance -= srcRevAmount;
+                    // Normal wallet was deducted when sourced, so we add it back now
+                    sWallet.balance += srcRevAmount;
                 }
                 if (sWallet.type !== 'Credit' && sWallet.balance < 0) sWallet.balance = 0;
                 await sWallet.save();
@@ -642,17 +632,22 @@ const deleteTransaction = async (req, res) => {
         if (transaction.relatedType === 'SavingsGoal' && transaction.relatedId) {
             const goal = goalObj || await SavingsGoal.findById(transaction.relatedId);
             if (goal) {
-                if (transaction.type === 'expense' || transaction.type === 'transfer') {
-                    goal.currentAmount = Math.max(0, goal.currentAmount - transaction.amount);
-                } else {
-                    goal.currentAmount += transaction.amount;
+                if (!isArchived) {
+                    if (transaction.type === 'expense' || transaction.type === 'transfer') {
+                        goal.currentAmount = Math.max(0, goal.currentAmount - transaction.amount);
+                    } else {
+                        goal.currentAmount += transaction.amount;
+                    }
+                    await goal.save();
+                    if (io) {
+                        io.to(`user:${goal.user}`).emit('update_savings_goal', goal);
+                        goal.participants.forEach(p => io.to(`user:${p.user}`).emit('update_savings_goal', goal));
+                    }
                 }
-                await goal.save();
+                
+                // ALWAYS delete the transfer log regardless of archive status
                 await SavingsTransfer.deleteOne({ relatedTransaction: transaction._id });
-
                 if (io) {
-                    io.to(`user:${goal.user}`).emit('update_savings_goal', goal);
-                    goal.participants.forEach(p => io.to(`user:${p.user}`).emit('update_savings_goal', goal));
                     io.to(`user:${transaction.user}`).emit('delete_savings_transfer', { goalId: goal._id, amount: transaction.amount });
                 }
             }
@@ -662,39 +657,44 @@ const deleteTransaction = async (req, res) => {
         if (transaction.sourceRelatedType === 'SavingsGoal' && transaction.sourceRelatedId) {
             const sGoal = await SavingsGoal.findById(transaction.sourceRelatedId);
             if (sGoal) {
-                sGoal.currentAmount += transaction.amount;
-                await sGoal.save();
+                if (!isArchived) {
+                    sGoal.currentAmount += transaction.amount;
+                    await sGoal.save();
+                    if (io) {
+                        io.to(`user:${sGoal.user}`).emit('update_savings_goal', sGoal);
+                        sGoal.participants.forEach(p => io.to(`user:${p.user}`).emit('update_savings_goal', sGoal));
+                    }
+                }
+                
+                // ALWAYS delete the transfer log regardless of archive status
                 await SavingsTransfer.deleteOne({ relatedTransaction: transaction._id });
-
                 if (io) {
-                    io.to(`user:${sGoal.user}`).emit('update_savings_goal', sGoal);
-                    sGoal.participants.forEach(p => io.to(`user:${p.user}`).emit('update_savings_goal', sGoal));
                     io.to(`user:${transaction.user}`).emit('delete_savings_transfer', { goalId: sGoal._id, amount: transaction.amount });
                 }
             }
         }
 
+        } // ── End of Non-Archived Reversal Logic ──
+        
         // Delete the transaction record
         await transaction.deleteOne();
 
-        // Re-calculate and emit dynamic HAND balance for the transaction owner
         const emitHandBalance = async (userId) => {
-            const handAgg = await Transaction.aggregate([
-                { $match: { user: new mongoose.Types.ObjectId(userId), wallet: null } },
-                { $group: { _id: '$type', total: { $sum: '$amount' } } }
-            ]);
-            let handBalance = 0;
-            handAgg.forEach(r => {
-                if (r._id === 'income') handBalance += r.total;
-                if (r._id === 'expense') handBalance -= r.total;
-            });
-            const handDeductionsAgg = await Transaction.aggregate([
-                { $match: { user: new mongoose.Types.ObjectId(userId), paymentSource: 'HAND', wallet: { $ne: null } } },
-                { $group: { _id: null, total: { $sum: '$amount' } } }
-            ]);
-            if (handDeductionsAgg.length > 0) handBalance -= handDeductionsAgg[0].total;
-            if (io) io.to(`user:${userId}`).emit('wallet_updated', { _id: 'main', balance: handBalance });
+            const userObj = await User.findById(userId);
+            if (userObj && io) {
+                io.to(`user:${userId}`).emit('wallet_updated', { _id: 'main', balance: userObj.handBalance });
+            }
         };
+
+        // Revert persistent HAND balance if not archived
+        if (!isArchived && !transaction.wallet) {
+            const userObj = await User.findById(transaction.user);
+            if (userObj) {
+                const revertAmt = transaction.amount;
+                userObj.handBalance += (transaction.type === 'income' ? -revertAmt : revertAmt);
+                await userObj.save();
+            }
+        }
 
         await emitHandBalance(transaction.user);
         if (req.userId !== transaction.user.toString()) {
@@ -1187,12 +1187,23 @@ const archiveTransaction = async (req, res) => {
 // ─────────────────────────────────────────────────────────────────────────────
 const emptyArchives = async (req, res) => {
     try {
-        // Delete only non-debt transactions from the archive
-        await Transaction.deleteMany({ 
+        // Find all archived transactions to be deleted
+        const archivedTxs = await Transaction.find({ 
             user: req.userId, 
             isArchived: true,
             relatedType: { $ne: 'Debt' } 
         });
+
+        const txIds = archivedTxs.map(t => t._id);
+
+        // Delete related logs first
+        await Promise.all([
+            SavingsTransfer.deleteMany({ relatedTransaction: { $in: txIds } }),
+            DebtPayment.deleteMany({ transactionId: { $in: txIds } })
+        ]);
+
+        // Delete the transactions
+        await Transaction.deleteMany({ _id: { $in: txIds } });
 
         invalidatePrefixes('transaction');
         invalidatePrefixes('savings');

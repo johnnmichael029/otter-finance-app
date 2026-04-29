@@ -1,11 +1,9 @@
 import React, { useState, useCallback, useEffect } from 'react';
 import {
     View, Text, StyleSheet, TouchableOpacity, ScrollView, ActivityIndicator,
-    TextInput, Alert, Platform, Animated as RNAnimated, RefreshControl
+    TextInput, Alert, Platform, RefreshControl
 } from 'react-native';
 import { FlashList } from '@shopify/flash-list';
-import Animated, { ZoomIn, FadeOut, ZoomOut } from 'react-native-reanimated';
-import { Swipeable } from 'react-native-gesture-handler';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Feather } from '@expo/vector-icons';
 import Constants from 'expo-constants';
@@ -13,12 +11,13 @@ import * as Notifications from 'expo-notifications';
 import BottomSheetModal from '../../components/BottomSheetModal';
 import { useTheme } from '../../context/ThemeContext';
 import { useFinanceStore } from '../../store/financeStore';
-import { getRecurringBills, createRecurringBill, deleteRecurringBill, markBillPaid } from '../../api/api';
+import { getRecurringBills, createRecurringBill, updateRecurringBill, deleteRecurringBill, markBillPaid } from '../../api/api';
 import { spacing, radius } from '../../theme/colors';
 import Skeleton from '../../components/Skeleton';
 import CustomAlertModal from '../../components/CustomAlertModal';
+import SwipeableRow from '../../components/SwipeableRow';
 import { useAuth } from '../../context/AuthContext';
-import { getSocket, connectSocket } from '../../utils/socket';
+import { getSocket } from '../../utils/socket';
 import { formatCurrency } from '../../utils/formatters';
 
 // ── Notification setup ────────────────────────────────────────────────────────
@@ -146,6 +145,10 @@ export default function RecurringBillsScreen({ navigation, route }) {
     });
     const [saving, setSaving] = useState(false);
     const [alertConfig, setAlertConfig] = useState({ visible: false, title: '', message: '', type: 'info', onConfirm: null });
+    const [editModalVisible, setEditModalVisible] = useState(false);
+    const [editingBill, setEditingBill] = useState(null);
+    const [editForm, setEditForm] = useState({ name: '', amount: '', category: 'Bills', categoryIcon: 'file-text', categoryColor: '#6b7280', frequency: 'monthly' });
+    const [editSaving, setEditSaving] = useState(false);
 
     const load = useCallback(async (force = false) => {
         try {
@@ -165,7 +168,6 @@ export default function RecurringBillsScreen({ navigation, route }) {
 
     useEffect(() => {
         if (!userInfo?._id) return;
-        connectSocket(userInfo._id);
         const socket = getSocket();
 
         const handleNew = (bill) => {
@@ -235,7 +237,7 @@ export default function RecurringBillsScreen({ navigation, route }) {
                 setAlertConfig(p => ({ ...p, visible: false }));
                 await deleteRecurringBill(id);
                 Notifications.cancelScheduledNotificationAsync(id).catch(() => { });
-                setBills(prev => prev.filter(b => b._id !== id));
+                load(true);
             }
         });
     };
@@ -243,8 +245,8 @@ export default function RecurringBillsScreen({ navigation, route }) {
     const handleMarkPaid = async (id) => {
         try {
             const updated = await markBillPaid(id);
-            setBills(prev => prev.map(b => b._id === id ? updated : b));
             await scheduleNotification(updated);
+            load(true);
             setAlertConfig({
                 visible: true,
                 title: '✅ Bill Marked Paid',
@@ -265,6 +267,40 @@ export default function RecurringBillsScreen({ navigation, route }) {
         setForm(f => ({ ...f, category: cat.label, categoryIcon: cat.icon, categoryColor: cat.color }));
     };
 
+    const openEdit = (bill) => {
+        setEditingBill(bill);
+        setEditForm({
+            name: bill.name || '',
+            amount: String(bill.amount || ''),
+            category: bill.category || 'Bills',
+            categoryIcon: bill.categoryIcon || 'file-text',
+            categoryColor: bill.categoryColor || '#6b7280',
+            frequency: bill.frequency || 'monthly',
+        });
+        setEditModalVisible(true);
+    };
+
+    const handleEditSave = async () => {
+        if (!editForm.name.trim() || !editForm.amount) {
+            return setAlertConfig({ visible: true, title: 'Missing Fields', message: 'Please fill in the name and amount.', type: 'info' });
+        }
+        setEditSaving(true);
+        try {
+            const updated = await updateRecurringBill(editingBill._id, {
+                ...editForm,
+                amount: parseFloat(editForm.amount),
+            });
+            await scheduleNotification(updated);
+            setEditModalVisible(false);
+            setEditingBill(null);
+            load(true);
+        } catch (e) {
+            setAlertConfig({ visible: true, title: 'Error', message: 'Could not update bill.', type: 'error' });
+        } finally {
+            setEditSaving(false);
+        }
+    };
+
     const overdue = bills.filter(b => getDaysUntilDue(b.nextDueDate) <= 0);
     const upcoming = bills.filter(b => getDaysUntilDue(b.nextDueDate) > 0 && getDaysUntilDue(b.nextDueDate) <= 7);
     const rest = bills.filter(b => getDaysUntilDue(b.nextDueDate) > 7);
@@ -283,26 +319,7 @@ export default function RecurringBillsScreen({ navigation, route }) {
         flatData.push(...rest.map(b => ({ type: 'bill', item: b, id: b._id })));
     }
 
-    const renderRightActions = (progress, dragX, bill) => {
-        const scale = dragX.interpolate({
-            inputRange: [-80, 0],
-            outputRange: [1, 0],
-            extrapolate: 'clamp',
-        });
 
-        return (
-            <TouchableOpacity
-                onPress={() => handleDelete(bill._id)}
-                style={[styles.hiddenDeleteBtn, { backgroundColor: '#ef4444' }]}
-                activeOpacity={0.8}
-            >
-                <RNAnimated.View style={{ transform: [{ scale }] }}>
-                    <Feather name="trash-2" size={24} color="#fff" />
-                    <Text style={{ color: '#fff', fontSize: 10, fontWeight: '800', marginTop: 4 }}>Delete</Text>
-                </RNAnimated.View>
-            </TouchableOpacity>
-        );
-    };
 
     const renderBill = (bill) => {
         const days = getDaysUntilDue(bill.nextDueDate);
@@ -312,33 +329,38 @@ export default function RecurringBillsScreen({ navigation, route }) {
         const statusLabel = isOverdue ? `${Math.abs(days)}d overdue` : days === 0 ? 'Due today' : `Due in ${days}d`;
 
         return (
-            <Animated.View key={bill._id} entering={ZoomIn.springify().damping(50).mass(0.9)} exiting={ZoomOut.duration(100)}>
-                <Swipeable
-                    renderRightActions={(prog, drag) => renderRightActions(prog, drag, bill)}
-                    friction={1}
-                    overshootRight={false}
-                    containerStyle={{ marginBottom: spacing.xs }}
-                >
-                    <View style={[styles.billCard, { backgroundColor: COLORS.surface, borderLeftColor: statusColor, borderLeftWidth: 3, marginBottom: 0 }]}>
-                        <View style={[styles.billIcon, { backgroundColor: (bill.categoryColor || '#6b7280') + '20' }]}>
-                            <Feather name={bill.categoryIcon || 'file-text'} size={18} color={bill.categoryColor || '#6b7280'} />
-                        </View>
-                        <View style={{ flex: 1 }}>
-                            <Text style={[styles.billName, { color: COLORS.text }]}>{bill.name}</Text>
-                            <Text style={[styles.billMeta, { color: COLORS.textMuted }]}>{FREQ_LABELS[bill.frequency]} · {bill.category}</Text>
-                        </View>
-                        <View style={styles.billRight}>
-                            <Text style={[styles.billAmount, { color: COLORS.expense }]}>-{formatCurrency(bill.amount)}</Text>
-                            <Text style={[styles.billDue, { color: statusColor }]}>{statusLabel}</Text>
-                        </View>
-                        <View style={styles.billActions}>
-                            <TouchableOpacity onPress={() => handleMarkPaid(bill._id)} style={[styles.actionBtn, { backgroundColor: COLORS.income + '20' }]}>
-                                <Feather name="check" size={16} color={COLORS.income} />
-                            </TouchableOpacity>
-                        </View>
+            <SwipeableRow
+                key={bill._id}
+                rightAction={{
+                    color: '#ef4444',
+                    icon: 'trash-2',
+                    label: 'Delete',
+                    onPress: () => handleDelete(bill._id),
+                }}
+                containerStyle={{ marginBottom: spacing.xs }}
+            >
+                <View style={[styles.billCard, { backgroundColor: COLORS.surface, borderLeftColor: statusColor, borderLeftWidth: 3, marginBottom: 0 }]}>
+                    <View style={[styles.billIcon, { backgroundColor: (bill.categoryColor || '#6b7280') + '20' }]}>
+                        <Feather name={bill.categoryIcon || 'file-text'} size={18} color={bill.categoryColor || '#6b7280'} />
                     </View>
-                </Swipeable>
-            </Animated.View>
+                    <View style={{ flex: 1 }}>
+                        <Text style={[styles.billName, { color: COLORS.text }]}>{bill.name}</Text>
+                        <Text style={[styles.billMeta, { color: COLORS.textMuted }]}>{FREQ_LABELS[bill.frequency]} · {bill.category}</Text>
+                    </View>
+                    <View style={styles.billRight}>
+                        <Text style={[styles.billAmount, { color: COLORS.expense }]}>-{formatCurrency(bill.amount)}</Text>
+                        <Text style={[styles.billDue, { color: statusColor }]}>{statusLabel}</Text>
+                    </View>
+                    <View style={styles.billActions}>
+                        <TouchableOpacity onPress={() => openEdit(bill)} style={[styles.actionBtn, { backgroundColor: COLORS.primary + '20' }]}>
+                            <Feather name="edit-2" size={15} color={COLORS.primary} />
+                        </TouchableOpacity>
+                        <TouchableOpacity onPress={() => handleMarkPaid(bill._id)} style={[styles.actionBtn, { backgroundColor: COLORS.income + '20' }]}>
+                            <Feather name="check" size={16} color={COLORS.income} />
+                        </TouchableOpacity>
+                    </View>
+                </View>
+            </SwipeableRow>
         );
     };
 
@@ -448,6 +470,55 @@ export default function RecurringBillsScreen({ navigation, route }) {
                 </TouchableOpacity>
             </BottomSheetModal>
 
+            {/* Edit Bill Modal */}
+            <BottomSheetModal visible={editModalVisible} onClose={() => setEditModalVisible(false)}>
+                <Text style={[styles.sheetTitle, { color: COLORS.text }]}>Edit Recurring Bill</Text>
+
+                <Text style={[styles.label, { color: COLORS.textMuted }]}>BILL NAME</Text>
+                <TextInput style={[styles.input, { backgroundColor: COLORS.background, color: COLORS.text, borderColor: COLORS.border }]}
+                    placeholder="e.g. Meralco, Netflix" placeholderTextColor={COLORS.textMuted}
+                    value={editForm.name} onChangeText={v => setEditForm(f => ({ ...f, name: v }))} />
+
+                <Text style={[styles.label, { color: COLORS.textMuted }]}>AMOUNT (₱)</Text>
+                <TextInput style={[styles.input, { backgroundColor: COLORS.background, color: COLORS.text, borderColor: COLORS.border }]}
+                    placeholder="0.00" placeholderTextColor={COLORS.textMuted} keyboardType="decimal-pad"
+                    value={editForm.amount} onChangeText={v => setEditForm(f => ({ ...f, amount: v }))} />
+
+                <Text style={[styles.label, { color: COLORS.textMuted }]}>CATEGORY</Text>
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8, paddingBottom: spacing.sm }}>
+                    {CATEGORY_OPTIONS.map(cat => {
+                        const selected = editForm.category === cat.label;
+                        return (
+                            <TouchableOpacity key={cat.label}
+                                onPress={() => setEditForm(f => ({ ...f, category: cat.label, categoryIcon: cat.icon, categoryColor: cat.color }))}
+                                style={[styles.catChip, { backgroundColor: selected ? cat.color : COLORS.background, borderColor: selected ? cat.color : COLORS.border }]}>
+                                <Feather name={cat.icon} size={14} color={selected ? '#fff' : cat.color} />
+                                <Text style={{ color: selected ? '#fff' : COLORS.text, fontSize: 12, fontWeight: '600' }}>{cat.label}</Text>
+                            </TouchableOpacity>
+                        );
+                    })}
+                </ScrollView>
+
+                <Text style={[styles.label, { color: COLORS.textMuted }]}>FREQUENCY</Text>
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8, paddingBottom: spacing.sm }}>
+                    {FREQUENCIES.map(freq => {
+                        const selected = editForm.frequency === freq;
+                        return (
+                            <TouchableOpacity key={freq}
+                                onPress={() => setEditForm(f => ({ ...f, frequency: freq }))}
+                                style={[styles.catChip, { backgroundColor: selected ? COLORS.primary : COLORS.background, borderColor: selected ? COLORS.primary : COLORS.border }]}>
+                                <Text style={{ color: selected ? '#fff' : COLORS.text, fontSize: 12, fontWeight: '600' }}>{FREQ_LABELS[freq]}</Text>
+                            </TouchableOpacity>
+                        );
+                    })}
+                </ScrollView>
+
+                <TouchableOpacity onPress={handleEditSave} disabled={editSaving}
+                    style={[styles.saveBtn, { backgroundColor: COLORS.primary }]}>
+                    {editSaving ? <ActivityIndicator color="#fff" /> : <Text style={styles.saveBtnText}>Save Changes</Text>}
+                </TouchableOpacity>
+            </BottomSheetModal>
+
             <CustomAlertModal
                 visible={alertConfig.visible}
                 title={alertConfig.title}
@@ -483,7 +554,7 @@ const getStyles = (COLORS) => StyleSheet.create({
     billDue: { fontSize: 11, fontWeight: '600', marginTop: 2 },
     billActions: { flexDirection: 'row', gap: 6 },
     actionBtn: { width: 32, height: 32, borderRadius: 16, justifyContent: 'center', alignItems: 'center' },
-    hiddenDeleteBtn: { width: 80, height: '100%', borderRadius: radius.xl, justifyContent: 'center', alignItems: 'center', marginLeft: 12, elevation: 1 },
+
     // Modal
     overlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
     sheet: { borderTopLeftRadius: radius.xl, borderTopRightRadius: radius.xl, padding: spacing.lg, paddingBottom: 48 },

@@ -8,6 +8,7 @@
  */
 
 const axios = require('axios');
+const { getCryptoPrices } = require('../services/cryptoService');
 
 const CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour
 
@@ -25,6 +26,7 @@ const getRates = async (base = 'USD') => {
     }
 
     try {
+        // 1. Fetch Fiat Rates
         const url = `https://open.er-api.com/v6/latest/${base}`;
         const res = await axios.get(url);
         const data = res.data;
@@ -33,9 +35,44 @@ const getRates = async (base = 'USD') => {
             throw new Error(`Exchange API error: ${data['error-type'] || 'unknown'}`);
         }
 
-        rateCache[base] = { rates: data.rates, fetchedAt: now, updatedAt: data.time_last_update_utc || null };
-        console.log(`[Currency] ✅ Fetched fresh rates for ${base} (${Object.keys(data.rates).length} currencies)`);
-        return { rates: data.rates, updatedAt: data.time_last_update_utc || null };
+        const rates = { ...data.rates };
+
+        // 2. Fetch Crypto Prices (using our internal cryptoService/CoinGecko)
+        try {
+            // Mapping common symbols to Coingecko IDs
+            const cryptoMap = {
+                'BTC': 'bitcoin',
+                'ETH': 'ethereum',
+                'USDT': 'tether',
+                'BNB': 'binancecoin',
+                'SOL': 'solana'
+            };
+            
+            const cryptoIds = Object.values(cryptoMap);
+            const phpPrices = await getCryptoPrices(cryptoIds);
+            
+            if (Object.keys(phpPrices).length > 0) {
+                const baseCurrency = base.toUpperCase();
+                const phpPerBase = rates['PHP'] || 1; // e.g., 56 PHP per 1 USD
+                
+                // Convert PHP prices from CoinGecko to our target base currency
+                // If base is PHP: rate = 1 / php_price
+                // If base is USD: rate = (1 / php_price) * phpPerBase
+                for (const [symbol, cgId] of Object.entries(cryptoMap)) {
+                    const phpPrice = phpPrices[cgId];
+                    if (phpPrice) {
+                        rates[symbol] = (1 / phpPrice) * phpPerBase;
+                    }
+                }
+                console.log(`[Currency] ₿ Added ${Object.keys(phpPrices).length} crypto rates to ${baseCurrency}`);
+            }
+        } catch (btcErr) {
+            console.warn('[Currency] ⚠️ Could not fetch crypto prices, skipping.');
+        }
+
+        rateCache[base] = { rates, fetchedAt: now, updatedAt: data.time_last_update_utc || null };
+        console.log(`[Currency] ✅ Fetched fresh rates for ${base} (${Object.keys(rates).length} currencies)`);
+        return { rates, updatedAt: data.time_last_update_utc || null };
     } catch (err) {
         console.error('[Currency] ❌ Failed to fetch rates:', err.message);
         // Return stale cache if available rather than crashing

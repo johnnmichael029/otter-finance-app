@@ -50,6 +50,7 @@ const walletRoutes = require('./routes/walletRoutes');
 const friendRoutes = require('./routes/friendRoutes');
 const netWorthRoutes = require('./routes/netWorthRoutes');
 const groupWalletRoutes = require('./routes/groupWalletRoutes');
+const ocrRoutes = require('./routes/ocrRoutes');
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  HELMET — Secure HTTP headers
@@ -357,6 +358,7 @@ app.use('/api/challenges', challengeRoutes);
 
 // Group Trip Wallets
 app.use('/api/group-wallets', groupWalletRoutes);
+app.use('/api/ocr', ocrRoutes);
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  GLOBAL ERROR HANDLER

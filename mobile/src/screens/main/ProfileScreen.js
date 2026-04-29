@@ -412,6 +412,36 @@ export default function ProfileScreen({ navigation }) {
                     </Text>
 
                     <ReadOnlyRow label="Email" value={userInfo?.email || '—'} icon="email-outline" COLORS={COLORS} />
+                    
+                    {/* Sync Hand Balance Feature */}
+                    <TouchableOpacity 
+                        style={[styles.fieldRow, { borderBottomColor: COLORS.border }]}
+                        onPress={async () => {
+                            setSaving(true);
+                            try {
+                                const { getTransactionSummary } = require('../../api/api');
+                                await getTransactionSummary({ forceSync: 'true' });
+                                const profile = await apiGetProfile();
+                                await updateLocalUser(profile);
+                                useFinanceStore.getState().refreshAll(true);
+                                showAlert('success', 'Balance Synced! 🦦', 'Your Hand balance has been recalculated from your transaction history.');
+                            } catch (err) {
+                                showAlert('error', 'Sync Failed', 'Failed to synchronize balance.');
+                            } finally {
+                                setSaving(false);
+                            }
+                        }}
+                    >
+                        <View style={[styles.fieldIconWrap, { backgroundColor: COLORS.primary + '15' }]}>
+                            <MaterialCommunityIcons name="sync" size={18} color={COLORS.primary} />
+                        </View>
+                        <View style={{ flex: 1 }}>
+                            <Text style={[styles.fieldLabel, { color: COLORS.textMuted }]}>Balance Integrity</Text>
+                            <Text style={[styles.fieldValue, { color: COLORS.text }]}>Sync Hand Balance</Text>
+                        </View>
+                        <Feather name="chevron-right" size={16} color={COLORS.textMuted} />
+                    </TouchableOpacity>
+
                     <ReadOnlyRow label="Account ID" value={userInfo?._id ? `…${userInfo._id.slice(-8)}` : '—'} icon="identifier" COLORS={COLORS} noBorder />
                 </View>
 

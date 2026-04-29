@@ -92,14 +92,19 @@ const getBudgets = async (req, res) => {
 
                 if (b.category === 'Overall') {
                     belongsToBudget = true;
-                } else if (txCat === b.category.toLowerCase()) {
+                } else if (txCat === b.category.toLowerCase() || (b.categoryIcon && tx.categoryIcon === b.categoryIcon)) {
                     belongsToBudget = true;
                 }
 
                 if (bObj.subBudgets) {
                     for (const sub of bObj.subBudgets) {
                         const subTagLower = sub.tag.toLowerCase();
-                        if (txCat === subTagLower || txTags.includes(subTagLower) || txNote === subTagLower || txNote.includes(subTagLower)) {
+                        const subIcon = sub.icon;
+                        
+                        const nameMatch = txCat === subTagLower || txTags.includes(subTagLower) || txNote === subTagLower || txNote.includes(subTagLower);
+                        const iconMatch = subIcon && tx.categoryIcon === subIcon;
+
+                        if (nameMatch || iconMatch) {
                             matchedSubTags.push(subTagLower);
                             belongsToBudget = true;
                         }
@@ -370,4 +375,39 @@ const respondToBudgetInvite = async (req, res) => {
     }
 };
 
-module.exports = { getBudgets, upsertBudget, deleteBudget, respondToBudgetInvite };
+// PATCH /api/budgets/:id — direct update by _id (used for editing existing budgets)
+const updateBudgetById = async (req, res) => {
+    try {
+        const { categoryIcon, categoryColor, allocatedAmount, reminderAmount, subBudgets, isShared, participantIds } = req.body;
+
+        const budget = await Budget.findOne({ _id: req.params.id, user: req.userId });
+        if (!budget) return res.status(404).json({ error: 'Budget not found.' });
+
+        if (categoryIcon !== undefined) budget.categoryIcon = categoryIcon;
+        if (categoryColor !== undefined) budget.categoryColor = categoryColor;
+        if (allocatedAmount !== undefined) budget.allocatedAmount = allocatedAmount;
+        if (reminderAmount !== undefined) budget.reminderAmount = reminderAmount;
+        if (subBudgets !== undefined) budget.subBudgets = subBudgets;
+        if (isShared !== undefined) budget.isShared = isShared;
+
+        if (participantIds && Array.isArray(participantIds)) {
+            const oldParticipants = budget.participants || [];
+            budget.participants = participantIds.map(id => {
+                const existing = oldParticipants.find(p => p.user.toString() === id.toString());
+                return existing || { user: id, status: 'pending' };
+            });
+        }
+
+        await budget.save();
+
+        const io = req.app.get('io');
+        if (io) io.to(`user:${req.userId}`).emit('update_budget', budget);
+
+        res.json(budget);
+    } catch (err) {
+        console.error('[BUDGET] updateBudgetById error:', err.message);
+        res.status(500).json({ error: 'Failed to update budget.' });
+    }
+};
+
+module.exports = { getBudgets, upsertBudget, updateBudgetById, deleteBudget, respondToBudgetInvite };

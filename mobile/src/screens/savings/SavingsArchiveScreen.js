@@ -1,9 +1,10 @@
 import React, { useState, useCallback, useEffect } from 'react';
 import {
-    View, Text, StyleSheet, TouchableOpacity, FlatList, RefreshControl, ActivityIndicator
+    View, Text, StyleSheet, TouchableOpacity, RefreshControl, ActivityIndicator
 } from 'react-native';
+import { FlashList } from '@shopify/flash-list';
 import Reanimated, { ZoomIn, ZoomOut, LinearTransition } from 'react-native-reanimated';
-import { Swipeable } from 'react-native-gesture-handler';
+import SwipeableRow from '../../components/SwipeableRow';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Feather, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useTheme } from '../../context/ThemeContext';
@@ -106,56 +107,31 @@ export default function SavingsArchiveScreen({ navigation }) {
         });
     };
 
-    const renderLeftActions = (goalId) => (
-        <View style={styles.swipeActions}>
-            <TouchableOpacity
-                onPress={() => handleDeleteGoal(goalId, true)}
-                style={[styles.swipeAction, { backgroundColor: '#ef4444' }]}
-                activeOpacity={0.8}
-            >
-                <Feather name="trash-2" size={22} color="#fff" />
-                <Text style={styles.swipeActionText}>Delete</Text>
-            </TouchableOpacity>
-        </View>
-    );
-
-    const renderRightActions = (goalId) => (
-        <View style={styles.swipeActions}>
-            <TouchableOpacity
-                onPress={() => handleRestoreGoal(goalId)}
-                style={[styles.swipeAction, { backgroundColor: COLORS.primary, marginLeft: 0 }]}
-                activeOpacity={0.8}
-            >
-                <MaterialCommunityIcons name="archive-arrow-up-outline" size={24} color="#fff" />
-                <Text style={styles.swipeActionText}>Restore</Text>
-            </TouchableOpacity>
-        </View>
-    );
-
     const renderGoalCard = ({ item }) => {
         const pct = item.targetAmount > 0 ? Math.min((item.currentAmount / item.targetAmount) * 100, 100) : 0;
 
         return (
-            <Reanimated.View entering={ZoomIn} exiting={ZoomOut} layout={LinearTransition}>
-                <Swipeable
-                    renderLeftActions={() => renderLeftActions(item._id)}
-                    renderRightActions={() => renderRightActions(item._id)}
-                    overshootLeft={false}
-                    overshootRight={false}
-                    onSwipeableOpen={(direction) => {
-                        if (direction === 'left') {
-                            handleDeleteGoal(item._id, true);
-                        } else if (direction === 'right') {
-                            handleRestoreGoal(item._id);
-                        }
+            <Reanimated.View entering={ZoomIn} exiting={ZoomOut} layout={LinearTransition} style={{ marginBottom: spacing.md }}>
+                <SwipeableRow
+                    leftAction={{
+                        color: '#ef4444',
+                        icon: 'trash-2',
+                        label: 'Delete',
+                        onPress: () => handleDeleteGoal(item._id, true)
                     }}
-                    leftThreshold={40}
-                    rightThreshold={40}
+                    rightAction={{
+                        color: COLORS.primary,
+                        icon: 'archive-arrow-up-outline',
+                        iconFamily: 'MaterialCommunityIcons',
+                        label: 'Restore',
+                        onPress: () => handleRestoreGoal(item._id)
+                    }}
+                    containerStyle={{ marginBottom: 0 }}
                 >
                     <TouchableOpacity
                         activeOpacity={0.8}
                         onPress={() => navigation.navigate('SavingsGoalDetail', { goal: item })}
-                        style={[styles.goalCard, { backgroundColor: COLORS.surface }]}
+                        style={[styles.goalCard, { backgroundColor: COLORS.surface, marginBottom: 0 }]}
                     >
                         <View style={styles.goalHeader}>
                             <View style={[styles.goalIconBox, { backgroundColor: (item.color || COLORS.primary) + '15' }]}>
@@ -175,7 +151,7 @@ export default function SavingsArchiveScreen({ navigation }) {
                             <View style={[styles.barFill, { width: `${pct}%`, backgroundColor: item.color || COLORS.primary }]} />
                         </View>
                     </TouchableOpacity>
-                </Swipeable>
+                </SwipeableRow>
             </Reanimated.View>
         );
     };
@@ -195,22 +171,25 @@ export default function SavingsArchiveScreen({ navigation }) {
             {loading ? (
                 <View style={styles.centered}><ActivityIndicator color={COLORS.primary} /></View>
             ) : (
-                <FlatList
-                    data={archivedGoals}
-                    renderItem={renderGoalCard}
-                    keyExtractor={item => item._id}
-                    contentContainerStyle={styles.listContent}
-                    refreshControl={<RefreshControl refreshing={refreshing} onRefresh={loadData} tintColor={COLORS.primary} />}
-                    ListEmptyComponent={() => (
-                        <View style={styles.emptyContainer}>
-                            <View style={[styles.emptyIconBox, { backgroundColor: COLORS.surface }]}>
-                                <Feather name="archive" size={48} color={COLORS.textMuted} />
+                <View style={{ flex: 1 }}>
+                    <FlashList
+                        data={archivedGoals}
+                        renderItem={renderGoalCard}
+                        estimatedItemSize={100}
+                        keyExtractor={item => item._id}
+                        contentContainerStyle={styles.listContent}
+                        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={loadData} tintColor={COLORS.primary} />}
+                        ListEmptyComponent={() => (
+                            <View style={styles.emptyContainer}>
+                                <View style={[styles.emptyIconBox, { backgroundColor: COLORS.surface }]}>
+                                    <Feather name="archive" size={48} color={COLORS.textMuted} />
+                                </View>
+                                <Text style={[styles.emptyTitle, { color: COLORS.text }]}>No completed goals</Text>
+                                <Text style={[styles.emptySub, { color: COLORS.textMuted }]}>Goals you finish or archive will appear here.</Text>
                             </View>
-                            <Text style={[styles.emptyTitle, { color: COLORS.text }]}>No completed goals</Text>
-                            <Text style={[styles.emptySub, { color: COLORS.textMuted }]}>Goals you finish or archive will appear here.</Text>
-                        </View>
-                    )}
-                />
+                        )}
+                    />
+                </View>
             )}
 
             <CustomAlertModal

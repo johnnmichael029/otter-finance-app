@@ -271,16 +271,39 @@ export const useFinanceStore = create(
                 set((state) => ({ transactions: [tx, ...state.transactions] }));
             },
             addDebtSync: (debt) => {
-                set((state) => ({ debts: [...state.debts, debt] }));
+                set((state) => {
+                    const exists = state.debts.some(d => d._id === debt._id);
+                    if (exists) return { debts: state.debts.map(d => d._id === debt._id ? debt : d) };
+                    return { debts: [debt, ...state.debts] };
+                });
+            },
+            updateDebtSync: (updatedDebt) => {
+                set((state) => ({
+                    debts: state.debts.map(d => d._id === updatedDebt._id ? { ...d, ...updatedDebt } : d)
+                }));
+            },
+            deleteDebtSync: (debtId) => {
+                set((state) => ({
+                    debts: state.debts.filter(d => d._id !== debtId)
+                }));
             },
             addBillSync: (bill) => {
                 set((state) => ({ recurringBills: [...state.recurringBills, bill] }));
             },
             updateWalletSync: (updatedWallet) => {
                 if (updatedWallet._id === 'main') {
+                    // Update legacy summary balance
                     set(state => ({
                         transactionSummary: { ...state.transactionSummary, balance: updatedWallet.balance }
                     }));
+                    
+                    // NEW: Update persistent profile balance so all profile-bound UI refreshes
+                    try {
+                        const { useAuthStore } = require('./authStore');
+                        useAuthStore.getState().updateLocalUser({ handBalance: updatedWallet.balance });
+                    } catch (err) {
+                        console.warn('[FinanceStore] Failed to sync handBalance to authStore:', err.message);
+                    }
                     return;
                 }
                 set(state => ({

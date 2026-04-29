@@ -33,22 +33,27 @@ export default function SavingsTransferScreen({ route, navigation }) {
     const [savingsPot, setSavingsPot] = useState(null);
     const [amount, setAmount] = useState('');
     const [note, setNote] = useState('');
+    const [fee, setFee] = useState('');
+    const [feeType, setFeeType] = useState('fixed'); // 'fixed' | 'percent'
     const [saving, setSaving] = useState(false);
     const [selectorModalVisible, setSelectorModalVisible] = useState(false);
     const [selectorMode, setSelectorMode] = useState('source'); // 'source' or 'target'
     const [alert, setAlert] = useState({ visible: false, type: 'info', title: '', message: '' });
+    const [loadError, setLoadError] = useState(false);
 
     const cryptoPrices = useFinanceStore(state => state.cryptoPrices);
     const wallets = useFinanceStore(state => state.wallets);
     const storeGoals = useFinanceStore(state => state.savingsGoals);
     const storeMaster = useFinanceStore(state => state.savingsMasterPot);
-    const mainBalance = useFinanceStore(state => state.netBalance);
+    const mainBalance = (userInfo?.handBalance || 0);
 
     useEffect(() => {
         // Initialize based on route params and store data
         const master = storeMaster;
         if (master) {
+            setLoadError(false);
             setSavingsPot(master);
+            if (!goal) setGoal(initialGoal || master);
             
             // SMART DEFAULTS: 
             if (initialDirection === 'to_savings') {
@@ -92,6 +97,18 @@ export default function SavingsTransferScreen({ route, navigation }) {
         useFinanceStore.getState().fetchWallets(true);
     }, [initialDirection, initialSource, fromSavings, storeMaster]);
 
+    // Timeout guard: if storeMaster is still null after 6s, show error + retry
+    useEffect(() => {
+        if (storeMaster) return; // Already loaded, no timer needed
+        useFinanceStore.getState().fetchSavings(true); // Proactively fetch
+        const timer = setTimeout(() => {
+            if (!useFinanceStore.getState().savingsMasterPot) {
+                setLoadError(true);
+            }
+        }, 6000);
+        return () => clearTimeout(timer);
+    }, []);
+
     // SYNC LOCAL STATES WITH STORE UPDATES
     useEffect(() => {
         if (selectedWallet) {
@@ -130,9 +147,35 @@ export default function SavingsTransferScreen({ route, navigation }) {
 
 
     if ((isDirect || direction === 'income') && !goal) {
+        // Error state — store data never arrived
+        if (loadError) {
+            return (
+                <SafeAreaView style={{ flex: 1, backgroundColor: COLORS.background, justifyContent: 'center', alignItems: 'center', padding: 32 }}>
+                    <MaterialCommunityIcons name="wifi-off" size={52} color={COLORS.textMuted} style={{ marginBottom: 16 }} />
+                    <Text style={{ fontSize: 18, fontWeight: '800', color: COLORS.text, marginBottom: 8, textAlign: 'center' }}>Couldn't Load Savings</Text>
+                    <Text style={{ fontSize: 14, color: COLORS.textMuted, textAlign: 'center', lineHeight: 20, marginBottom: 24 }}>
+                        We couldn't connect to your savings data. Please check your connection and try again.
+                    </Text>
+                    <TouchableOpacity
+                        onPress={() => {
+                            setLoadError(false);
+                            useFinanceStore.getState().fetchSavings(true);
+                        }}
+                        style={{ backgroundColor: COLORS.primary, paddingHorizontal: 28, paddingVertical: 14, borderRadius: radius.xl }}
+                    >
+                        <Text style={{ color: '#fff', fontWeight: '800', fontSize: 15 }}>Retry</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity onPress={() => navigation.goBack()} style={{ marginTop: 16, padding: 8 }}>
+                        <Text style={{ color: COLORS.textMuted, fontSize: 13 }}>Go Back</Text>
+                    </TouchableOpacity>
+                </SafeAreaView>
+            );
+        }
+        // Still loading
         return (
             <View style={{ flex: 1, backgroundColor: COLORS.background, justifyContent: 'center', alignItems: 'center' }}>
                 <ActivityIndicator color={COLORS.primary} size="large" />
+                <Text style={{ color: COLORS.textMuted, marginTop: 12, fontSize: 13 }}>Loading your savings...</Text>
             </View>
         );
     }
@@ -142,16 +185,68 @@ export default function SavingsTransferScreen({ route, navigation }) {
     const isWithdrawal = direction === 'from_savings';
 
     // Labels logic
-    const fromLabel = direction === 'income' ? 'Savings Balance' : (isGoalTransfer ? (sourceGoal?.name || 'From Goal') : (direction === 'to_savings' ? (selectedWallet ? selectedWallet.name : 'Main Balance') : goal.name));
-    const toLabel = isGoalTransfer ? (targetGoal?.name || 'To Goal') : (isWithdrawal ? (selectedWallet ? selectedWallet.name : 'Main Balance') : goal.name);
+    const fromLabel = direction === 'income' ? 'Savings Balance' : (isGoalTransfer ? (sourceGoal?.name || 'From Goal') : (direction === 'to_savings' ? (selectedWallet ? selectedWallet.name : 'HAND') : goal.name));
+    const toLabel = isGoalTransfer ? (targetGoal?.name || 'To Goal') : (isWithdrawal ? (selectedWallet ? selectedWallet.name : 'HAND') : goal.name);
+
+    // Balance labels shown inside the direction card
+    const fromBalanceLabel = direction === 'income'
+        ? formatCurrency(storeMaster?.currentAmount || 0, userInfo?.currency)
+        : direction === 'to_savings'
+            ? (selectedWallet ? getBalanceLabel(selectedWallet) : formatCurrency(mainBalance, userInfo?.currency))
+            : isGoalTransfer
+                ? formatCurrency(sourceGoal?.currentAmount || 0, userInfo?.currency)
+                : formatCurrency(goal?.currentAmount || 0, userInfo?.currency);
+
+    const toBalanceLabel = isGoalTransfer
+        ? formatCurrency(targetGoal?.currentAmount || 0, userInfo?.currency)
+        : isWithdrawal
+            ? (selectedWallet ? getBalanceLabel(selectedWallet) : formatCurrency(mainBalance, userInfo?.currency))
+            : formatCurrency(goal?.currentAmount || 0, userInfo?.currency);
 
     const accentColor = isGoalTransfer ? '#3b82f6' : (direction === 'income' ? '#8b5cf6' : (direction === 'to_savings' ? '#22c55e' : '#f59e0b'));
+
+    const getCalculatedMax = () => {
+        let maxAmt = 0;
+        if (direction === 'to_savings') {
+            maxAmt = selectedWallet ? (selectedWallet.type === 'Crypto' ? (selectedWallet.balance * (cryptoPrices[selectedWallet.coinId] || 0)) : selectedWallet.balance) : mainBalance;
+        } else if (isGoalTransfer) {
+            maxAmt = sourceGoal?.currentAmount || 0;
+        } else if (isWithdrawal) {
+            maxAmt = goal.currentAmount;
+        }
+
+        let targetLimited = false;
+        let remaining = 0;
+
+        if (isToSavings && !isWithdrawal && direction !== 'income') {
+            const activeTargetGoal = isGoalTransfer ? targetGoal : goal;
+            if (activeTargetGoal?.targetAmount > 0) {
+                remaining = Math.max(0, activeTargetGoal.targetAmount - activeTargetGoal.currentAmount);
+                if (remaining < maxAmt) {
+                    maxAmt = remaining;
+                    targetLimited = true;
+                }
+            }
+        }
+        return { maxAmt, targetLimited, remaining };
+    };
+
+    const maxInfo = getCalculatedMax();
+
+    // Computed fee amount (flat or % of transfer)
+    const computedFeeAmt = (() => {
+        const raw = parseFloat(fee);
+        if (!fee || isNaN(raw) || raw <= 0) return 0;
+        const amt = parseFloat(amount) || 0;
+        return feeType === 'percent' ? (raw / 100) * amt : raw;
+    })();
 
     const showAlert = (type, title, message) => setAlert({ visible: true, type, title, message });
     const closeAlert = () => setAlert(a => ({ ...a, visible: false }));
 
     const handleTransfer = async () => {
         const amt = parseFloat(amount);
+        const feeAmt = computedFeeAmt;
         if (!amount || isNaN(amt) || amt <= 0) {
             return showAlert('warning', 'Invalid Amount', 'Please enter a valid amount greater than 0.');
         }
@@ -179,8 +274,11 @@ export default function SavingsTransferScreen({ route, navigation }) {
                 if (!hasEnoughBalance(selectedWallet, amt, cryptoPrices)) {
                     return showAlert('warning', 'Insufficient Balance', `Your ${selectedWallet.name} wallet doesn't have enough balance.`);
                 }
-            } else if (amt > mainBalance) {
-                return showAlert('warning', 'Insufficient Balance', `You only have ${formatCurrency(mainBalance, userInfo?.currency)} in your Wallet.`);
+            } else if (amt + feeAmt > mainBalance) {
+                return showAlert('warning', 'Insufficient Balance',
+                    `You only have ${formatCurrency(mainBalance, userInfo?.currency)} in your HAND.${
+                        feeAmt > 0 ? ` (₱${amt.toFixed(2)} transfer + ₱${feeAmt.toFixed(2)} fee)` : ''
+                    }`);
             }
         }
 
@@ -223,7 +321,10 @@ export default function SavingsTransferScreen({ route, navigation }) {
                 note: finalNote,
                 sourceGoalId: isGoalTransfer ? sourceGoal._id : (isWithdrawal ? goal._id : sourceGoal?._id),
                 sourceWalletId: selectedWallet?._id || null,
-                walletDeductAmount
+                walletDeductAmount,
+                fee: feeAmt > 0 ? feeAmt : undefined,
+                feeSourceWalletId: feeAmt > 0 ? (selectedWallet?._id || null) : undefined,
+                feeNote: feeAmt > 0 ? (feeType === 'percent' ? `Rate: ${fee}%` : `Fixed: ₱${parseFloat(fee).toFixed(2)}`) : undefined,
             });
 
             // No need to manually re-fetch balance, the global store will handle it via sockets
@@ -237,26 +338,8 @@ export default function SavingsTransferScreen({ route, navigation }) {
     };
 
     const handleMaxPress = () => {
-        let maxAmt = 0;
-        if (direction === 'to_savings') {
-            maxAmt = selectedWallet ? (selectedWallet.type === 'Crypto' ? (selectedWallet.balance * (cryptoPrices[selectedWallet.coinId] || 0)) : selectedWallet.balance) : mainBalance;
-        } else if (isGoalTransfer) {
-            maxAmt = sourceGoal?.currentAmount || 0;
-        } else if (isWithdrawal) {
-            maxAmt = goal.currentAmount;
-        }
-
-        // Smart Target Logic for deposits
-        if (isToSavings && !isWithdrawal && direction !== 'income') {
-            const activeTargetGoal = isGoalTransfer ? targetGoal : goal;
-            if (activeTargetGoal?.targetAmount > 0) {
-                const remaining = Math.max(0, activeTargetGoal.targetAmount - activeTargetGoal.currentAmount);
-                maxAmt = Math.min(maxAmt, remaining);
-            }
-        }
-
-        if (maxAmt > 0) {
-            setAmount(maxAmt.toFixed(2));
+        if (maxInfo.maxAmt > 0) {
+            setAmount(maxInfo.maxAmt.toFixed(2));
         }
     };
 
@@ -368,7 +451,10 @@ export default function SavingsTransferScreen({ route, navigation }) {
                                                 <IconRenderer name={isGoalTransfer ? sourceGoal?.icon : goal?.icon || 'target'} family={isGoalTransfer ? sourceGoal?.family : goal?.family} size={16} color={accentColor} />
                                             )}
                                         </View>
-                                        <Text style={[styles.dirWallet, { color: COLORS.text }]}>{fromLabel}</Text>
+                                        <View>
+                                            <Text style={[styles.dirWallet, { color: COLORS.text }]}>{fromLabel}</Text>
+                                            <Text style={{ fontSize: 11, color: COLORS.textMuted, marginTop: 2, fontWeight: '600' }}>{fromBalanceLabel}</Text>
+                                        </View>
                                     </View>
                                 </View>
                             </View>
@@ -412,7 +498,10 @@ export default function SavingsTransferScreen({ route, navigation }) {
                                         <IconRenderer name={isGoalTransfer ? targetGoal?.icon : goal?.icon || 'target'} family={isGoalTransfer ? targetGoal?.family : goal?.family} size={16} color={accentColor} />
                                     )}
                                 </View>
-                                <Text style={[styles.dirWallet, { color: COLORS.text }]}>{toLabel}</Text>
+                                <View>
+                                    <Text style={[styles.dirWallet, { color: COLORS.text }]}>{toLabel}</Text>
+                                    <Text style={{ fontSize: 11, color: COLORS.textMuted, marginTop: 2, fontWeight: '600' }}>{toBalanceLabel}</Text>
+                                </View>
                             </View>
                         </TouchableOpacity>
                     </View>
@@ -422,7 +511,7 @@ export default function SavingsTransferScreen({ route, navigation }) {
                         <Feather name="info" size={14} color={COLORS.textMuted} />
                         <Text style={[styles.balanceHintText, { color: COLORS.textMuted }]}>
                             {direction === 'to_savings'
-                                ? (selectedWallet ? `Available in ${selectedWallet.name}: ` : 'Available in Wallet: ')
+                                ? (selectedWallet ? `Available in ${selectedWallet.name}: ` : 'Available in HAND: ')
                                 : isGoalTransfer
                                     ? `Available in ${sourceGoal?.name || 'Goal'}: `
                                     : `Available in ${goal?.name || 'Goal'}: `}
@@ -438,7 +527,16 @@ export default function SavingsTransferScreen({ route, navigation }) {
 
                     <View style={styles.amountCard}>
                         <View style={styles.amountHeader}>
-                            <Text style={[styles.amountLabel, { color: COLORS.textMuted }]}>HOW MUCH?</Text>
+                            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                                <Text style={[styles.amountLabel, { color: COLORS.textMuted }]}>HOW MUCH?</Text>
+                                {maxInfo.targetLimited && (
+                                    <View style={{ backgroundColor: COLORS.primary + '15', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4 }}>
+                                        <Text style={{ fontSize: 10, color: COLORS.primary, fontWeight: '700' }}>
+                                            Only {formatCurrency(maxInfo.remaining, userInfo?.currency)} to hit target!
+                                        </Text>
+                                    </View>
+                                )}
+                            </View>
                             <TouchableOpacity
                                 style={[styles.maxBtn, { backgroundColor: accentColor + '15' }]}
                                 onPress={handleMaxPress}
@@ -491,6 +589,49 @@ export default function SavingsTransferScreen({ route, navigation }) {
                                 multiline
                             />
                         </View>
+
+                        <View style={[styles.feeRow, { backgroundColor: COLORS.background }]}>
+                            <Feather name="percent" size={14} color={COLORS.textMuted} style={{ marginTop: 14 }} />
+                            <View style={{ flex: 1 }}>
+                                <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+                                    <Text style={{ fontSize: 10, fontWeight: '800', color: COLORS.textMuted, letterSpacing: 0.5 }}>TRANSFER FEE (OPTIONAL)</Text>
+                                    {/* Fixed / % toggle */}
+                                    <View style={{ flexDirection: 'row', borderRadius: 8, overflow: 'hidden', borderWidth: 1, borderColor: COLORS.border }}>
+                                        <TouchableOpacity
+                                            onPress={() => setFeeType('fixed')}
+                                            style={{ paddingHorizontal: 10, paddingVertical: 4, backgroundColor: feeType === 'fixed' ? accentColor : 'transparent' }}
+                                        >
+                                            <Text style={{ fontSize: 11, fontWeight: '800', color: feeType === 'fixed' ? '#fff' : COLORS.textMuted }}>₱ Fixed</Text>
+                                        </TouchableOpacity>
+                                        <TouchableOpacity
+                                            onPress={() => setFeeType('percent')}
+                                            style={{ paddingHorizontal: 10, paddingVertical: 4, backgroundColor: feeType === 'percent' ? accentColor : 'transparent' }}
+                                        >
+                                            <Text style={{ fontSize: 11, fontWeight: '800', color: feeType === 'percent' ? '#fff' : COLORS.textMuted }}>% Rate</Text>
+                                        </TouchableOpacity>
+                                    </View>
+                                </View>
+                                <TextInput
+                                    style={[styles.noteInput, { color: COLORS.text }]}
+                                    value={fee}
+                                    onChangeText={setFee}
+                                    placeholder={feeType === 'fixed' ? 'e.g. 25.00 — bank/ATM fee' : 'e.g. 1.5 — percent of transfer'}
+                                    placeholderTextColor={COLORS.textMuted}
+                                    keyboardType="numeric"
+                                />
+                                {/* Fee preview for percent mode */}
+                                {feeType === 'percent' && computedFeeAmt > 0 && (
+                                    <Text style={{ fontSize: 11, color: accentColor, fontWeight: '700', marginTop: 4 }}>
+                                        = {formatCurrency(computedFeeAmt, userInfo?.currency)} deducted from {selectedWallet ? selectedWallet.name : 'HAND'}
+                                    </Text>
+                                )}
+                                {feeType === 'fixed' && computedFeeAmt > 0 && (
+                                    <Text style={{ fontSize: 11, color: COLORS.textMuted, fontWeight: '600', marginTop: 4 }}>
+                                        Deducted from {selectedWallet ? selectedWallet.name : 'HAND'}
+                                    </Text>
+                                )}
+                            </View>
+                        </View>
                     </View>
 
                     <TouchableOpacity
@@ -516,10 +657,10 @@ export default function SavingsTransferScreen({ route, navigation }) {
                             onPress={() => handleSelectOption('main')}
                         >
                             <View style={[styles.modalItemIcon, { backgroundColor: COLORS.primary + '20' }]}>
-                                <Feather name="home" size={20} color={COLORS.primary} />
+                                <MaterialCommunityIcons name="hand-coin-outline" size={20} color={COLORS.primary} />
                             </View>
-                            <Text style={[styles.modalItemLabel, { color: COLORS.text }]}>Main Balance</Text>
-                            <Text style={[styles.modalItemValue, { color: COLORS.textMuted }]}>{selectorMode === 'source' ? formatCurrency(mainBalance) : 'Send to Wallet'}</Text>
+                            <Text style={[styles.modalItemLabel, { color: COLORS.text }]}>HAND</Text>
+                            <Text style={[styles.modalItemValue, { color: COLORS.textMuted }]}>{selectorMode === 'source' ? formatCurrency(mainBalance) : 'Send to HAND'}</Text>
                         </TouchableOpacity>
 
                         {savingsPot && (selectorMode === 'source' ? targetGoal?._id !== savingsPot._id : sourceGoal?._id !== savingsPot._id) && (
@@ -588,6 +729,7 @@ const getStyles = (COLORS) => StyleSheet.create({
     nativeCostLabel: { fontSize: 12, fontWeight: '700' },
     nativeCostValue: { fontSize: 14, fontWeight: '800' },
     noteRow: { flexDirection: 'row', alignItems: 'center', gap: 12, padding: 12, borderRadius: radius.lg },
+    feeRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 12, padding: 12, borderRadius: radius.lg, marginTop: 8 },
     noteInput: { flex: 1, fontSize: 14, fontWeight: '500', minHeight: 40 },
     payBtn: { height: 60, borderRadius: radius.xl, justifyContent: 'center', alignItems: 'center', elevation: 4, shadowColor: '#000', shadowOpacity: 0.2, shadowRadius: 10, shadowOffset: { width: 0, height: 5 } },
     payBtnText: { color: '#fff', fontSize: 16, fontWeight: '800' },

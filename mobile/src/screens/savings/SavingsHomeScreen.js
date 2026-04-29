@@ -1,9 +1,10 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react';
 import {
-    View, Text, StyleSheet, TouchableOpacity, FlatList, ScrollView,
+    View, Text, StyleSheet, TouchableOpacity, ScrollView,
     ActivityIndicator, RefreshControl, Image, Modal, TouchableWithoutFeedback,
     BackHandler, ToastAndroid, Platform, Alert
 } from 'react-native';
+import { FlashList } from '@shopify/flash-list';
 import Reanimated, {
     ZoomIn, ZoomOut, LinearTransition, useSharedValue,
     useAnimatedStyle, withRepeat, withTiming, withSequence
@@ -17,7 +18,7 @@ import { useAuth } from '../../context/AuthContext';
 import { useFinanceStore } from '../../store/financeStore';
 import { getSavingsGoals, getSavingsTransfers, bulkSavingsAction, deleteTransaction, respondToGoalInvite, getFriends, updateSavingsGoal } from '../../api/api';
 import { spacing, radius, typography, shadow } from '../../theme/colors';
-import { Swipeable } from 'react-native-gesture-handler';
+import SwipeableRow from '../../components/SwipeableRow';
 import { triggerHaptic } from '../../utils/haptics';
 import Skeleton from '../../components/Skeleton';
 import CustomAlertModal from '../../components/CustomAlertModal';
@@ -183,10 +184,34 @@ export default function SavingsHomeScreen({ navigation, route }) {
         }
     };
 
-    const handleArchiveGoal = async (id) => {
+    const handleArchiveGoal = async (goal) => {
+        const isOwner = goal.user?._id === userInfo._id || goal.user === userInfo._id;
+
+        if (!isOwner) {
+            setAlertConfig({
+                visible: true,
+                title: 'Cannot Archive',
+                message: 'Only the creator of this goal can archive it.',
+                type: 'info',
+                onConfirm: () => setAlertConfig(p => ({ ...p, visible: false }))
+            });
+            return;
+        }
+
+        if (goal.currentAmount > 0) {
+            setAlertConfig({
+                visible: true,
+                title: 'Balance Remaining',
+                message: 'You cannot archive a goal that still has funds. Please withdraw or transfer the remaining balance first.',
+                type: 'warning',
+                onConfirm: () => setAlertConfig(p => ({ ...p, visible: false }))
+            });
+            return;
+        }
+
         try {
             triggerHaptic(userInfo?.hapticsEnabled, 'impactLight');
-            await updateSavingsGoal(id, { isArchived: true });
+            await updateSavingsGoal(goal._id, { isArchived: true });
             debouncedRefreshSavings(true);
         } catch (e) {
             console.error('Archive goal failed:', e);
@@ -312,33 +337,18 @@ export default function SavingsHomeScreen({ navigation, route }) {
         const isComplete = goal.isCompleted || pct >= 100;
         const isOwner = goal.user?._id === userInfo._id || goal.user === userInfo._id;
 
-        const renderRightActions = () => (
-            <View style={styles.swipeActions}>
-                <TouchableOpacity
-                    onPress={() => handleArchiveGoal(goal._id)}
-                    style={[styles.archiveAction, { backgroundColor: COLORS.primary }]}
-                    activeOpacity={0.8}
-                >
-                    <Feather name="archive" size={24} color="#fff" />
-                    <Text style={styles.swipeActionText}>Archive</Text>
-                </TouchableOpacity>
-            </View>
-        );
-
         return (
-            <Reanimated.View entering={ZoomIn} exiting={ZoomOut} layout={LinearTransition} key={goal._id}>
-                <Swipeable
-                    renderRightActions={renderRightActions}
-                    overshootRight={false}
-                    onSwipeableOpen={(direction) => {
-                        if (direction === 'right') {
-                            handleArchiveGoal(goal._id);
-                        }
+            <Reanimated.View entering={ZoomIn} exiting={ZoomOut} layout={LinearTransition} key={goal._id} style={{ marginBottom: 16 }}>
+                <SwipeableRow
+                    rightAction={isInvite ? null : {
+                        color: COLORS.primary,
+                        icon: 'archive',
+                        label: 'Archive',
+                        onPress: () => handleArchiveGoal(goal)
                     }}
-                    rightThreshold={40}
-                    friction={2}
+                    containerStyle={{ marginBottom: 0 }}
                 >
-                    <View style={[styles.goalCard, { backgroundColor: COLORS.surface }]}>
+                    <View style={[styles.goalCard, { backgroundColor: COLORS.surface, marginBottom: 0 }]}>
                         <TouchableOpacity
                             activeOpacity={0.7}
                             onPress={() => !isInvite && navigation.navigate('SavingsGoalDetail', { goal })}
@@ -390,7 +400,7 @@ export default function SavingsHomeScreen({ navigation, route }) {
                             </View>
                         )}
                     </View>
-                </Swipeable>
+                </SwipeableRow>
             </Reanimated.View>
         );
     };
@@ -460,47 +470,59 @@ export default function SavingsHomeScreen({ navigation, route }) {
     if (isGoalsTab) {
         return (
             <SafeAreaView style={styles.safe}>
-                <FlatList
-                    data={[
-                        ...invites.map(i => ({ ...i, isInvite: true })),
-                        ...goalsFromStore.filter(g => g.name !== 'Savings Balance')
-                    ]}
-                    renderItem={({ item }) => renderGoalCard(item, item.isInvite)}
-                    keyExtractor={item => item._id}
-                    ListHeaderComponent={() => (
-                        <View>
-                            <View style={styles.topRow}>
-                                <View>
-                                    <Text style={styles.headerTitle}>Savings Goals</Text>
-                                    <Text style={[styles.headerSub, { color: COLORS.textMuted }]}>Showing all target pots</Text>
+                <View style={{ flex: 1 }}>
+                    <FlashList
+                        data={[
+                            ...invites.map(i => ({ ...i, isInvite: true })),
+                            ...goalsFromStore.filter(g => g.name !== 'Savings Balance')
+                        ]}
+                        renderItem={({ item }) => renderGoalCard(item, item.isInvite)}
+                        estimatedItemSize={100}
+                        keyExtractor={item => item._id}
+                        ListHeaderComponent={() => (
+                            <View>
+                                <View style={styles.topRow}>
+                                    <View>
+                                        <Text style={styles.headerTitle}>Savings Goals</Text>
+                                        <Text style={[styles.headerSub, { color: COLORS.textMuted }]}>Showing all target pots</Text>
+                                    </View>
+                                    <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                                        <TouchableOpacity
+                                            onPress={() => navigation.navigate('SavingsArchive')}
+                                            style={[styles.themeToggle, { marginRight: spacing.sm }]}
+                                        >
+                                            <Feather name="archive" size={20} color={COLORS.textMuted} />
+                                        </TouchableOpacity>
+                                    </View>
                                 </View>
-                                <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                                    <TouchableOpacity
-                                        onPress={() => navigation.navigate('SavingsArchive')}
-                                        style={[styles.themeToggle, { marginRight: spacing.sm }]}
-                                    >
-                                        <Feather name="archive" size={20} color={COLORS.textMuted} />
-                                    </TouchableOpacity>
-                                </View>
+                                {invites.length > 0 && (
+                                    <View style={{ marginBottom: 16 }}>
+                                        <Text style={[styles.sectionTitle, { fontSize: 16, marginBottom: 8 }]}>Pending Invitations ({invites.length})</Text>
+                                    </View>
+                                )}
                             </View>
-                            {invites.length > 0 && (
-                                <View style={{ marginBottom: 16 }}>
-                                    <Text style={[styles.sectionTitle, { fontSize: 16, marginBottom: 8 }]}>Pending Invitations ({invites.length})</Text>
-                                </View>
-                            )}
-                        </View>
-                    )}
-                    contentContainerStyle={styles.flatContent}
-                    refreshControl={<RefreshControl refreshing={refreshing} onRefresh={loadData} tintColor="#E91E8C" />}
-                    onEndReached={fetchMoreGoals}
-                    onEndReachedThreshold={0.5}
-                    ListFooterComponent={isLoadingSavings && <ActivityIndicator color={COLORS.primary} style={{ padding: 20 }} />}
-                    ListEmptyComponent={() => (
-                        <View style={styles.emptyContainer}>
-                            <Text style={styles.emptyEmoji}>🎯</Text>
-                            <Text style={[styles.emptyText, { color: COLORS.textMuted }]}>No goals created yet</Text>
-                        </View>
-                    )}
+                        )}
+                        contentContainerStyle={styles.flatContent}
+                        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={loadData} tintColor="#E91E8C" />}
+                        onEndReached={fetchMoreGoals}
+                        onEndReachedThreshold={0.5}
+                        ListFooterComponent={isLoadingSavings && <ActivityIndicator color={COLORS.primary} style={{ padding: 20 }} />}
+                        ListEmptyComponent={() => (
+                            <View style={styles.emptyContainer}>
+                                <Text style={styles.emptyEmoji}>🎯</Text>
+                                <Text style={[styles.emptyText, { color: COLORS.textMuted }]}>No goals created yet</Text>
+                            </View>
+                        )}
+                    />
+                </View>
+
+                <CustomAlertModal
+                    visible={alertConfig.visible}
+                    onClose={() => setAlertConfig(p => ({ ...p, visible: false }))}
+                    title={alertConfig.title}
+                    message={alertConfig.message}
+                    type={alertConfig.type}
+                    onConfirm={alertConfig.onConfirm}
                 />
             </SafeAreaView>
         );
@@ -570,8 +592,12 @@ export default function SavingsHomeScreen({ navigation, route }) {
                                 <View style={styles.statDot} />
                                 <Text style={styles.statText}>{activeGoals.length} Active Goals</Text>
                             </View>
+                            <View style={[styles.statChip, { backgroundColor: 'rgba(255,255,255,0.15)', marginHorizontal: 8 }]}>
+                                <MaterialCommunityIcons name="hand-coin" size={12} color="rgba(255,255,255,0.8)" style={{ marginRight: 4 }} />
+                                <Text style={[styles.statText, { color: '#fff' }]}>HAND: {hideGlobalBalance ? '•••' : formatCurrency(userInfo?.handBalance || 0, userInfo?.currency)}</Text>
+                            </View>
                             <View style={[styles.statChip, { marginLeft: 'auto', backgroundColor: 'rgba(255,255,255,0.15)' }]}>
-                                <Text style={[styles.statText, { color: '#fff' }]}>TOTAL SAVINGS: {hideGlobalBalance ? '•••' : formatCurrency(
+                                <Text style={[styles.statText, { color: '#fff' }]}>TOTAL: {hideGlobalBalance ? '•••' : formatCurrency(
                                     (masterPot?.currentAmount || 0) + goalsFromStore.reduce((sum, g) => sum + (g.currentAmount || 0), 0),
                                     userInfo?.currency
                                 )}</Text>

@@ -17,6 +17,7 @@ const shoppingSessionSchema = new mongoose.Schema({
     source: { type: String, default: 'main_balance' },
     status: { type: String, enum: ['active', 'completed', 'cancelled'], default: 'active' },
     note: { type: String, default: '' },
+    isArchived: { type: Boolean, default: false },
 }, { timestamps: true });
 
 module.exports = mongoose.model('ShoppingSession', shoppingSessionSchema);

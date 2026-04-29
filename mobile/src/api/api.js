@@ -7,8 +7,8 @@ axios.defaults.headers.post['Content-Type'] = 'application/json';
 
 // ─── Core / Utils ─────────────────────────────────────────────────────────────
 
-export const uploadReceipt = (formData) =>
-    axios.post(`${API_BASE}/uploads/receipt`, formData, {
+export const scanReceipt = (formData) =>
+    axios.post(`${API_BASE}/ocr/scan`, formData, {
         headers: { 'Content-Type': 'multipart/form-data' }
     }).then(r => r.data);
 
@@ -38,6 +38,12 @@ export const emptyArchives = () =>
 export const getAnalytics = (params = {}) =>
     axios.get(`${API_BASE}/transactions/analytics`, { params }).then(r => r.data);
 
+export const exportTransactions = (params = {}) =>
+    axios.get(`${API_BASE}/transactions/export`, {
+        params,
+        responseType: 'blob'
+    });
+
 // ─── Debts ────────────────────────────────────────────────────────────────────
 
 export const getDebts = (params = {}) =>
@@ -66,6 +72,9 @@ export const respondDebtRequest = (id, status) =>
 
 export const splitDebt = (data) =>
     axios.post(`${API_BASE}/debts/split`, data).then(r => r.data);
+
+export const emptyDebtArchives = () =>
+    axios.delete(`${API_BASE}/debts/archive/empty`).then(r => r.data);
 
 export const getProfile = () =>
     axios.get(`${API_BASE}/users/me`).then(r => r.data);
@@ -157,6 +166,9 @@ export const getBudgets = (date, period) =>
 export const upsertBudget = (data) =>
     axios.post(`${API_BASE}/budgets`, data).then(r => r.data);
 
+export const updateBudget = (id, data) =>
+    axios.patch(`${API_BASE}/budgets/${id}`, data).then(r => r.data);
+
 export const deleteBudget = (id) =>
     axios.delete(`${API_BASE}/budgets/${id}`).then(r => r.data);
 
@@ -244,6 +256,10 @@ export const deleteShoppingSession = (id) =>
 
 export const lookupShoppingBarcode = (barcode) =>
     axios.get(`${API_BASE}/shopping/barcode/${encodeURIComponent(barcode)}`).then(r => r.data);
+
+export const toggleArchiveShoppingSession = (id) =>
+    axios.patch(`${API_BASE}/shopping/sessions/${id}/archive`).then(r => r.data);
+
 
 // ─── Shopping Templates & Price History (Features 14 & 15) ─────────────────────
 
@@ -389,8 +405,8 @@ export const addTripExpense = (id, data) =>
 export const getTripSettlementPreview = (id) =>
     axios.get(`${API_BASE}/group-wallets/${id}/settle-preview`).then(r => r.data);
 
-export const settleTrip = (id) =>
-    axios.post(`${API_BASE}/group-wallets/${id}/settle`).then(r => r.data);
+export const settleTrip = (id, data = {}) =>
+    axios.post(`${API_BASE}/group-wallets/${id}/settle`, data).then(r => r.data);
 
 export const updateTrip = (id, data) =>
     axios.patch(`${API_BASE}/group-wallets/${id}`, data).then(r => r.data);

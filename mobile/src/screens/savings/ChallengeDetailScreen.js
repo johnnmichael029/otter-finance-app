@@ -38,7 +38,7 @@ export default function ChallengeDetailScreen({ route, navigation }) {
     const cryptoPrices = useFinanceStore(state => state.cryptoPrices);
     const transactionSummary = useFinanceStore(state => state.transactionSummary);
     const savingsMasterPot = useFinanceStore(state => state.savingsMasterPot);
-    const handBalance = transactionSummary?.balance || 0;
+    const handBalance = userInfo?.handBalance || 0;
     const [revertModalVisible, setRevertModalVisible] = useState(false);
     
     const isCompleted = challenge.targetAmount > 0 && myAmount >= challenge.targetAmount;
@@ -80,7 +80,18 @@ export default function ChallengeDetailScreen({ route, navigation }) {
                     }
                 }
 
-                if (savingsMasterPot) {
+                // Handle deduction from source
+                if (selectedWallet && selectedWallet.isSavings) {
+                    // 1a. DEDUCT from Savings Stash
+                    await savingsTransfer({
+                        goalId: savingsMasterPot._id,
+                        amount: action.amount,
+                        direction: 'from_savings', // Pull money out of the stash
+                        note: `Used Stash for Challenge: ${challenge.title}`,
+                        sourceWalletId: null // No physical wallet, just internal move
+                    });
+                } else if (savingsMasterPot) {
+                    // 1b. DEPOSIT into Savings Stash (Normal behavior for Hand/Wallets)
                     await savingsTransfer({
                         goalId: savingsMasterPot._id,
                         amount: action.amount,
@@ -273,7 +284,26 @@ export default function ChallengeDetailScreen({ route, navigation }) {
                                     Where is the {formatCurrency(pendingAction?.amount || 0, userInfo?.currency)} coming from?
                                 </Text>
                                 
-                                <ScrollView style={{ maxHeight: 300, width: '100%', marginVertical: 16 }}>
+                                <ScrollView style={{ maxHeight: 350, width: '100%', marginVertical: 16 }}>
+                                    {/* SAVINGS STASH Option */}
+                                    {savingsMasterPot && (
+                                        <TouchableOpacity 
+                                            style={[styles.walletOption, { backgroundColor: COLORS.surface, borderColor: COLORS.primary + '40' }]}
+                                            onPress={() => executeProgressAction(pendingAction, { _id: 'savings_stash', isSavings: true })}
+                                        >
+                                            <View style={[styles.walletIcon, { backgroundColor: '#E91E8C' }]}>
+                                                <MaterialCommunityIcons name="piggy-bank-outline" color="#fff" size={20} />
+                                            </View>
+                                            <View style={{ flex: 1 }}>
+                                                <Text style={[styles.walletName, { color: COLORS.text }]}>Savings Stash</Text>
+                                                <Text style={[styles.walletBal, { color: COLORS.primary, fontWeight: '800' }]}>
+                                                    Available: {formatCurrency(savingsMasterPot.currentAmount, userInfo?.currency)}
+                                                </Text>
+                                            </View>
+                                            <Feather name="chevron-right" size={16} color={COLORS.textMuted} />
+                                        </TouchableOpacity>
+                                    )}
+
                                     {/* HAND Wallet Option */}
                                     <TouchableOpacity 
                                         style={[styles.walletOption, { backgroundColor: COLORS.surface, borderColor: COLORS.border }]}

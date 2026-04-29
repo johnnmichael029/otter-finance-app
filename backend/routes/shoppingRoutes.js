@@ -3,7 +3,7 @@ const router = express.Router();
 const requireAuth = require('../middleware/requireAuth');
 const {
     createSession, getSessions, getSession,
-    updateCartItems, checkoutSession, cancelSession, lookupBarcode, deleteSession
+    updateCartItems, checkoutSession, cancelSession, lookupBarcode, deleteSession, toggleArchiveSession
 } = require('../controllers/shoppingController');
 const {
     getTemplates, createTemplate, updateTemplate, deleteTemplate, useTemplate, getPriceHistory
@@ -19,7 +19,7 @@ router.patch('/sessions/:id/items', updateCartItems);
 router.post('/sessions/:id/checkout', checkoutSession);
 router.patch('/sessions/:id/cancel', cancelSession);
 router.delete('/sessions/:id', deleteSession);
-
+router.patch('/sessions/:id/archive', toggleArchiveSession);
 // ── Barcode ───────────────────────────────────────────────────────────────────
 router.get('/barcode/:barcode', lookupBarcode);
 

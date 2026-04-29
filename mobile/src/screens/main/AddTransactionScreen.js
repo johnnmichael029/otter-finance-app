@@ -2,7 +2,7 @@ import React, { useState, useMemo, useEffect } from 'react';
 import {
     View, Text, StyleSheet, TouchableOpacity, TextInput,
     ScrollView, KeyboardAvoidingView, Platform, ActivityIndicator,
-    Modal, TouchableWithoutFeedback, Keyboard, Alert, Image
+    Modal, TouchableWithoutFeedback, Keyboard, Alert, Image, Animated, Dimensions
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Feather, MaterialIcons, MaterialCommunityIcons, Ionicons, AntDesign, FontAwesome5 } from '@expo/vector-icons';
@@ -10,7 +10,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { useTheme } from '../../context/ThemeContext';
 import { radius, spacing } from '../../theme/colors';
 import * as ImagePicker from 'expo-image-picker';
-import { createTransaction, getTransactions, getCurrencyList, convertCurrency, uploadReceipt, getCategories } from '../../api/api';
+import { createTransaction, getTransactions, getCurrencyList, convertCurrency, scanReceipt, getCategories } from '../../api/api';
 import CustomAlertModal from '../../components/CustomAlertModal';
 import { useSecurity } from '../../context/SecurityContext';
 import { useFinanceStore } from '../../store/financeStore';
@@ -44,6 +44,8 @@ export default function AddTransactionScreen({ navigation, route }) {
 
     const [amount, setAmount] = useState(prefillData?.price ? String(prefillData.price) : '');
     const [note, setNote] = useState(prefillData?.name || '');
+    const [fee, setFee] = useState('');
+    const [feeType, setFeeType] = useState('fixed'); // 'fixed' | 'percent'
     const [category, setCategory] = useState(null);
     const [selectedWallet, setSelectedWallet] = useState(null);   // Destination wallet (locked if passed from Wallet screen)
     const [sourceWallet, setSourceWallet] = useState(null);       // source wallet object (for income)
@@ -60,7 +62,7 @@ export default function AddTransactionScreen({ navigation, route }) {
 
     const cryptoPrices = useFinanceStore(state => state.cryptoPrices);
     const savingsMasterPot = useFinanceStore(state => state.savingsMasterPot);
-    const handBalance = useFinanceStore(state => state.handBalance);
+    const netBalance = useFinanceStore(state => state.netBalance);
     const [alert, setAlert] = useState({ visible: false, type: 'info', title: '', message: '' });
 
     const [image, setImage] = useState(null);
@@ -74,6 +76,27 @@ export default function AddTransactionScreen({ navigation, route }) {
     const [exchangeRate, setExchangeRate] = useState(1);
     const [sourceExchangeRate, setSourceExchangeRate] = useState(1);
     const [sourceConvertedAmount, setSourceConvertedAmount] = useState(null);
+
+    // Currency Modal Animations
+    const [currencyFade] = useState(new Animated.Value(0));
+    const [currencySlide] = useState(new Animated.Value(Dimensions.get('window').height));
+    const [currencyMounted, setCurrencyMounted] = useState(false);
+    useEffect(() => {
+        if (currencyModalVisible) {
+            setCurrencyMounted(true);
+            Animated.parallel([
+                Animated.timing(currencyFade, { toValue: 1, duration: 300, useNativeDriver: true }),
+                Animated.spring(currencySlide, { toValue: 0, tension: 20, friction: 20, useNativeDriver: true })
+            ]).start();
+        } else {
+            Animated.parallel([
+                Animated.timing(currencyFade, { toValue: 0, duration: 200, useNativeDriver: true }),
+                Animated.timing(currencySlide, { toValue: Dimensions.get('window').height, duration: 250, useNativeDriver: true })
+            ]).start(() => {
+                setCurrencyMounted(false);
+            });
+        }
+    }, [currencyModalVisible]);
 
     const [remoteCats, setRemoteCats] = useState([]);
     const formatIconName = (name) => {
@@ -137,6 +160,51 @@ export default function AddTransactionScreen({ navigation, route }) {
             console.warn('Image error:', e);
         } finally {
             // Restore security lock behavior after a short delay to ensure app is active
+            setTimeout(() => setShouldIgnoreLock(false), 1000);
+        }
+    };
+
+    const handleScanReceipt = async () => {
+        setShouldIgnoreLock(true);
+        try {
+            const { status } = await ImagePicker.requestCameraPermissionsAsync();
+            if (status !== 'granted') {
+                showAlert('warning', 'Permission Required', 'Allow camera access to scan receipts.');
+                return;
+            }
+
+            const result = await ImagePicker.launchCameraAsync({
+                allowsEditing: true,
+                quality: 0.8,
+            });
+
+            if (!result.canceled) {
+                const uri = result.assets[0].uri;
+                setIsLoading(true);
+
+                const formData = new FormData();
+                formData.append('receipt', {
+                    uri: Platform.OS === 'ios' ? uri.replace('file://', '') : uri,
+                    type: 'image/jpeg',
+                    name: 'receipt.jpg',
+                });
+
+                const data = await scanReceipt(formData);
+
+                if (data.amount) setAmount(String(data.amount));
+                if (data.merchant) setNote(data.merchant);
+
+                Toast.show({
+                    type: 'success',
+                    text1: 'Receipt Scanned! 🦦',
+                    text2: `Found ${data.merchant || 'merchant'} for ₱${data.amount || '0'}`,
+                });
+            }
+        } catch (e) {
+            console.warn('OCR error:', e);
+            showAlert('error', 'Scan Failed', 'Failed to read the receipt. Please try again or enter details manually.');
+        } finally {
+            setIsLoading(false);
             setTimeout(() => setShouldIgnoreLock(false), 1000);
         }
     };
@@ -255,6 +323,16 @@ export default function AddTransactionScreen({ navigation, route }) {
     const accentColor = isIncome ? '#22c55e' : '#ef4444';
     const gradientColors = isIncome ? ['#22c55e', '#16a34a'] : ['#ef4444', '#b91c1c'];
 
+    // Fee computation
+    const computedFeeAmt = (() => {
+        const raw = parseFloat(fee);
+        if (!fee || isNaN(raw) || raw <= 0) return 0;
+        const baseAmt = convertedPreview !== null ? convertedPreview : (parseFloat(amount) || 0);
+        return feeType === 'percent' ? (raw / 100) * baseAmt : raw;
+    })();
+    const feeSourceWalletId = isIncome ? (sourceWallet?._id || null) : (selectedWallet?._id || null);
+    const feeSourceName = isIncome ? (sourceWallet?.name || 'HAND') : (selectedWallet?.name || 'HAND');
+
     const handleMaxPress = () => {
         let maxAmt = 0;
         let isCrypto = false;
@@ -262,7 +340,7 @@ export default function AddTransactionScreen({ navigation, route }) {
         if (isIncome) {
             // Pulling money FROM a source to HAND or Destination
             if (sourceType === 'hand') {
-                maxAmt = handBalance;
+                maxAmt = netBalance;
             } else if (sourceType === 'savings_balance') {
                 maxAmt = savingsMasterPot?.currentAmount || 0;
             } else if (sourceType === 'wallet' && sourceWallet) {
@@ -277,7 +355,7 @@ export default function AddTransactionScreen({ navigation, route }) {
         } else {
             // Pulling money FROM selectedWallet (or HAND) for an Expense
             if (!selectedWallet) {
-                maxAmt = handBalance;
+                maxAmt = netBalance;
             } else {
                 if (selectedWallet.type === 'Credit') {
                     return showAlert('info', 'No Limit', 'Credit cards do not have a maximum limit.');
@@ -392,6 +470,20 @@ export default function AddTransactionScreen({ navigation, route }) {
 
             await createTransaction(txData);
 
+            // Fee transaction (if applicable)
+            if (computedFeeAmt > 0) {
+                await createTransaction({
+                    type: 'expense',
+                    amount: computedFeeAmt,
+                    category: 'Bank Fee',
+                    categoryIcon: 'percent',
+                    categoryColor: '#ef4444',
+                    note: `Fee for ${category?.label || 'transaction'} (${feeType === 'percent' ? `Rate: ${fee}%` : `Fixed: ₱${parseFloat(fee).toFixed(2)}`})`,
+                    date: new Date().toISOString(),
+                    walletId: feeSourceWalletId,
+                });
+            }
+
             // Refresh store to reflect new balance and transaction
             useFinanceStore.getState().refreshAll();
 
@@ -415,7 +507,7 @@ export default function AddTransactionScreen({ navigation, route }) {
     return (
         <SafeAreaView style={[styles.safe, { backgroundColor: COLORS.background }]}>
             <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1 }}>
-                <ScrollView contentContainerStyle={styles.container} keyboardShouldPersistTaps="handled">
+                <ScrollView contentContainerStyle={styles.container} keyboardShouldPersistTaps="handled" >
 
                     {/* Header */}
                     <View style={styles.header}>
@@ -463,9 +555,20 @@ export default function AddTransactionScreen({ navigation, route }) {
                     <View style={[styles.amountCard, { backgroundColor: COLORS.surface }]}>
                         <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: spacing.sm }}>
                             <Text style={[styles.amountLabel, { color: COLORS.textMuted, marginBottom: 0 }]}>AMOUNT</Text>
-                            <TouchableOpacity onPress={handleMaxPress} style={[styles.maxBtn, { backgroundColor: COLORS.primary + '20' }]}>
-                                <Text style={[styles.maxBtnText, { color: COLORS.primary }]}>MAX</Text>
-                            </TouchableOpacity>
+                            <View style={{ flexDirection: 'row', gap: 8 }}>
+                                {!isIncome && (
+                                    <TouchableOpacity
+                                        onPress={handleScanReceipt}
+                                        style={[styles.scanBtn, { backgroundColor: COLORS.secondary + '20' }]}
+                                    >
+                                        <Feather name="maximize" size={12} color={COLORS.secondary} />
+                                        <Text style={[styles.maxBtnText, { color: COLORS.secondary, marginLeft: 4 }]}>SCAN</Text>
+                                    </TouchableOpacity>
+                                )}
+                                <TouchableOpacity onPress={handleMaxPress} style={[styles.maxBtn, { backgroundColor: COLORS.primary + '20' }]}>
+                                    <Text style={[styles.maxBtnText, { color: COLORS.primary }]}>MAX</Text>
+                                </TouchableOpacity>
+                            </View>
                         </View>
                         <View style={styles.amountRow}>
                             <TouchableOpacity
@@ -488,6 +591,19 @@ export default function AddTransactionScreen({ navigation, route }) {
                                     {amount ? Number(amount).toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 8 }) : '0.00'}
                                 </Text>
                             </TouchableOpacity>
+                        </View>
+                        {/* Current balance hint */}
+                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 6, marginBottom: 2 }}>
+                            <Feather name="info" size={11} color={COLORS.textMuted} />
+                            <Text style={{ fontSize: 11, color: COLORS.textMuted, fontWeight: '600' }}>
+                                {isIncome
+                                    ? (sourceType === 'wallet' && sourceWallet
+                                        ? `${sourceWallet.name}: ₱${(sourceWallet.balance || 0).toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+                                        : `HAND Balance: ₱${(netBalance || 0).toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`)
+                                    : (selectedWallet
+                                        ? `${selectedWallet.name}: ₱${(selectedWallet.balance || 0).toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+                                        : `HAND Balance: ₱${(netBalance || 0).toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`)}
+                            </Text>
                         </View>
 
                         {/* Main Transaction Conversion Preview */}
@@ -717,6 +833,44 @@ export default function AddTransactionScreen({ navigation, route }) {
                         </View>
                     </View>
 
+                    {/* Transaction Fee */}
+                    <View style={styles.section}>
+                        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+                            <Text style={[styles.sectionTitle, { color: COLORS.textMuted }]}>TRANSACTION FEE (OPTIONAL)</Text>
+                            <View style={{ flexDirection: 'row', borderRadius: 8, overflow: 'hidden', borderWidth: 1, borderColor: COLORS.border }}>
+                                <TouchableOpacity
+                                    onPress={() => setFeeType('fixed')}
+                                    style={{ paddingHorizontal: 10, paddingVertical: 4, backgroundColor: feeType === 'fixed' ? accentColor : 'transparent' }}
+                                >
+                                    <Text style={{ fontSize: 11, fontWeight: '800', color: feeType === 'fixed' ? '#fff' : COLORS.textMuted }}>₱ Fixed</Text>
+                                </TouchableOpacity>
+                                <TouchableOpacity
+                                    onPress={() => setFeeType('percent')}
+                                    style={{ paddingHorizontal: 10, paddingVertical: 4, backgroundColor: feeType === 'percent' ? accentColor : 'transparent' }}
+                                >
+                                    <Text style={{ fontSize: 11, fontWeight: '800', color: feeType === 'percent' ? '#fff' : COLORS.textMuted }}>% Rate</Text>
+                                </TouchableOpacity>
+                            </View>
+                        </View>
+                        <View style={[styles.noteContainer, { backgroundColor: COLORS.surface, borderColor: COLORS.border }]}>
+                            <Feather name="percent" size={16} color={COLORS.textMuted} style={{ marginRight: 8 }} />
+                            <TextInput
+                                style={[styles.noteInput, { color: COLORS.text, flex: 1 }]}
+                                value={fee}
+                                onChangeText={setFee}
+                                placeholder={feeType === 'fixed' ? 'e.g. 25.00 — bank/ATM fee' : 'e.g. 1.5 — percent of amount'}
+                                placeholderTextColor={COLORS.textMuted}
+                                keyboardType="numeric"
+                            />
+                        </View>
+                        {computedFeeAmt > 0 && (
+                            <Text style={{ fontSize: 11, color: accentColor, fontWeight: '700', marginTop: 6, paddingHorizontal: 4 }}>
+                                {feeType === 'percent' ? `= ₱${computedFeeAmt.toFixed(2)} ` : ''}
+                                Deducted from {feeSourceName}
+                            </Text>
+                        )}
+                    </View>
+
                     {/* Prefill badge */}
                     {prefillData && (
                         <View style={[styles.prefillBadge, { backgroundColor: COLORS.primary + '15', borderColor: COLORS.primary + '40' }]}>
@@ -786,45 +940,57 @@ export default function AddTransactionScreen({ navigation, route }) {
 
             {/* Currency Selection Modal */}
             <Modal
-                visible={currencyModalVisible}
+                visible={currencyMounted}
                 transparent
-                animationType="slide"
+                animationType="none"
                 onRequestClose={() => setCurrencyModalVisible(false)}
+                statusBarTranslucent
             >
                 <TouchableWithoutFeedback onPress={() => setCurrencyModalVisible(false)}>
-                    <View style={styles.modalOverlay}>
-                        <View style={[styles.modalSheet, { backgroundColor: COLORS.surface, maxHeight: '60%' }]}>
-                            <View style={styles.modalHeaderRow}>
-                                <Text style={[styles.modalTitle, { color: COLORS.text }]}>Select Currency</Text>
-                                <TouchableOpacity onPress={() => setCurrencyModalVisible(false)}>
-                                    <Feather name="x" size={24} color={COLORS.textMuted} />
-                                </TouchableOpacity>
-                            </View>
-
-                            <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingVertical: spacing.md }}>
-                                {currencyList.map((item) => (
-                                    <TouchableOpacity
-                                        key={item.code}
-                                        onPress={() => {
-                                            setCurrency(item);
-                                            setCurrencyModalVisible(false);
-                                        }}
-                                        style={[
-                                            styles.currencyItem,
-                                            { backgroundColor: currency.code === item.code ? COLORS.primary + '10' : 'transparent' }
-                                        ]}
-                                    >
-                                        <Text style={styles.itemFlag}>{item.flag}</Text>
-                                        <View style={{ flex: 1 }}>
-                                            <Text style={[styles.itemCode, { color: COLORS.text }]}>{item.code}</Text>
-                                            <Text style={[styles.itemName, { color: COLORS.textMuted }]}>{item.name}</Text>
-                                        </View>
-                                        {currency.code === item.code && <Feather name="check" size={20} color={COLORS.primary} />}
+                    <Animated.View style={[styles.modalOverlay, { opacity: currencyFade }]}>
+                        <TouchableWithoutFeedback>
+                            <Animated.View
+                                style={[
+                                    styles.modalSheet,
+                                    {
+                                        backgroundColor: COLORS.surface,
+                                        maxHeight: '60%',
+                                        transform: [{ translateY: currencySlide }]
+                                    }
+                                ]}
+                            >
+                                <View style={styles.modalHeaderRow}>
+                                    <Text style={[styles.modalTitle, { color: COLORS.text }]}>Select Currency</Text>
+                                    <TouchableOpacity onPress={() => setCurrencyModalVisible(false)}>
+                                        <Feather name="x" size={24} color={COLORS.textMuted} />
                                     </TouchableOpacity>
-                                ))}
-                            </ScrollView>
-                        </View>
-                    </View>
+                                </View>
+
+                                <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingVertical: spacing.md }}>
+                                    {currencyList.map((item) => (
+                                        <TouchableOpacity
+                                            key={item.code}
+                                            onPress={() => {
+                                                setCurrency(item);
+                                                setCurrencyModalVisible(false);
+                                            }}
+                                            style={[
+                                                styles.currencyItem,
+                                                { backgroundColor: currency.code === item.code ? COLORS.primary + '10' : 'transparent' }
+                                            ]}
+                                        >
+                                            <Text style={styles.itemFlag}>{item.flag}</Text>
+                                            <View style={{ flex: 1 }}>
+                                                <Text style={[styles.itemCode, { color: COLORS.text }]}>{item.code}</Text>
+                                                <Text style={[styles.itemName, { color: COLORS.textMuted }]}>{item.name}</Text>
+                                            </View>
+                                            {currency.code === item.code && <Feather name="check" size={20} color={COLORS.primary} />}
+                                        </TouchableOpacity>
+                                    ))}
+                                </ScrollView>
+                            </Animated.View>
+                        </TouchableWithoutFeedback>
+                    </Animated.View>
                 </TouchableWithoutFeedback>
             </Modal>
 
@@ -866,7 +1032,7 @@ export default function AddTransactionScreen({ navigation, route }) {
 
 const styles = StyleSheet.create({
     safe: { flex: 1 },
-    container: { padding: spacing.lg, paddingBottom: 40 },
+    container: { padding: spacing.lg, paddingBottom: 100 },
     header: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, marginBottom: spacing.lg },
     backBtn: { width: 40, height: 40, borderRadius: 12, justifyContent: 'center', alignItems: 'center' },
     headerTitle: { fontSize: 20, fontWeight: '800' },
@@ -875,6 +1041,7 @@ const styles = StyleSheet.create({
     amountCard: { borderRadius: radius.xl, padding: spacing.lg, marginBottom: spacing.lg },
     amountLabel: { fontSize: 11, fontWeight: '700', letterSpacing: 1, marginBottom: spacing.sm },
     maxBtn: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: radius.sm },
+    scanBtn: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 10, paddingVertical: 4, borderRadius: radius.sm },
     maxBtnText: { fontSize: 10, fontWeight: '800' },
     amountRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
     currencyPicker: {

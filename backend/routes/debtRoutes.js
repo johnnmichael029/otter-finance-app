@@ -12,7 +12,8 @@ const {
     getPayments,
     sendDebtReminder,
     respondDebtRequest,
-    splitDebt
+    splitDebt,
+    emptyDebtArchives
 } = require('../controllers/debtController');
 
 // All debt routes require authentication
@@ -29,6 +30,9 @@ router.post('/split', splitDebt);
 
 // PATCH /api/debts/:id       — update (edit details, mark partial/settled)
 router.patch('/:id', validate.updateDebt, updateDebt);
+
+// DELETE /api/debts/archive/empty  — purge all archived debts
+router.delete('/archive/empty', emptyDebtArchives);
 
 // DELETE /api/debts/:id      — delete debt + all payment logs
 router.delete('/:id', deleteDebt);

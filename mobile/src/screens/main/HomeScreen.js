@@ -19,8 +19,7 @@ import { spacing, radius, typography, shadow, colors } from '../../theme/colors'
 import CustomAlertModal from '../../components/CustomAlertModal';
 import Skeleton from '../../components/Skeleton';
 import OnboardingTour from '../../components/OnboardingTour';
-import { connectSocket, disconnectSocket, getSocket } from '../../utils/socket';
-import { updateWidgetBalance } from '../../utils/widget';
+import SwipeableRow from '../../components/SwipeableRow';
 import { PieChart } from 'react-native-chart-kit';
 import Svg, { Circle } from 'react-native-svg';
 import { formatCurrency, formatDateTime, getIconName, getIconColor, IconRenderer } from '../../utils/formatters';
@@ -33,8 +32,6 @@ if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental
 }
 
 const otterIcon = require('../../../assets/icon/welcomeOtter.png');
-
-
 
 export default function HomeScreen({ navigation }) {
     const userInfo = useAuth(state => state.userInfo);
@@ -386,7 +383,7 @@ export default function HomeScreen({ navigation }) {
 
     const onRefresh = () => { setRefreshing(true); load(); };
 
-    const walletBal = (summary.netBalance ?? summary.balance ?? 0);
+    const walletBal = (userInfo?.handBalance ?? summary.netBalance ?? summary.balance ?? 0);
     const savingBal = savingsTotalSaved ?? 0;
     const netDebt = debtStats.owedToMe - debtStats.iOwe;
 
@@ -993,52 +990,65 @@ export default function HomeScreen({ navigation }) {
                             onScroll={handleActivityScroll}
                             scrollEventThrottle={200}
                         >
-                            {todaysRecent.map((tx) => (
-                                <TouchableOpacity
-                                    key={tx._id}
-                                    style={[styles.txRow, { backgroundColor: COLORS.surface }]}
-                                    activeOpacity={0.7}
-                                    onPress={() => {
-                                        setSelectedTx(tx);
-                                        setTxModalVisible(true);
-                                    }}
-                                    onLongPress={() => {
-                                        triggerHaptic(hapticsEnabled, 'impactMedium');
-                                        if (tx.relatedType === 'Debt') {
-                                            setAlert({
-                                                visible: true,
-                                                title: 'Cannot Revert Debt',
-                                                message: 'Debt transactions cannot be reverted from here. To undo a payment, please manage it within the Debt Tracker screen.',
-                                                type: 'info'
-                                            });
-                                            return;
-                                        }
-                                        setRevertingTx(tx);
-                                        setRevertModalVisible(true);
-                                    }}
-                                >
-                                    <View style={[styles.txIconWrapper, { backgroundColor: getIconColor(tx, COLORS) + '20' }]}>
-                                        <IconRenderer name={getIconName(tx)} size={16} color={getIconColor(tx, COLORS)} />
-                                    </View>
-                                    <View style={styles.txInfo}>
-                                        <Text style={[styles.txCategory, { color: COLORS.text }]}>{tx.category}</Text>
-                                        <Text style={[styles.txDesc, { color: COLORS.textMuted }]} numberOfLines={1}>
-                                            " {tx.description || tx.note || '—'} "
-                                        </Text>
-                                    </View>
-                                    <View style={styles.txRight}>
-                                        <Text style={[styles.txAmount, { color: tx.type === 'income' ? COLORS.income : COLORS.expense }]}>
-                                            {tx.type === 'income' ? '+' : '-'}{formatCurrency(tx.amount, userInfo?.currency)}
-                                        </Text>
-                                        <View style={{ alignItems: 'flex-end' }}>
+                            {todaysRecent.map((tx) => {
+                                const handleRevertSwipe = () => {
+                                    triggerHaptic(hapticsEnabled, 'impactMedium');
+                                    if (tx.relatedType === 'Debt') {
+                                        setAlert({
+                                            visible: true,
+                                            title: 'Cannot Revert Debt',
+                                            message: 'Debt transactions cannot be reverted from here. To undo a payment, please manage it within the Debt Tracker screen.',
+                                            type: 'info'
+                                        });
+                                        return;
+                                    }
+                                    setRevertingTx(tx);
+                                    setRevertModalVisible(true);
+                                };
 
-                                            <Text style={[styles.txDate, { color: COLORS.textMuted }]}>
-                                                {new Intl.DateTimeFormat('en-US', { hour: 'numeric', minute: '2-digit' }).format(new Date(tx.date || tx.createdAt))}
-                                            </Text>
-                                        </View>
-                                    </View>
-                                </TouchableOpacity>
-                            ))}
+                                return (
+                                    <SwipeableRow
+                                        key={tx._id}
+                                        rightAction={{
+                                            color: '#ef4444',
+                                            icon: 'corner-up-left',
+                                            label: 'Revert',
+                                            onPress: handleRevertSwipe
+                                        }}
+                                        containerStyle={{ marginBottom: spacing.xs }}
+                                    >
+                                        <TouchableOpacity
+                                            style={[styles.txRow, { backgroundColor: COLORS.surface, marginBottom: 0 }]}
+                                            activeOpacity={0.7}
+                                            onPress={() => {
+                                                setSelectedTx(tx);
+                                                setTxModalVisible(true);
+                                            }}
+                                            onLongPress={handleRevertSwipe}
+                                        >
+                                            <View style={[styles.txIconWrapper, { backgroundColor: getIconColor(tx, COLORS) + '20' }]}>
+                                                <IconRenderer name={getIconName(tx)} size={16} color={getIconColor(tx, COLORS)} />
+                                            </View>
+                                            <View style={styles.txInfo}>
+                                                <Text style={[styles.txCategory, { color: COLORS.text }]}>{tx.category}</Text>
+                                                <Text style={[styles.txDesc, { color: COLORS.textMuted }]} numberOfLines={1}>
+                                                    " {tx.description || tx.note || '—'} "
+                                                </Text>
+                                            </View>
+                                            <View style={styles.txRight}>
+                                                <Text style={[styles.txAmount, { color: tx.type === 'income' ? COLORS.income : COLORS.expense }]}>
+                                                    {tx.type === 'income' ? '+' : '-'}{formatCurrency(tx.amount, userInfo?.currency)}
+                                                </Text>
+                                                <View style={{ alignItems: 'flex-end' }}>
+                                                    <Text style={[styles.txDate, { color: COLORS.textMuted }]}>
+                                                        {new Intl.DateTimeFormat('en-US', { hour: 'numeric', minute: '2-digit' }).format(new Date(tx.date || tx.createdAt))}
+                                                    </Text>
+                                                </View>
+                                            </View>
+                                        </TouchableOpacity>
+                                    </SwipeableRow>
+                                );
+                            })}
                             {loadingMore && (
                                 <View style={styles.loadMoreIndicator}>
                                     <ActivityIndicator size="small" color={COLORS.primary} />

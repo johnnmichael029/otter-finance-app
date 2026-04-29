@@ -5,8 +5,7 @@ import { Feather } from '@expo/vector-icons';
 import { useTheme } from '../../context/ThemeContext';
 import { useAuth } from '../../context/AuthContext';
 import { spacing, radius } from '../../theme/colors';
-import { getDebts, logDebtPayment } from '../../api/api';
-import { connectSocket, getSocket } from '../../utils/socket';
+import { logDebtPayment } from '../../api/api';
 import BottomSheetModal from '../../components/BottomSheetModal';
 import CustomAlertModal from '../../components/CustomAlertModal';
 import { formatCurrency } from '../../utils/formatters';
@@ -110,10 +109,12 @@ const simulatePayoff = (debts, strategy, totalMonthlyBudget) => {
 export default function DebtPlannerScreen({ navigation }) {
     const COLORS = useTheme(state => state.COLORS);
     const isDarkMode = useTheme(state => state.isDarkMode);
-    const { userToken, userInfo } = useAuth();
+    const { userInfo } = useAuth();
     
-    const [debts, setDebts] = useState([]);
-    const [loading, setLoading] = useState(true);
+    const debts = useFinanceStore(state => state.debts);
+    const fetchDebts = useFinanceStore(state => state.fetchDebts);
+    const loadingDebts = useFinanceStore(state => state.isLoadingDebts);
+    
     const [totalMinPayments, setTotalMinPayments] = useState(0);
     const [extraPaymentStr, setExtraPaymentStr] = useState('500');
     
@@ -125,47 +126,23 @@ export default function DebtPlannerScreen({ navigation }) {
     const [paying, setPaying] = useState(false);
     const [alert, setAlert] = useState({ visible: false, title: '', message: '', type: 'info' });
 
-    const fetchDebts = React.useCallback(async () => {
-        try {
-            const data = await getDebts();
-            
-            // Only care about money Owed By Me that is not settled
-            const myDebts = data.filter(d => d.direction === 'owed_by_me' && d.status !== 'settled');
-            
-            let mins = 0;
-            myDebts.forEach(d => { mins += (d.monthlyPayment || 100); });
-            
-            setDebts(myDebts);
-            setTotalMinPayments(mins);
-            setExtraPaymentStr(Math.round(mins * 0.1).toString());
-        } catch (err) {
-            console.error('[DebtPlanner] fetch error:', err);
-        } finally {
-            setLoading(false);
-        }
-    }, []);
+    const myDebts = React.useMemo(() => 
+        debts.filter(d => d.direction === 'owed_by_me' && d.status !== 'settled' && !d.isArchived),
+    [debts]);
 
     useEffect(() => {
-        fetchDebts();
+        fetchDebts(false); // load from cache if available
     }, [fetchDebts]);
 
     useEffect(() => {
-        if (!userInfo?._id) return;
-        connectSocket(userInfo._id);
-        const socket = getSocket();
-
-        const handleUpdate = () => { fetchDebts(); };
-
-        socket.on('new_debt', handleUpdate);
-        socket.on('update_debt', handleUpdate);
-        socket.on('delete_debt', handleUpdate);
-
-        return () => {
-            socket.off('new_debt', handleUpdate);
-            socket.off('update_debt', handleUpdate);
-            socket.off('delete_debt', handleUpdate);
-        };
-    }, [userInfo?._id, fetchDebts]);
+        let mins = 0;
+        myDebts.forEach(d => { mins += (d.monthlyPayment || 100); });
+        setTotalMinPayments(mins);
+        // Set initial extra payment to 10% of minimums if first load
+        if (extraPaymentStr === '500' && mins > 0) {
+            setExtraPaymentStr(Math.round(mins * 0.1).toString());
+        }
+    }, [myDebts]);
 
     const handleLogPayment = async () => {
         const amt = parseFloat(payModal.amount);
@@ -245,7 +222,7 @@ export default function DebtPlannerScreen({ navigation }) {
                         {/* Summary Card */}
                         <View style={[styles.card, { backgroundColor: COLORS.surface }]}>
                             <Text style={[styles.cardTitle, { color: COLORS.textMuted }]}>ACTIVE DEBTS</Text>
-                            <Text style={[styles.importantMetric, { color: COLORS.text }]}>{debts.length} {debts.length === 1 ? 'Account' : 'Accounts'}</Text>
+                            <Text style={[styles.importantMetric, { color: COLORS.text }]}>{myDebts.length} {myDebts.length === 1 ? 'Account' : 'Accounts'}</Text>
                             <View style={styles.divider} />
                             <Text style={[styles.cardTitle, { color: COLORS.textMuted, marginTop: 10 }]}>REQUIRED MINIMUMS</Text>
                             <Text style={[styles.importantDesc, { color: COLORS.textMuted }]}>

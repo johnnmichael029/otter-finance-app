@@ -1,18 +1,18 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import {
-    View, Text, StyleSheet, TouchableOpacity, FlatList,
-    ActivityIndicator, RefreshControl, Animated as RNAnimated
+    View, Text, StyleSheet, TouchableOpacity,
+    ActivityIndicator, RefreshControl
 } from 'react-native';
-import Animated, { ZoomIn, ZoomOut } from 'react-native-reanimated';
-import { Swipeable } from 'react-native-gesture-handler';
+import { FlashList } from '@shopify/flash-list';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Feather, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useTheme } from '../../context/ThemeContext';
 import { useAuth } from '../../context/AuthContext';
-import { getShoppingSessions, deleteShoppingSession } from '../../api/api';
+import { getShoppingSessions, deleteShoppingSession, toggleArchiveShoppingSession } from '../../api/api';
 import { spacing, radius } from '../../theme/colors';
 import Skeleton from '../../components/Skeleton';
 import { formatCurrency, formatDate } from '../../utils/formatters';
+import SwipeableRow from '../../components/SwipeableRow';
 
 const PM_ICONS = { cash: 'cash', gcash: 'cellphone', card: 'credit-card', other: 'dots-horizontal' };
 const STATUS_COLORS = { completed: '#22c55e', cancelled: '#ef4444', active: '#f59e0b' };
@@ -54,30 +54,30 @@ export default function ShoppingHomeScreen({ navigation }) {
         }).catch(() => { });
     };
 
-    const renderRightActions = (progress, dragX, item) => {
-        const scale = dragX.interpolate({
-            inputRange: [-80, 0],
-            outputRange: [1, 0],
-            extrapolate: 'clamp',
-        });
-
-        return (
-            <TouchableOpacity
-                onPress={() => handleDelete(item._id)}
-                style={[styles.hiddenDeleteBtn, { backgroundColor: '#ef4444' }]}
-                activeOpacity={0.8}
-            >
-                <RNAnimated.View style={{ transform: [{ scale }] }}>
-                    <Feather name="trash-2" size={24} color="#fff" />
-                    <Text style={{ color: '#fff', fontSize: 10, fontWeight: '800', marginTop: 4 }}>Delete</Text>
-                </RNAnimated.View>
-            </TouchableOpacity>
-        );
+    const handleArchive = (id) => {
+        toggleArchiveShoppingSession(id).then(() => {
+            loadSessions();
+        }).catch(() => { });
     };
 
     const renderItem = ({ item }) => {
         const statusColor = STATUS_COLORS[item.status] || COLORS.textMuted;
         const pmIconName = PM_ICONS[item.paymentMethod] || 'dots-horizontal';
+
+        // Determine swipe action based on status
+        const rightAction =
+            item.status === 'completed' ? {
+                color: '#E91E8C',
+                icon: 'archive',
+                iconFamily: 'MaterialCommunityIcons',
+                label: 'Archive',
+                onPress: () => handleArchive(item._id),
+            } : item.status === 'cancelled' ? {
+                color: '#ef4444',
+                icon: 'trash-2',
+                label: 'Delete',
+                onPress: () => handleDelete(item._id),
+            } : null;
 
         const content = (
             <TouchableOpacity
@@ -123,22 +123,14 @@ export default function ShoppingHomeScreen({ navigation }) {
         );
 
         return (
-            <Animated.View key={item._id} entering={ZoomIn.springify().damping(50).mass(0.9)} exiting={ZoomOut.duration(100)}>
-                {item.status === 'cancelled' ? (
-                    <Swipeable
-                        renderRightActions={(prog, drag) => renderRightActions(prog, drag, item)}
-                        friction={1}
-                        overshootRight={false}
-                        containerStyle={{ marginBottom: spacing.sm }}
-                    >
-                        {content}
-                    </Swipeable>
-                ) : (
-                    <View style={{ marginBottom: spacing.sm }}>
-                        {content}
-                    </View>
-                )}
-            </Animated.View>
+            <SwipeableRow
+                key={item._id}
+                rightAction={rightAction}
+                containerStyle={{ marginBottom: spacing.sm }}
+                disabled={item.status === 'active'}
+            >
+                {content}
+            </SwipeableRow>
         );
     };
 
@@ -160,7 +152,13 @@ export default function ShoppingHomeScreen({ navigation }) {
                 </View>
                 <View style={styles.headerActions}>
                     <TouchableOpacity
-                        style={[styles.templateBtn, { backgroundColor: COLORS.surface, borderWeight: 1, borderColor: COLORS.border }]}
+                        style={[styles.templateBtn, { backgroundColor: COLORS.surface, borderWidth: 1, borderColor: COLORS.border }]}
+                        onPress={() => navigation.navigate('ShoppingArchive')}
+                    >
+                        <Feather name="archive" size={16} color={COLORS.text} />
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                        style={[styles.templateBtn, { backgroundColor: COLORS.surface, borderWidth: 1, borderColor: COLORS.border }]}
                         onPress={() => navigation.navigate('ShoppingTemplates')}
                     >
                         <Feather name="list" size={16} color={COLORS.text} />
@@ -222,20 +220,23 @@ export default function ShoppingHomeScreen({ navigation }) {
                     ))}
                 </View>
             ) : (
-                <FlatList
-                    data={sessions}
-                    keyExtractor={item => item._id}
-                    renderItem={renderItem}
-                    contentContainerStyle={{ paddingHorizontal: spacing.lg, paddingBottom: 120 }}
-                    refreshControl={<RefreshControl refreshing={refreshing} onRefresh={loadSessions} tintColor={COLORS.primary} />}
-                    ListEmptyComponent={() => (
-                        <View style={styles.emptyContainer}>
-                            <Text style={styles.emptyEmoji}>🛒</Text>
-                            <Text style={[styles.emptyText, { color: COLORS.textMuted }]}>No shopping trips yet!</Text>
-                            <Text style={[styles.emptySubText, { color: COLORS.textMuted }]}>Tap "Start" to begin your smart shopping experience.</Text>
-                        </View>
-                    )}
-                />
+                <View style={{ flex: 1 }}>
+                    <FlashList
+                        data={sessions}
+                        keyExtractor={item => item._id}
+                        renderItem={renderItem}
+                        estimatedItemSize={100}
+                        contentContainerStyle={{ paddingHorizontal: spacing.lg, paddingBottom: 120, paddingTop: 10 }}
+                        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={loadSessions} tintColor={COLORS.primary} />}
+                        ListEmptyComponent={() => (
+                            <View style={styles.emptyContainer}>
+                                <Text style={styles.emptyEmoji}>🛒</Text>
+                                <Text style={[styles.emptyText, { color: COLORS.textMuted }]}>No shopping trips yet!</Text>
+                                <Text style={[styles.emptySubText, { color: COLORS.textMuted }]}>Tap "Start" to begin your smart shopping experience.</Text>
+                            </View>
+                        )}
+                    />
+                </View>
             )}
         </SafeAreaView>
     );
@@ -273,4 +274,5 @@ const getStyles = (COLORS) => StyleSheet.create({
     emptySubText: { fontSize: 13, fontWeight: '500', textAlign: 'center', paddingHorizontal: 32 },
     backBtn: { width: 40, height: 40, borderRadius: 12, justifyContent: 'center', alignItems: 'center' },
     hiddenDeleteBtn: { width: 80, height: '100%', borderRadius: radius.xl, justifyContent: 'center', alignItems: 'center', marginLeft: 12, elevation: 1 },
+    hiddenArchiveBtn: { width: 80, height: '100%', borderRadius: radius.xl, justifyContent: 'center', alignItems: 'center', marginRight: 12, elevation: 1 },
 });

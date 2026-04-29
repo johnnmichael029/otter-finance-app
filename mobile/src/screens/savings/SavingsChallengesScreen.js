@@ -1,9 +1,10 @@
 import React, { useState, useCallback, useEffect } from 'react';
 import {
-    View, Text, StyleSheet, TouchableOpacity, FlatList, RefreshControl, ScrollView, ActivityIndicator
+    View, Text, StyleSheet, TouchableOpacity, RefreshControl, ScrollView, ActivityIndicator
 } from 'react-native';
+import { FlashList } from '@shopify/flash-list';
 import Animated, { ZoomIn, ZoomOut, LinearTransition } from 'react-native-reanimated';
-import { Swipeable } from 'react-native-gesture-handler';
+import SwipeableRow from '../../components/SwipeableRow';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Feather, Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useTheme } from '../../context/ThemeContext';
@@ -130,61 +131,44 @@ export default function SavingsChallengesScreen({ navigation }) {
         const pIndex = item.participants?.findIndex(p => p.user?._id === userInfo._id);
         const myAmount = (isParticipant && pIndex !== -1) ? item.participants[pIndex].currentAmount : item.currentAmount;
         const myTarget = item.targetAmount;
-        
+
         const pct = myTarget > 0 ? Math.min((myAmount / myTarget) * 100, 100) : 0;
         const isComplete = item.status === 'completed' || pct >= 100;
         const isArchived = item.status === 'archived';
 
-        const renderRightActions = () => (
-            <View style={styles.swipeActions}>
-                <TouchableOpacity
-                    style={[styles.archiveAction, { backgroundColor: isArchived ? COLORS.primary : '#725149' }]}
-                    onPress={() => handleArchiveToggle(item._id, item.status)}
-                    activeOpacity={0.8}
-                >
-                    <MaterialCommunityIcons
-                        name={isArchived ? "archive-arrow-up-outline" : "archive-arrow-down-outline"}
-                        size={24}
-                        color="#fff"
-                    />
-                    <Text style={styles.archiveActionText}>{isArchived ? 'Restore' : 'Archive'}</Text>
-                </TouchableOpacity>
-            </View>
-        );
+        let leftAction = null;
+        let rightAction = null;
 
-        const renderLeftActions = () => (
-            <View style={styles.swipeActions}>
-                <TouchableOpacity
-                    style={[styles.deleteAction, { backgroundColor: COLORS.error || '#ef4444' }]}
-                    onPress={() => handleDeleteChallenge(item._id)}
-                    activeOpacity={0.8}
-                >
-                    <Feather name="trash-2" size={24} color="#fff" />
-                    <Text style={styles.archiveActionText}>Delete</Text>
-                </TouchableOpacity>
-            </View>
-        );
+        if (isArchived) {
+            leftAction = {
+                color: COLORS.error || '#ef4444',
+                icon: 'trash-2',
+                label: 'Delete',
+                onPress: () => handleDeleteChallenge(item._id, true)
+            };
+            rightAction = {
+                color: COLORS.primary,
+                icon: 'archive-arrow-up-outline',
+                iconFamily: 'MaterialCommunityIcons',
+                label: 'Restore',
+                onPress: () => handleArchiveToggle(item._id, item.status)
+            };
+        } else {
+            rightAction = {
+                color: COLORS.primary,
+                icon: 'archive-arrow-down-outline',
+                iconFamily: 'MaterialCommunityIcons',
+                label: 'Archive',
+                onPress: () => handleArchiveToggle(item._id, item.status)
+            };
+        }
 
         return (
-            <Animated.View layout={LinearTransition.springify()} entering={ZoomIn.springify().damping(50).mass(0.9)} exiting={ZoomOut.duration(100)}>
-                <Swipeable
-                    renderRightActions={renderRightActions}
-                    renderLeftActions={isArchived ? renderLeftActions : null}
-                    onSwipeableOpen={(direction) => {
-                        if (direction === 'right') {
-                            // Swiped to the left (Right side opened) -> Restore/Archive
-                            handleArchiveToggle(item._id, item.status);
-                        } else if (direction === 'left' && isArchived) {
-                            // Swiped to the right (Left side opened) -> Auto-Delete
-                            handleDeleteChallenge(item._id, true);
-                        }
-                    }}
-                    friction={2}
-                    overshootRight={false}
-                    overshootLeft={false}
-                    rightThreshold={40}
-                    leftThreshold={40}
-                    containerStyle={{ marginBottom: 16 }}
+            <Animated.View layout={LinearTransition.springify()} entering={ZoomIn.springify().damping(50).mass(0.9)} exiting={ZoomOut.duration(100)} style={{ marginBottom: 16 }}>
+                <SwipeableRow
+                    leftAction={leftAction}
+                    rightAction={rightAction}
+                    containerStyle={{ marginBottom: 0 }}
                 >
                     <View style={[styles.card, { backgroundColor: COLORS.surface, marginBottom: 0 }]}>
                         <TouchableOpacity
@@ -240,147 +224,150 @@ export default function SavingsChallengesScreen({ navigation }) {
                             </View>
                         )}
                     </View>
-                </Swipeable>
+                </SwipeableRow>
             </Animated.View>
         );
     };
 
     const filteredChallenges = challengesFromStore.filter(c => {
         if (activeTab === 'Archived') return c.status === 'archived';
-                return c.status !== 'archived';
+        return c.status !== 'archived';
     });
 
-                return (
-                <SafeAreaView style={styles.safe}>
-                    <View style={styles.header}>
-                        <View style={styles.topRow}>
-                            <View>
-                                <Text style={styles.title}>Challenges</Text>
-                                <Text style={[styles.sub, { color: COLORS.textMuted }]}>Gamify your savings journey</Text>
-                            </View>
-                            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
-                                {activeTab === 'Archived' && challengesFromStore.some(c => c.status === 'archived') && (
-                                    <TouchableOpacity
-                                        onPress={handleEmptyArchives}
-                                        style={{ padding: 4 }}
-                                    >
-                                        <Feather name="trash-2" size={20} color={COLORS.error || '#ef4444'} />
-                                    </TouchableOpacity>
-                                )}
-                                <TouchableOpacity
-                                    style={[styles.backBtn, { backgroundColor: COLORS.surface }]}
-                                    onPress={() => navigation.goBack()}
-                                >
-                                    <Feather name="x" size={24} color={COLORS.text} />
-                                </TouchableOpacity>
-                            </View>
-                        </View>
-
-                        <View style={{ height: 48, marginTop: spacing.md }}>
-                            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.tabsRow} style={{ flexGrow: 0 }}>
-                                {TABS.map(tab => {
-                                    const active = activeTab === tab;
-                                    return (
-                                        <TouchableOpacity key={tab} onPress={() => setActiveTab(tab)} style={[styles.tab, active && { backgroundColor: COLORS.primary }]}>
-                                            <Text style={[styles.tabText, { color: active ? '#fff' : COLORS.textMuted }]}>{tab}</Text>
-                                        </TouchableOpacity>
-                                    );
-                                })}
-                            </ScrollView>
-                        </View>
+    return (
+        <SafeAreaView style={styles.safe}>
+            <View style={styles.header}>
+                <View style={styles.topRow}>
+                    <View>
+                        <Text style={styles.title}>Challenges</Text>
+                        <Text style={[styles.sub, { color: COLORS.textMuted }]}>Gamify your savings journey</Text>
                     </View>
-
-                    <FlatList
-                        data={filteredChallenges}
-                        renderItem={renderChallengeCard}
-                        keyExtractor={item => item._id}
-                        contentContainerStyle={styles.listContent}
-                        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={loadData} tintColor={COLORS.primary} />}
-                        ListEmptyComponent={() => (
-                            <View style={styles.emptyContainer}>
-                                <Text style={styles.emptyEmoji}>{activeTab === 'Archived' ? '📦' : '⚔️'}</Text>
-                                <Text style={[styles.emptyText, { color: COLORS.textMuted }]}>
-                                    {activeTab === 'Archived' ? 'No archived challenges.' : 'No active challenges.'}
-                                </Text>
-                                {activeTab === 'Active' && (
-                                    <TouchableOpacity
-                                        style={[styles.createBtn, { backgroundColor: COLORS.primary }]}
-                                        onPress={() => navigation.navigate('CreateChallenge')}
-                                    >
-                                        <Text style={styles.createBtnText}>Create a Challenge</Text>
-                                    </TouchableOpacity>
-                                )}
-                            </View>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+                        {activeTab === 'Archived' && challengesFromStore.some(c => c.status === 'archived') && (
+                            <TouchableOpacity
+                                onPress={handleEmptyArchives}
+                                style={{ padding: 4 }}
+                            >
+                                <Feather name="trash-2" size={20} color={COLORS.error || '#ef4444'} />
+                            </TouchableOpacity>
                         )}
-                    />
-
-                    {challengesFromStore.length > 0 && (
                         <TouchableOpacity
-                            style={[styles.fab, { backgroundColor: COLORS.primary }]}
-                            onPress={() => navigation.navigate('CreateChallenge')}
+                            style={[styles.backBtn, { backgroundColor: COLORS.surface }]}
+                            onPress={() => navigation.goBack()}
                         >
-                            <Feather name="plus" size={24} color="#fff" />
+                            <Feather name="x" size={24} color={COLORS.text} />
                         </TouchableOpacity>
-                    )}
+                    </View>
+                </View>
 
-                    <CustomAlertModal
-                        visible={alertConfig.visible}
-                        onClose={() => setAlertConfig(p => ({ ...p, visible: false }))}
-                        title={alertConfig.title}
-                        message={alertConfig.message}
-                        type={alertConfig.type}
-                        onConfirm={alertConfig.onConfirm}
-                    />
-                </SafeAreaView>
-                );
+                <View style={{ height: 48, marginTop: spacing.md }}>
+                    <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.tabsRow} style={{ flexGrow: 0 }}>
+                        {TABS.map(tab => {
+                            const active = activeTab === tab;
+                            return (
+                                <TouchableOpacity key={tab} onPress={() => setActiveTab(tab)} style={[styles.tab, active && { backgroundColor: COLORS.primary }]}>
+                                    <Text style={[styles.tabText, { color: active ? '#fff' : COLORS.textMuted }]}>{tab}</Text>
+                                </TouchableOpacity>
+                            );
+                        })}
+                    </ScrollView>
+                </View>
+            </View>
+
+            <View style={{ flex: 1 }}>
+                <FlashList
+                    data={filteredChallenges}
+                    renderItem={renderChallengeCard}
+                    estimatedItemSize={100}
+                    keyExtractor={item => item._id}
+                    contentContainerStyle={styles.listContent}
+                    refreshControl={<RefreshControl refreshing={refreshing} onRefresh={loadData} tintColor={COLORS.primary} />}
+                    ListEmptyComponent={() => (
+                        <View style={styles.emptyContainer}>
+                            <Text style={styles.emptyEmoji}>{activeTab === 'Archived' ? '📦' : '⚔️'}</Text>
+                            <Text style={[styles.emptyText, { color: COLORS.textMuted }]}>
+                                {activeTab === 'Archived' ? 'No archived challenges.' : 'No active challenges.'}
+                            </Text>
+                            {activeTab === 'Active' && (
+                                <TouchableOpacity
+                                    style={[styles.createBtn, { backgroundColor: COLORS.primary }]}
+                                    onPress={() => navigation.navigate('CreateChallenge')}
+                                >
+                                    <Text style={styles.createBtnText}>Create a Challenge</Text>
+                                </TouchableOpacity>
+                            )}
+                        </View>
+                    )}
+                />
+            </View>
+
+            {challengesFromStore.length > 0 && (
+                <TouchableOpacity
+                    style={[styles.fab, { backgroundColor: COLORS.primary }]}
+                    onPress={() => navigation.navigate('CreateChallenge')}
+                >
+                    <Feather name="plus" size={24} color="#fff" />
+                </TouchableOpacity>
+            )}
+
+            <CustomAlertModal
+                visible={alertConfig.visible}
+                onClose={() => setAlertConfig(p => ({ ...p, visible: false }))}
+                title={alertConfig.title}
+                message={alertConfig.message}
+                type={alertConfig.type}
+                onConfirm={alertConfig.onConfirm}
+            />
+        </SafeAreaView>
+    );
 }
 
 const getStyles = (COLORS) => StyleSheet.create({
-                    safe: {flex: 1, backgroundColor: COLORS.background },
-                listContent: {paddingHorizontal: spacing.lg, paddingBottom: 100 },
-                header: {padding: spacing.lg, paddingBottom: 0 },
-                topRow: {flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-                title: {fontSize: 26, fontWeight: '900', color: COLORS.text },
-                sub: {fontSize: 13, fontWeight: '600', marginTop: 2 },
-                backBtn: {width: 44, height: 44, borderRadius: 22, justifyContent: 'center', alignItems: 'center' },
-                tabsRow: {gap: 8, alignItems: 'center' },
-                tab: {paddingHorizontal: 16, paddingVertical: 8, borderRadius: 20, backgroundColor: COLORS.surface, justifyContent: 'center', height: 36 },
-                tabText: {fontSize: 13, fontWeight: '700' },
-                card: {borderRadius: radius.xl, padding: 16, marginBottom: 16, borderWidth: 1, borderColor: 'rgba(0,0,0,0.05)' },
-                cardHeader: {flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 16 },
-                iconBox: {width: 44, height: 44, borderRadius: 22, justifyContent: 'center', alignItems: 'center' },
-                cardTitle: {fontSize: 16, fontWeight: '900' },
-                cardSub: {fontSize: 12, fontWeight: '600', marginTop: 2 },
-                barContainer: {height: 8, backgroundColor: 'rgba(0,0,0,0.05)', borderRadius: 4, overflow: 'hidden', marginBottom: 12 },
-                barFill: {height: '100%', borderRadius: 4 },
-                cardFooter: {flexDirection: 'row', justifyContent: 'space-between' },
-                cardPct: {fontSize: 11, fontWeight: '700' },
-                cardTarget: {fontSize: 11, fontWeight: '700' },
-                inviteActions: {flexDirection: 'row', gap: 10, marginTop: 16, paddingTop: 16, borderTopWidth: 1, borderTopColor: 'rgba(0,0,0,0.05)' },
-                inviteBtn: {flex: 1, height: 40, borderRadius: radius.md, justifyContent: 'center', alignItems: 'center' },
-                inviteBtnText: {color: '#fff', fontSize: 14, fontWeight: '700' },
-                emptyContainer: {alignItems: 'center', marginTop: 60 },
-                emptyEmoji: {fontSize: 48, marginBottom: 16 },
-                emptyText: {fontSize: 15, fontWeight: '600', marginBottom: 24 },
-                createBtn: {paddingHorizontal: 24, paddingVertical: 14, borderRadius: radius.lg },
-                createBtnText: {color: '#fff', fontSize: 14, fontWeight: '800' },
-                swipeActions: {flexDirection: 'row', height: '100%' },
-                archiveAction: {
-                    width: 70,
-                height: '100%',
-                justifyContent: 'center',
-                alignItems: 'center',
-                borderRadius: radius.xl,
-                marginHorizontal: 4,
+    safe: { flex: 1, backgroundColor: COLORS.background },
+    listContent: { paddingHorizontal: spacing.lg, paddingBottom: 100 },
+    header: { padding: spacing.lg, paddingBottom: 0 },
+    topRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+    title: { fontSize: 26, fontWeight: '900', color: COLORS.text },
+    sub: { fontSize: 13, fontWeight: '600', marginTop: 2 },
+    backBtn: { width: 44, height: 44, borderRadius: 22, justifyContent: 'center', alignItems: 'center' },
+    tabsRow: { gap: 8, alignItems: 'center' },
+    tab: { paddingHorizontal: 16, paddingVertical: 8, borderRadius: 20, backgroundColor: COLORS.surface, justifyContent: 'center', height: 36 },
+    tabText: { fontSize: 13, fontWeight: '700' },
+    card: { borderRadius: radius.xl, padding: 16, marginBottom: 16, borderWidth: 1, borderColor: 'rgba(0,0,0,0.05)' },
+    cardHeader: { flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 16 },
+    iconBox: { width: 44, height: 44, borderRadius: 22, justifyContent: 'center', alignItems: 'center' },
+    cardTitle: { fontSize: 16, fontWeight: '900' },
+    cardSub: { fontSize: 12, fontWeight: '600', marginTop: 2 },
+    barContainer: { height: 8, backgroundColor: 'rgba(0,0,0,0.05)', borderRadius: 4, overflow: 'hidden', marginBottom: 12 },
+    barFill: { height: '100%', borderRadius: 4 },
+    cardFooter: { flexDirection: 'row', justifyContent: 'space-between' },
+    cardPct: { fontSize: 11, fontWeight: '700' },
+    cardTarget: { fontSize: 11, fontWeight: '700' },
+    inviteActions: { flexDirection: 'row', gap: 10, marginTop: 16, paddingTop: 16, borderTopWidth: 1, borderTopColor: 'rgba(0,0,0,0.05)' },
+    inviteBtn: { flex: 1, height: 40, borderRadius: radius.md, justifyContent: 'center', alignItems: 'center' },
+    inviteBtnText: { color: '#fff', fontSize: 14, fontWeight: '700' },
+    emptyContainer: { alignItems: 'center', marginTop: 60 },
+    emptyEmoji: { fontSize: 48, marginBottom: 16 },
+    emptyText: { fontSize: 15, fontWeight: '600', marginBottom: 24 },
+    createBtn: { paddingHorizontal: 24, paddingVertical: 14, borderRadius: radius.lg },
+    createBtnText: { color: '#fff', fontSize: 14, fontWeight: '800' },
+    swipeActions: { flexDirection: 'row', height: '100%' },
+    archiveAction: {
+        width: 70,
+        height: '100%',
+        justifyContent: 'center',
+        alignItems: 'center',
+        borderRadius: radius.xl,
+        marginHorizontal: 4,
     },
-                deleteAction: {
-                    width: 70,
-                height: '100%',
-                justifyContent: 'center',
-                alignItems: 'center',
-                borderRadius: radius.xl,
-                marginHorizontal: 4,
+    deleteAction: {
+        width: 70,
+        height: '100%',
+        justifyContent: 'center',
+        alignItems: 'center',
+        borderRadius: radius.xl,
+        marginHorizontal: 4,
     },
-                archiveActionText: {color: '#fff', fontSize: 10, fontWeight: '800', marginTop: 4 },
-                fab: {position: 'absolute', bottom: 24, right: 24, width: 56, height: 56, borderRadius: 28, justifyContent: 'center', alignItems: 'center', elevation: 8, shadowColor: '#000', shadowOpacity: 0.3, shadowRadius: 8, shadowOffset: {width: 0, height: 4 } }
+    archiveActionText: { color: '#fff', fontSize: 10, fontWeight: '800', marginTop: 4 },
+    fab: { position: 'absolute', bottom: 24, right: 24, width: 56, height: 56, borderRadius: 28, justifyContent: 'center', alignItems: 'center', elevation: 8, shadowColor: '#000', shadowOpacity: 0.3, shadowRadius: 8, shadowOffset: { width: 0, height: 4 } }
 });

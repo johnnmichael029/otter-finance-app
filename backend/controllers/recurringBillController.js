@@ -124,6 +124,13 @@ const markBillPaid = async (req, res) => {
             date: new Date(),
         });
 
+        // Update persistent Hand balance
+        const user = await User.findById(req.userId);
+        if (user) {
+            user.handBalance -= bill.amount;
+            await user.save();
+        }
+
         // Advance due date
         bill.nextDueDate = computeNextDueDate(bill.nextDueDate, bill.frequency);
         bill.notified = false;
@@ -134,6 +141,7 @@ const markBillPaid = async (req, res) => {
         if (io) {
             io.to(`user:${req.userId}`).emit('new_transaction', transaction);
             io.to(`user:${req.userId}`).emit('update_recurring_bill', bill);
+            io.to(`user:${req.userId}`).emit('wallet_updated', { _id: 'main', balance: user?.handBalance || 0 });
         }
 
         res.json(bill);

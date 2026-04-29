@@ -7,12 +7,28 @@ import { spacing, radius } from '../../theme/colors';
 
 const SERVICES = [
     {
+        category: 'Analytics & Insights',
+        items: [
+            { id: 'net_worth', icon: 'bar-chart-2', label: 'Net Worth', color: '#8b5cf6', screen: 'NetWorth', badge: 'NEW' },
+            { id: 'analytics', icon: 'analytics', family: 'ionicons', label: 'Analytics', color: '#10b981', screen: 'Analytics' },
+            { id: 'export', icon: 'download', label: 'Export Data', color: '#3b82f6', screen: 'ExportData' },
+        ]
+    },
+    {
+        category: 'Savings & Wealth',
+        items: [
+            { id: 'savings', icon: 'piggy-bank-outline', label: 'Savings', color: '#E91E8C', action: 'savings' },
+            { id: 'savings_archive', icon: 'archive', label: 'Archive', color: '#6366f1', screen: 'SavingsArchive' },
+            { id: 'budget', icon: 'pie-chart', label: 'Budget', color: '#f97316', screen: 'Budget' },
+        ]
+    },
+    {
         category: 'Core Finance',
         items: [
             { id: 'debts', icon: 'credit-card', label: 'Debts', color: '#f59e0b', screen: 'DebtScreen' },
+            { id: 'debt_planner', icon: 'trending-down', label: 'Debt Planner', color: '#ef4444', screen: 'DebtPlanner' },
             { id: 'bills', icon: 'repeat', label: 'Bills', color: '#22c55e', screen: 'RecurringBills' },
             { id: 'convert', icon: 'dollar-sign', label: 'Converter', color: '#8b5cf6', screen: 'CurrencyConverter' },
-            { id: 'debt_planner', icon: 'trending-down', label: 'Debt Planner', color: '#ef4444', screen: 'DebtPlanner' },
         ]
     },
     {
@@ -29,19 +45,6 @@ const SERVICES = [
             { id: 'scanner', icon: 'maximize', label: 'Scanner', color: '#06b6d4', screen: 'BarcodeScanner' },
         ]
     },
-    {
-        category: 'Analytics & Insights',
-        items: [
-            { id: 'analytics', icon: 'analytics', family: 'ionicons', label: 'Analytics', color: '#10b981', screen: 'Analytics' },
-        ]
-    },
-    {
-        category: 'Savings & Wealth',
-        items: [
-            { id: 'budget', icon: 'pie-chart', label: 'Budget', color: '#f97316', screen: 'Budget' },
-            { id: 'savings', icon: 'piggy-bank-outline', label: 'Savings', color: '#E91E8C', action: 'savings' },
-        ]
-    }
 ];
 
 export default function AllServicesScreen({ navigation }) {

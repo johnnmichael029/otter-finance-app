@@ -1,4 +1,6 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react';
+import { useFocusEffect } from '@react-navigation/native';
+import Reanimated, { ZoomIn, ZoomOut, LinearTransition } from 'react-native-reanimated';
 import {
     View, Text, StyleSheet, TouchableOpacity, ScrollView,
     RefreshControl, Modal, TextInput, KeyboardAvoidingView,
@@ -19,8 +21,7 @@ import {
     logDebtPayment, getDebtPayments, getFriends, respondDebtRequest,
     deleteTransaction
 } from '../../api/api';
-import { Swipeable } from 'react-native-gesture-handler';
-import { connectSocket, getSocket } from '../../utils/socket';
+import SwipeableRow from '../../components/SwipeableRow';
 import CustomAlertModal from '../../components/CustomAlertModal';
 import Skeleton from '../../components/Skeleton';
 import WalletSelector, { calcNativeDeduct, hasEnoughBalance } from '../../components/WalletSelector';
@@ -181,6 +182,7 @@ export default function DebtScreen({ navigation }) {
     const [loading, setLoading] = useState(true);
     const [refreshing, setRefreshing] = useState(false);
     const [filter, setFilter] = useState('all'); // 'all' | 'owed_by_me' | 'owed_to_me' | 'settled'
+    const [hiddenDebtIds, setHiddenDebtIds] = useState([]);
 
     // Modals
     const [addModal, setAddModal] = useState(false);
@@ -274,32 +276,25 @@ export default function DebtScreen({ navigation }) {
         }
     }, [fetchDebts]);
 
+    // Auto-refresh when screen focuses
+    useFocusEffect(
+        useCallback(() => {
+            setHiddenDebtIds([]); // Clear any optimistic hidden states
+            fetchDebts(true);
+        }, [fetchDebts])
+    );
+
     useEffect(() => {
         load(false); // don't force on mount if we have cache
     }, [load]);
-
-    useEffect(() => {
-        if (!userInfo?._id) return;
-        connectSocket(userInfo._id);
-        const socket = getSocket();
-
-        const handleDebtChange = () => { load(true); };
-
-        socket.on('new_debt', handleDebtChange);
-        socket.on('update_debt', handleDebtChange);
-        socket.on('delete_debt', handleDebtChange);
-
-        return () => {
-            socket.off('new_debt', handleDebtChange);
-            socket.off('update_debt', handleDebtChange);
-            socket.off('delete_debt', handleDebtChange);
-        };
-    }, [debts, load]);
 
     const onRefresh = () => { setRefreshing(true); load(); };
 
     // Filtered debts
     const filtered = debts.filter(d => {
+        if (hiddenDebtIds.includes(d._id)) return false;
+        if (d.isArchived) return false;
+
         // Pending incoming requests should ALWAYS show in 'all' or their respective direction tab, but never 'settled'.
         const isIncoming = d.syncStatus === 'pending' && d.linkedUserId === userInfo?._id;
 
@@ -307,8 +302,6 @@ export default function DebtScreen({ navigation }) {
         if (filter === 'settled') return d.status === 'settled' && d.syncStatus !== 'pending';
 
         if (isIncoming) {
-            // Incoming requests: The original debt direction is from the sender's perspective.
-            // If sender chose "owed_to_me", it means "owed_by_me" for me.
             const myDirection = d.direction === 'owed_to_me' ? 'owed_by_me' : 'owed_to_me';
             return myDirection === filter;
         }
@@ -477,6 +470,27 @@ export default function DebtScreen({ navigation }) {
         }
     };
 
+    const handleArchiveDebt = async (id) => {
+        setHiddenDebtIds(prev => [...prev, id]);
+        try {
+            await updateDebt(id, { isArchived: true });
+            await fetchDebts(true);
+            setHiddenDebtIds(prev => prev.filter(x => x !== id));
+        } catch (e) {
+            setHiddenDebtIds(prev => prev.filter(x => x !== id));
+            console.error('Archive failed:', e);
+        }
+    };
+
+    const handleRestoreDebt = async (id) => {
+        try {
+            await updateDebt(id, { isArchived: false });
+            load();
+        } catch (e) {
+            console.error('Restore failed:', e);
+        }
+    };
+
     const handleDeletePayment = (payment) => {
         if (!payment.transactionId) {
             return showAlert('error', 'Error', 'This payment log is not linked to a transaction and cannot be deleted.');
@@ -587,7 +601,13 @@ export default function DebtScreen({ navigation }) {
                     <Text style={[styles.headerTitle, { color: COLORS.text }]}>Debt Tracker</Text>
                     <Text style={[styles.headerSub, { color: COLORS.textMuted }]}>Installments & loans</Text>
                 </View>
-                <View style={{ flexDirection: 'row', gap: 8, marginLeft: "auto" }}>
+                <View style={{ flexDirection: 'row', gap: 8, marginLeft: 'auto', alignItems: 'center' }}>
+                    <TouchableOpacity
+                        onPress={() => navigation.navigate('DebtArchive')}
+                        style={[styles.addBtn, { backgroundColor: COLORS.surface, borderColor: COLORS.border, borderWidth: 1, paddingHorizontal: 12, justifyContent: 'center' }]}
+                    >
+                        <Feather name="archive" size={20} color={COLORS.textMuted} />
+                    </TouchableOpacity>
                     <TouchableOpacity
                         onPress={() => navigation.navigate('SplitBillScreen')}
                         style={[styles.addBtn, { backgroundColor: COLORS.surface, borderColor: COLORS.border, borderWidth: 1, paddingHorizontal: 12 }]}
@@ -600,7 +620,6 @@ export default function DebtScreen({ navigation }) {
                         style={[styles.addBtn, { backgroundColor: COLORS.primary }]}
                     >
                         <Feather name="plus" size={20} color="#fff" />
-                        <Text style={styles.startBtnText}>Debt</Text>
                     </TouchableOpacity>
                 </View>
             </View>
@@ -656,22 +675,47 @@ export default function DebtScreen({ navigation }) {
                             </Text>
                         </View>
                     )}
-                    renderItem={({ item: debt }) => (
-                        <DebtCard
-                            debt={debt}
-                            COLORS={COLORS}
-                            userId={userInfo?._id}
-                            onPay={(d) => {
+                    renderItem={({ item: debt }) => {
+                        const isSettled = debt.status === 'settled';
+
+                        const cardProps = {
+                            debt,
+                            COLORS,
+                            userId: userInfo?._id,
+                            onPay: (d) => {
                                 setPayModal({ visible: true, debt: d });
                                 setPayAmount('');
                                 setPayNote('');
                                 setSelectedWallet(null);
-                            }}
-                            onView={handleViewDetail}
-                            onAccept={(d) => handleRespondRequest(d._id, 'linked')}
-                            onReject={(d) => handleRespondRequest(d._id, 'rejected')}
-                        />
-                    )}
+                            },
+                            onView: handleViewDetail,
+                            onAccept: (d) => handleRespondRequest(d._id, 'linked'),
+                            onReject: (d) => handleRespondRequest(d._id, 'rejected')
+                        };
+
+                        if (!isSettled) {
+                            return (
+                                <SwipeableRow key={debt._id} containerStyle={{ marginBottom: 16 }}>
+                                    <DebtCard {...cardProps} />
+                                </SwipeableRow>
+                            );
+                        }
+
+                        return (
+                            <SwipeableRow
+                                key={debt._id}
+                                rightAction={{
+                                    color: COLORS.primary,
+                                    icon: 'archive',
+                                    label: 'Archive',
+                                    onPress: () => handleArchiveDebt(debt._id)
+                                }}
+                                containerStyle={{ marginBottom: 16 }}
+                            >
+                                <DebtCard {...cardProps} />
+                            </SwipeableRow>
+                        );
+                    }}
                 />
             </View>
 
@@ -689,214 +733,220 @@ export default function DebtScreen({ navigation }) {
                         </TouchableOpacity>
                     </View>
 
-                    <ScrollView showsVerticalScrollIndicator={false}>
-                        {/* Direction Toggle */}
-                        <Text style={[styles.formLabel, { color: COLORS.textMuted }]}>TYPE</Text>
-                        <View style={styles.toggleRow}>
-                            {[
-                                { key: 'owed_by_me', label: 'I Owe', icon: 'arrow-up-right', lib: 'feather', color: '#ef4444' },
-                                { key: 'owed_to_me', label: 'Owed to Me', icon: 'arrow-down-left', lib: 'feather', color: '#8b5cf6' },
-                            ].map(opt => {
-                                const isActive = form.direction === opt.key;
-                                return (
-                                    <TouchableOpacity
-                                        key={opt.key}
-                                        onPress={() => setForm(f => ({ ...f, direction: opt.key }))}
-                                        style={[styles.toggleBtn, isActive && { backgroundColor: COLORS.primary }]}
-                                    >
-                                        <Feather
-                                            name={opt.icon}
-                                            size={16}
-                                            color={isActive ? '#fff' : opt.color}
-                                            style={{ marginRight: 6 }}
-                                        />
-                                        <Text style={[styles.toggleText, { color: isActive ? '#fff' : COLORS.textMuted }]}>
-                                            {opt.label}
-                                        </Text>
-                                    </TouchableOpacity>
-                                );
-                            })}
-                        </View>
-
-                        {/* Name */}
-                        <Text style={[styles.formLabel, { color: COLORS.textMuted }]}>NAME / LABEL</Text>
-                        <View style={[styles.inputWrap, { backgroundColor: COLORS.background, borderColor: COLORS.border }]}>
-                            <Feather name="user" size={16} color={COLORS.textMuted} style={{ marginRight: 8 }} />
-                            <TextInput
-                                style={[styles.input, { color: COLORS.text }]}
-                                placeholder="e.g. BDO Phone Installment"
-                                placeholderTextColor={COLORS.textMuted}
-                                value={form.personName}
-                                onChangeText={v => setForm(f => ({ ...f, personName: v, linkedUserId: null }))}
-                            />
-                        </View>
-
-                        {/* Friend Picker */}
-                        {friends && friends.length > 0 && (
-                            <View style={{ marginTop: 12 }}>
-                                <Text style={[styles.formLabel, { color: COLORS.textMuted, marginTop: 0 }]}>OR SELECT A FRIEND TO LINK</Text>
-                                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 10, paddingRight: 20 }}>
-                                    {friends.map(friend => {
-                                        const isSelected = form.linkedUserId === friend._id;
-                                        return (
-                                            <TouchableOpacity
-                                                key={friend._id}
-                                                style={[styles.friendChip, {
-                                                    backgroundColor: isSelected ? COLORS.primary + '15' : COLORS.background,
-                                                    borderColor: isSelected ? COLORS.primary : COLORS.border
-                                                }]}
-                                                onPress={() => {
-                                                    if (isSelected) {
-                                                        setForm(s => ({ ...s, linkedUserId: null, personName: '' }));
-                                                    } else {
-                                                        setForm(s => ({ ...s, linkedUserId: friend._id, personName: friend.name }));
-                                                    }
-                                                }}
-                                            >
-                                                <View style={styles.friendAvatar}>
-                                                    {friend.avatar || friend.avatarUrl ? (
-                                                        <Image
-                                                            source={{
-                                                                uri: (friend.avatar || friend.avatarUrl).startsWith('http')
-                                                                    ? (friend.avatar || friend.avatarUrl)
-                                                                    : `${API_BASE.replace('/api', '')}/${friend.avatar || friend.avatarUrl}`
-                                                            }}
-                                                            style={styles.avatarImg}
-                                                            resizeMode="cover"
-                                                        />
-                                                    ) : (
-                                                        <Feather name="user" size={14} color={isSelected ? COLORS.primary : COLORS.textMuted} />
-                                                    )}
-                                                </View>
-                                                <Text style={[styles.friendName, { color: isSelected ? COLORS.primary : COLORS.text }]} numberOfLines={1}>
-                                                    {friend.name}
-                                                </Text>
-                                                {isSelected && <Feather name="check-circle" size={12} color={COLORS.primary} style={{ marginLeft: 4 }} />}
-                                            </TouchableOpacity>
-                                        );
-                                    })}
-                                </ScrollView>
+                    <KeyboardAvoidingView
+                        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+                        keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 60}
+                        style={{ flexShrink: 1 }}
+                    >
+                        <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 50 }}>
+                            {/* Direction Toggle */}
+                            <Text style={[styles.formLabel, { color: COLORS.textMuted }]}>TYPE</Text>
+                            <View style={styles.toggleRow}>
+                                {[
+                                    { key: 'owed_by_me', label: 'I Owe', icon: 'arrow-up-right', lib: 'feather', color: '#ef4444' },
+                                    { key: 'owed_to_me', label: 'Owed to Me', icon: 'arrow-down-left', lib: 'feather', color: '#8b5cf6' },
+                                ].map(opt => {
+                                    const isActive = form.direction === opt.key;
+                                    return (
+                                        <TouchableOpacity
+                                            key={opt.key}
+                                            onPress={() => setForm(f => ({ ...f, direction: opt.key }))}
+                                            style={[styles.toggleBtn, isActive && { backgroundColor: COLORS.primary }]}
+                                        >
+                                            <Feather
+                                                name={opt.icon}
+                                                size={16}
+                                                color={isActive ? '#fff' : opt.color}
+                                                style={{ marginRight: 6 }}
+                                            />
+                                            <Text style={[styles.toggleText, { color: isActive ? '#fff' : COLORS.textMuted }]}>
+                                                {opt.label}
+                                            </Text>
+                                        </TouchableOpacity>
+                                    );
+                                })}
                             </View>
-                        )}
 
-                        {/* Amount */}
-                        <Text style={[styles.formLabel, { color: COLORS.textMuted }]}>TOTAL AMOUNT</Text>
-                        <View style={[styles.inputWrap, { backgroundColor: COLORS.background, borderColor: COLORS.border }]}>
-                            <Text style={{ color: COLORS.primary, fontWeight: '800', marginRight: 8 }}>₱</Text>
-                            <TextInput
-                                style={[styles.input, { color: COLORS.text }]}
-                                placeholder="0.00"
-                                placeholderTextColor={COLORS.textMuted}
-                                keyboardType="decimal-pad"
-                                value={form.amount}
-                                onChangeText={v => setForm(f => ({ ...f, amount: v }))}
-                            />
-                        </View>
-
-                        {/* Description */}
-                        <Text style={[styles.formLabel, { color: COLORS.textMuted }]}>DESCRIPTION (OPTIONAL)</Text>
-                        <View style={[styles.inputWrap, { backgroundColor: COLORS.background, borderColor: COLORS.border }]}>
-                            <Feather name="file-text" size={16} color={COLORS.textMuted} style={{ marginRight: 8 }} />
-                            <TextInput
-                                style={[styles.input, { color: COLORS.text }]}
-                                placeholder="e.g. Samsung S25 via GCash"
-                                placeholderTextColor={COLORS.textMuted}
-                                value={form.description}
-                                onChangeText={v => setForm(f => ({ ...f, description: v }))}
-                            />
-                        </View>
-
-                        {/* Installment Toggle */}
-                        <TouchableOpacity
-                            onPress={() => setForm(f => ({ ...f, isInstallment: !f.isInstallment }))}
-                            style={[styles.installmentToggle, { backgroundColor: COLORS.background, borderColor: COLORS.border }]}
-                        >
-                            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                                <MaterialCommunityIcons
-                                    name="calendar-clock"
-                                    size={20}
-                                    color={form.isInstallment ? COLORS.primary : COLORS.textMuted}
+                            {/* Name */}
+                            <Text style={[styles.formLabel, { color: COLORS.textMuted }]}>NAME / LABEL</Text>
+                            <View style={[styles.inputWrap, { backgroundColor: COLORS.background, borderColor: COLORS.border }]}>
+                                <Feather name="user" size={16} color={COLORS.textMuted} style={{ marginRight: 8 }} />
+                                <TextInput
+                                    style={[styles.input, { color: COLORS.text }]}
+                                    placeholder="e.g. BDO Phone Installment"
+                                    placeholderTextColor={COLORS.textMuted}
+                                    value={form.personName}
+                                    onChangeText={v => setForm(f => ({ ...f, personName: v, linkedUserId: null }))}
                                 />
-                                <View>
-                                    <Text style={[styles.toggleMainText, { color: COLORS.text }]}>Installment Plan</Text>
-                                    <Text style={[styles.toggleSubText, { color: COLORS.textMuted }]}>
-                                        Set monthly payments & penalty rate
-                                    </Text>
-                                </View>
                             </View>
-                            <View style={[styles.checkCircle, form.isInstallment && { backgroundColor: COLORS.primary }]}>
-                                {form.isInstallment && <Feather name="check" size={14} color="#fff" />}
+
+                            {/* Friend Picker */}
+                            {friends && friends.length > 0 && (
+                                <View style={{ marginTop: 12 }}>
+                                    <Text style={[styles.formLabel, { color: COLORS.textMuted, marginTop: 0 }]}>OR SELECT A FRIEND TO LINK</Text>
+                                    <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 10, paddingRight: 20 }}>
+                                        {friends.map(friend => {
+                                            const isSelected = form.linkedUserId === friend._id;
+                                            return (
+                                                <TouchableOpacity
+                                                    key={friend._id}
+                                                    style={[styles.friendChip, {
+                                                        backgroundColor: isSelected ? COLORS.primary + '15' : COLORS.background,
+                                                        borderColor: isSelected ? COLORS.primary : COLORS.border
+                                                    }]}
+                                                    onPress={() => {
+                                                        if (isSelected) {
+                                                            setForm(s => ({ ...s, linkedUserId: null, personName: '' }));
+                                                        } else {
+                                                            setForm(s => ({ ...s, linkedUserId: friend._id, personName: friend.name }));
+                                                        }
+                                                    }}
+                                                >
+                                                    <View style={styles.friendAvatar}>
+                                                        {friend.avatar || friend.avatarUrl ? (
+                                                            <Image
+                                                                source={{
+                                                                    uri: (friend.avatar || friend.avatarUrl).startsWith('http')
+                                                                        ? (friend.avatar || friend.avatarUrl)
+                                                                        : `${API_BASE.replace('/api', '')}/${friend.avatar || friend.avatarUrl}`
+                                                                }}
+                                                                style={styles.avatarImg}
+                                                                resizeMode="cover"
+                                                            />
+                                                        ) : (
+                                                            <Feather name="user" size={14} color={isSelected ? COLORS.primary : COLORS.textMuted} />
+                                                        )}
+                                                    </View>
+                                                    <Text style={[styles.friendName, { color: isSelected ? COLORS.primary : COLORS.text }]} numberOfLines={1}>
+                                                        {friend.name}
+                                                    </Text>
+                                                    {isSelected && <Feather name="check-circle" size={12} color={COLORS.primary} style={{ marginLeft: 4 }} />}
+                                                </TouchableOpacity>
+                                            );
+                                        })}
+                                    </ScrollView>
+                                </View>
+                            )}
+
+                            {/* Amount */}
+                            <Text style={[styles.formLabel, { color: COLORS.textMuted }]}>TOTAL AMOUNT</Text>
+                            <View style={[styles.inputWrap, { backgroundColor: COLORS.background, borderColor: COLORS.border }]}>
+                                <Text style={{ color: COLORS.primary, fontWeight: '800', marginRight: 8 }}>₱</Text>
+                                <TextInput
+                                    style={[styles.input, { color: COLORS.text }]}
+                                    placeholder="0.00"
+                                    placeholderTextColor={COLORS.textMuted}
+                                    keyboardType="decimal-pad"
+                                    value={form.amount}
+                                    onChangeText={v => setForm(f => ({ ...f, amount: v }))}
+                                />
                             </View>
-                        </TouchableOpacity>
 
-                        {form.isInstallment && (
-                            <View style={[styles.installmentBox, { backgroundColor: COLORS.background, borderColor: COLORS.border }]}>
-                                <Text style={[styles.formLabel, { color: COLORS.textMuted }]}>MONTHLY PAYMENT</Text>
-                                <View style={[styles.inputWrap, { backgroundColor: COLORS.surface, borderColor: COLORS.border }]}>
-                                    <Text style={{ color: '#f59e0b', fontWeight: '800', marginRight: 8 }}>₱</Text>
-                                    <TextInput
-                                        style={[styles.input, { color: COLORS.text }]}
-                                        placeholder="e.g. 1000"
-                                        placeholderTextColor={COLORS.textMuted}
-                                        keyboardType="decimal-pad"
-                                        value={form.monthlyPayment}
-                                        onChangeText={v => setForm(f => ({ ...f, monthlyPayment: v }))}
+                            {/* Description */}
+                            <Text style={[styles.formLabel, { color: COLORS.textMuted }]}>DESCRIPTION (OPTIONAL)</Text>
+                            <View style={[styles.inputWrap, { backgroundColor: COLORS.background, borderColor: COLORS.border }]}>
+                                <Feather name="file-text" size={16} color={COLORS.textMuted} style={{ marginRight: 8 }} />
+                                <TextInput
+                                    style={[styles.input, { color: COLORS.text }]}
+                                    placeholder="e.g. Samsung S25 via GCash"
+                                    placeholderTextColor={COLORS.textMuted}
+                                    value={form.description}
+                                    onChangeText={v => setForm(f => ({ ...f, description: v }))}
+                                />
+                            </View>
+
+                            {/* Installment Toggle */}
+                            <TouchableOpacity
+                                onPress={() => setForm(f => ({ ...f, isInstallment: !f.isInstallment }))}
+                                style={[styles.installmentToggle, { backgroundColor: COLORS.background, borderColor: COLORS.border }]}
+                            >
+                                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                                    <MaterialCommunityIcons
+                                        name="calendar-clock"
+                                        size={20}
+                                        color={form.isInstallment ? COLORS.primary : COLORS.textMuted}
                                     />
-                                </View>
-
-                                <Text style={[styles.formLabel, { color: COLORS.textMuted }]}>GRACE PERIOD (MONTHS)</Text>
-                                <View style={[styles.inputWrap, { backgroundColor: COLORS.surface, borderColor: COLORS.border }]}>
-                                    <Feather name="calendar" size={16} color={COLORS.textMuted} style={{ marginRight: 8 }} />
-                                    <TextInput
-                                        style={[styles.input, { color: COLORS.text }]}
-                                        placeholder="e.g. 12"
-                                        placeholderTextColor={COLORS.textMuted}
-                                        keyboardType="number-pad"
-                                        value={form.gracePeriodMonths}
-                                        onChangeText={v => setForm(f => ({ ...f, gracePeriodMonths: v }))}
-                                    />
-                                </View>
-
-                                <Text style={[styles.formLabel, { color: COLORS.textMuted }]}>PENALTY RATE (% PER MONTH)</Text>
-                                <View style={[styles.inputWrap, { backgroundColor: COLORS.surface, borderColor: COLORS.border }]}>
-                                    <Feather name="percent" size={16} color={COLORS.textMuted} style={{ marginRight: 8 }} />
-                                    <TextInput
-                                        style={[styles.input, { color: COLORS.text }]}
-                                        placeholder="e.g. 20"
-                                        placeholderTextColor={COLORS.textMuted}
-                                        keyboardType="decimal-pad"
-                                        value={form.penaltyRate}
-                                        onChangeText={v => setForm(f => ({ ...f, penaltyRate: v }))}
-                                    />
-                                </View>
-
-                                {form.gracePeriodMonths ? (
-                                    <View style={[styles.dueDatePreview, { backgroundColor: '#f59e0b10', borderColor: '#f59e0b50' }]}>
-                                        <Feather name="calendar" size={14} color="#f59e0b" />
-                                        <Text style={[styles.dueDatePreviewText, { color: '#f59e0b' }]}>
-                                            Due date: {formatDate(
-                                                (() => {
-                                                    const d = new Date();
-                                                    d.setMonth(d.getMonth() + (parseInt(form.gracePeriodMonths) || 0));
-                                                    return d;
-                                                })()
-                                            )}
+                                    <View>
+                                        <Text style={[styles.toggleMainText, { color: COLORS.text }]}>Installment Plan</Text>
+                                        <Text style={[styles.toggleSubText, { color: COLORS.textMuted }]}>
+                                            Set monthly payments & penalty rate
                                         </Text>
                                     </View>
-                                ) : null}
-                            </View>
-                        )}
+                                </View>
+                                <View style={[styles.checkCircle, form.isInstallment && { backgroundColor: COLORS.primary }]}>
+                                    {form.isInstallment && <Feather name="check" size={14} color="#fff" />}
+                                </View>
+                            </TouchableOpacity>
 
-                        <TouchableOpacity
-                            onPress={handleCreate}
-                            disabled={saving}
-                            style={[styles.saveBtn, { backgroundColor: COLORS.primary }]}
-                        >
-                            {saving
-                                ? <ActivityIndicator color="#fff" />
-                                : <Text style={styles.saveBtnText}>Save Debt</Text>}
-                        </TouchableOpacity>
-                    </ScrollView>
+                            {form.isInstallment && (
+                                <View style={[styles.installmentBox, { backgroundColor: COLORS.background, borderColor: COLORS.border }]}>
+                                    <Text style={[styles.formLabel, { color: COLORS.textMuted }]}>MONTHLY PAYMENT</Text>
+                                    <View style={[styles.inputWrap, { backgroundColor: COLORS.surface, borderColor: COLORS.border }]}>
+                                        <Text style={{ color: '#f59e0b', fontWeight: '800', marginRight: 8 }}>₱</Text>
+                                        <TextInput
+                                            style={[styles.input, { color: COLORS.text }]}
+                                            placeholder="e.g. 1000"
+                                            placeholderTextColor={COLORS.textMuted}
+                                            keyboardType="decimal-pad"
+                                            value={form.monthlyPayment}
+                                            onChangeText={v => setForm(f => ({ ...f, monthlyPayment: v }))}
+                                        />
+                                    </View>
+
+                                    <Text style={[styles.formLabel, { color: COLORS.textMuted }]}>GRACE PERIOD (MONTHS)</Text>
+                                    <View style={[styles.inputWrap, { backgroundColor: COLORS.surface, borderColor: COLORS.border }]}>
+                                        <Feather name="calendar" size={16} color={COLORS.textMuted} style={{ marginRight: 8 }} />
+                                        <TextInput
+                                            style={[styles.input, { color: COLORS.text }]}
+                                            placeholder="e.g. 12"
+                                            placeholderTextColor={COLORS.textMuted}
+                                            keyboardType="number-pad"
+                                            value={form.gracePeriodMonths}
+                                            onChangeText={v => setForm(f => ({ ...f, gracePeriodMonths: v }))}
+                                        />
+                                    </View>
+
+                                    <Text style={[styles.formLabel, { color: COLORS.textMuted }]}>PENALTY RATE (% PER MONTH)</Text>
+                                    <View style={[styles.inputWrap, { backgroundColor: COLORS.surface, borderColor: COLORS.border }]}>
+                                        <Feather name="percent" size={16} color={COLORS.textMuted} style={{ marginRight: 8 }} />
+                                        <TextInput
+                                            style={[styles.input, { color: COLORS.text }]}
+                                            placeholder="e.g. 20"
+                                            placeholderTextColor={COLORS.textMuted}
+                                            keyboardType="decimal-pad"
+                                            value={form.penaltyRate}
+                                            onChangeText={v => setForm(f => ({ ...f, penaltyRate: v }))}
+                                        />
+                                    </View>
+
+                                    {form.gracePeriodMonths ? (
+                                        <View style={[styles.dueDatePreview, { backgroundColor: '#f59e0b10', borderColor: '#f59e0b50' }]}>
+                                            <Feather name="calendar" size={14} color="#f59e0b" />
+                                            <Text style={[styles.dueDatePreviewText, { color: '#f59e0b' }]}>
+                                                Due date: {formatDate(
+                                                    (() => {
+                                                        const d = new Date();
+                                                        d.setMonth(d.getMonth() + (parseInt(form.gracePeriodMonths) || 0));
+                                                        return d;
+                                                    })()
+                                                )}
+                                            </Text>
+                                        </View>
+                                    ) : null}
+                                </View>
+                            )}
+
+                            <TouchableOpacity
+                                onPress={handleCreate}
+                                disabled={saving}
+                                style={[styles.saveBtn, { backgroundColor: COLORS.primary }]}
+                            >
+                                {saving
+                                    ? <ActivityIndicator color="#fff" />
+                                    : <Text style={styles.saveBtnText}>Save Debt</Text>}
+                            </TouchableOpacity>
+                        </ScrollView>
+                    </KeyboardAvoidingView>
                 </Animated.View>
             </Modal>
 
@@ -920,82 +970,89 @@ export default function DebtScreen({ navigation }) {
                             <Feather name="x" size={24} color={COLORS.textMuted} />
                         </TouchableOpacity>
                     </View>
-
-                    {payModal.debt?.monthlyPayment && (
-                        <TouchableOpacity
-                            onPress={() => setPayAmount(String(payModal.debt.monthlyPayment))}
-                            style={[styles.quickFill, { backgroundColor: COLORS.background }]}
-                        >
-                            <Feather name="zap" size={14} color={COLORS.primary} />
-                            <Text style={[styles.quickFillText, { color: COLORS.primary }]}>
-                                Use monthly payment: {formatCurrency(payModal.debt.monthlyPayment)}
-                            </Text>
-                        </TouchableOpacity>
-                    )}
-
-                    <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-                        <Text style={[styles.formLabel, { color: COLORS.textMuted }]}>AMOUNT PAID</Text>
-                        <TouchableOpacity
-                            onPress={() => {
-                                const remaining = (payModal.debt?.amount || 0) - (payModal.debt?.amountPaid || 0);
-                                setPayAmount(String(remaining.toFixed(2)));
-                            }}
-                            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-                        >
-                            <Text style={{ fontSize: 10, fontWeight: '800', color: COLORS.primary, letterSpacing: 1, backgroundColor: '#ff00b31e', padding: 7, borderRadius: 20 }}>MAX</Text>
-                        </TouchableOpacity>
-                    </View>
-                    <View style={[styles.inputWrap, { backgroundColor: COLORS.background, borderColor: COLORS.border }]}>
-                        <Text style={{ color: '#22c55e', fontWeight: '800', marginRight: 8 }}>₱</Text>
-                        <TextInput
-                            style={[styles.input, { color: COLORS.text }]}
-                            placeholder="0.00"
-                            placeholderTextColor={COLORS.textMuted}
-                            keyboardType="decimal-pad"
-                            value={payAmount}
-                            onChangeText={setPayAmount}
-                            autoFocus
-                        />
-                    </View>
-
-                    {/* Wallet Selector */}
-                    {/* Wallet Selector */}
-                    <Text style={[styles.formLabel, { color: COLORS.textMuted, marginTop: spacing.md }]}>
-                        {payModal.debt?.direction === 'owed_to_me' ? 'ADD TO WALLET' : 'DEDUCT FROM WALLET'}
-                    </Text>
-                    <WalletSelector
-                        selectedWalletId={selectedWallet?._id}
-                        onSelect={(w) => setSelectedWallet(w)}
-                        COLORS={COLORS}
-                        amountPHP={parseFloat(payAmount) || 0}
-                        isExpense={payModal.debt?.direction !== 'owed_to_me'}
-                    />
-                    <Text style={{ fontSize: 10, color: COLORS.textMuted, marginTop: 6, fontStyle: 'italic', paddingHorizontal: 4 }}>
-                        * If no wallet is selected, it will automatically {payModal.debt?.direction === 'owed_to_me' ? 'add to' : 'deduct from'} HAND.
-                    </Text>
-
-                    <Text style={[styles.formLabel, { color: COLORS.textMuted, marginTop: spacing.md }]}>NOTE (OPTIONAL)</Text>
-                    <View style={[styles.inputWrap, { backgroundColor: COLORS.background, borderColor: COLORS.border }]}>
-                        <TextInput
-                            style={[styles.input, { color: COLORS.text }]}
-                            placeholder="e.g. GCash transfer"
-                            placeholderTextColor={COLORS.textMuted}
-                            value={payNote}
-                            onChangeText={setPayNote}
-                        />
-                    </View>
-
-                    <TouchableOpacity
-                        onPress={handleLogPayment}
-                        disabled={saving}
-                        style={[styles.saveBtn, { backgroundColor: '#22c55e' }]}
+                    <KeyboardAvoidingView
+                        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+                        keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 60}
+                        style={{ flexShrink: 1 }}
                     >
-                        {saving
-                            ? <ActivityIndicator color="#fff" />
-                            : <><Feather name="check-circle" size={18} color="#fff" style={{ marginRight: 8 }} />
-                                <Text style={styles.saveBtnText}>Confirm Payment</Text></>
-                        }
-                    </TouchableOpacity>
+                        <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 30 }}>
+                            {payModal.debt?.monthlyPayment && (
+                                <TouchableOpacity
+                                    onPress={() => setPayAmount(String(payModal.debt.monthlyPayment))}
+                                    style={[styles.quickFill, { backgroundColor: COLORS.background }]}
+                                >
+                                    <Feather name="zap" size={14} color={COLORS.primary} />
+                                    <Text style={[styles.quickFillText, { color: COLORS.primary }]}>
+                                        Use monthly payment: {formatCurrency(payModal.debt.monthlyPayment)}
+                                    </Text>
+                                </TouchableOpacity>
+                            )}
+
+                            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                                <Text style={[styles.formLabel, { color: COLORS.textMuted }]}>AMOUNT PAID</Text>
+                                <TouchableOpacity
+                                    onPress={() => {
+                                        const remaining = (payModal.debt?.amount || 0) - (payModal.debt?.amountPaid || 0);
+                                        setPayAmount(String(remaining.toFixed(2)));
+                                    }}
+                                    hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                                >
+                                    <Text style={{ fontSize: 10, fontWeight: '800', color: COLORS.primary, letterSpacing: 1, backgroundColor: '#ff00b31e', padding: 7, borderRadius: 20 }}>MAX</Text>
+                                </TouchableOpacity>
+                            </View>
+                            <View style={[styles.inputWrap, { backgroundColor: COLORS.background, borderColor: COLORS.border }]}>
+                                <Text style={{ color: '#22c55e', fontWeight: '800', marginRight: 8 }}>₱</Text>
+                                <TextInput
+                                    style={[styles.input, { color: COLORS.text }]}
+                                    placeholder="0.00"
+                                    placeholderTextColor={COLORS.textMuted}
+                                    keyboardType="decimal-pad"
+                                    value={payAmount}
+                                    onChangeText={setPayAmount}
+                                    autoFocus
+                                />
+                            </View>
+
+                            {/* Wallet Selector */}
+                            {/* Wallet Selector */}
+                            <Text style={[styles.formLabel, { color: COLORS.textMuted, marginTop: spacing.md }]}>
+                                {payModal.debt?.direction === 'owed_to_me' ? 'ADD TO WALLET' : 'DEDUCT FROM WALLET'}
+                            </Text>
+                            <WalletSelector
+                                selectedWalletId={selectedWallet?._id}
+                                onSelect={(w) => setSelectedWallet(w)}
+                                COLORS={COLORS}
+                                amountPHP={parseFloat(payAmount) || 0}
+                                isExpense={payModal.debt?.direction !== 'owed_to_me'}
+                            />
+                            <Text style={{ fontSize: 10, color: COLORS.textMuted, marginTop: 6, fontStyle: 'italic', paddingHorizontal: 4 }}>
+                                * If no wallet is selected, it will automatically {payModal.debt?.direction === 'owed_to_me' ? 'add to' : 'deduct from'} HAND.
+                            </Text>
+
+                            <Text style={[styles.formLabel, { color: COLORS.textMuted, marginTop: spacing.md }]}>NOTE (OPTIONAL)</Text>
+                            <View style={[styles.inputWrap, { backgroundColor: COLORS.background, borderColor: COLORS.border }]}>
+                                <TextInput
+                                    style={[styles.input, { color: COLORS.text }]}
+                                    placeholder="e.g. GCash transfer"
+                                    placeholderTextColor={COLORS.textMuted}
+                                    value={payNote}
+                                    onChangeText={setPayNote}
+                                />
+                            </View>
+
+                            <TouchableOpacity
+                                onPress={handleLogPayment}
+                                disabled={saving}
+                                style={[styles.saveBtn, { backgroundColor: '#22c55e' }]}
+                            >
+                                {saving
+                                    ? <ActivityIndicator color="#fff" />
+                                    : <><Feather name="check-circle" size={18} color="#fff" style={{ marginRight: 8 }} />
+                                        <Text style={styles.saveBtnText}>Confirm Payment</Text></>
+                                }
+                            </TouchableOpacity>
+                        </ScrollView>
+                    </KeyboardAvoidingView>
                 </Animated.View>
             </Modal>
 
@@ -1131,21 +1188,21 @@ const styles = StyleSheet.create({
     backBtn: { width: 40, height: 40, borderRadius: 12, justifyContent: 'center', alignItems: 'center' },
     headerTitle: { fontSize: 20, fontWeight: '800' },
     headerSub: { fontSize: 12 },
-    addBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 16, paddingVertical: 10, borderRadius: 20, marginLeft: 'auto' },
+    addBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 16, paddingVertical: 10, borderRadius: 20 },
 
     summaryRow: { flexDirection: 'row', paddingHorizontal: spacing.lg, marginBottom: spacing.md },
     summaryCard: { flex: 1, borderRadius: radius.xl, padding: spacing.md, paddingVertical: 14 },
     summaryLabel: { color: 'rgba(255,255,255,0.7)', fontSize: 10, fontWeight: '700', letterSpacing: 1 },
     summaryAmount: { color: '#fff', fontSize: 20, fontWeight: '800', marginTop: 4 },
 
-    filtersScroll: { flexGrow: 0 },
+    filtersScroll: { flexGrow: 0, marginBottom: spacing.md },
     filters: { paddingHorizontal: spacing.lg, paddingBottom: spacing.md, gap: 8, flexDirection: 'row', alignItems: 'center' },
     pill: { paddingHorizontal: 14, paddingVertical: 7, borderRadius: radius.full, backgroundColor: 'rgba(128,128,128,0.12)' },
     pillText: { fontSize: 13, fontWeight: '700' },
 
     list: { padding: spacing.lg, paddingTop: 4, paddingBottom: 40 },
 
-    card: { borderRadius: radius.xl, padding: spacing.md, borderWidth: 1, marginBottom: spacing.md },
+    card: { borderRadius: radius.xl, padding: spacing.md, borderWidth: 1 },
     cardHeader: { flexDirection: 'row', alignItems: 'center', marginBottom: spacing.md },
     cardIcon: { width: 44, height: 44, borderRadius: 12, justifyContent: 'center', alignItems: 'center' },
     cardName: { fontSize: 15, fontWeight: '800' },
@@ -1251,4 +1308,8 @@ const styles = StyleSheet.create({
     payNote: { fontSize: 12, marginTop: 2 },
     payDate: { fontSize: 12, fontWeight: '600' },
     startBtnText: { color: '#fff', fontWeight: '800', fontSize: 14 },
+    swipeActions: { flexDirection: 'row', height: '100%' },
+    deleteAction: { width: 80, height: '100%', justifyContent: 'center', alignItems: 'center', borderRadius: 20, marginLeft: 0 },
+    archiveAction: { width: 80, height: '100%', justifyContent: 'center', alignItems: 'center', borderRadius: 20, marginRight: 0 },
+    swipeActionText: { color: '#fff', fontSize: 10, fontWeight: '800', marginTop: 4 }
 });

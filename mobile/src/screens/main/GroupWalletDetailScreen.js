@@ -1,15 +1,16 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import {
     View, Text, StyleSheet, TouchableOpacity, ScrollView,
-    Modal, TouchableWithoutFeedback, TextInput, Animated, Dimensions,
+    Modal, TouchableWithoutFeedback, TextInput, Animated as RNAnimated, Dimensions,
     RefreshControl, ActivityIndicator, Image, FlatList, LayoutAnimation,
     Platform, UIManager
 } from 'react-native';
+import Animated, { FadeIn, FadeOut, LinearTransition, Easing } from 'react-native-reanimated';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Feather, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useTheme } from '../../context/ThemeContext';
 import { useAuth } from '../../context/AuthContext';
-import { getGroupWalletDetail, getTripSettlementPreview, settleTrip, updateTrip, leaveTrip } from '../../api/api';
+import { getGroupWalletDetail, getTripSettlementPreview, settleTrip, updateTrip, leaveTrip, getWallets, getSavingsGoals, getExchangeRates, getProfile } from '../../api/api';
 import CustomAlertModal from '../../components/CustomAlertModal';
 
 const { height: SCREEN_HEIGHT } = Dimensions.get('window');
@@ -20,8 +21,10 @@ import GroupWalletExpenseModal from './GroupWalletExpenseModal';
 
 const { width } = Dimensions.get('window');
 
+const AnimatedTouchableOpacity = Animated.createAnimatedComponent(TouchableOpacity);
+
 const TabItem = ({ label, active, onPress, COLORS }) => (
-    <TouchableOpacity 
+    <TouchableOpacity
         onPress={onPress}
         style={[styles.tab, active && { borderBottomColor: COLORS.primary, borderBottomWidth: 3 }]}
     >
@@ -34,8 +37,10 @@ const TabItem = ({ label, active, onPress, COLORS }) => (
 export default function GroupWalletDetailScreen({ route, navigation }) {
     const { id } = route.params;
     const COLORS = useTheme(state => state.COLORS);
-    const { userInfo } = useAuth();
-    
+    const { userInfo: authUserInfo, updateLocalUser } = useAuth();
+    const [freshUserInfo, setFreshUserInfo] = React.useState(null);
+    const userInfo = freshUserInfo || authUserInfo;
+
     const [group, setGroup] = useState(null);
     const [settlement, setSettlement] = useState(null);
     const [loading, setLoading] = useState(true);
@@ -46,11 +51,16 @@ export default function GroupWalletDetailScreen({ route, navigation }) {
     const [editModalVisible, setEditModalVisible] = useState(false);
     const [editForm, setEditForm] = useState({ name: '', emoji: '' });
     const [alert, setAlert] = useState({ visible: false, title: '', message: '', type: 'info' });
+    const [settleModalVisible, setSettleModalVisible] = useState(false);
+    const [wallets, setWallets] = useState([]);
+    const [savingsGoals, setSavingsGoals] = useState([]);
+    const [rates, setRates] = useState({ PHP: 1 });
+    const [isSettling, setIsSettling] = useState(false);
 
     // Animation values
-    const menuAnim = React.useRef(new Animated.Value(0)).current;
-    const editFadeAnim = React.useRef(new Animated.Value(0)).current;
-    const [editSlideAnim, setEditSlideAnim] = useState(new Animated.Value(SCREEN_HEIGHT));
+    const menuAnim = React.useRef(new RNAnimated.Value(0)).current;
+    const editFadeAnim = React.useRef(new RNAnimated.Value(0)).current;
+    const [editSlideAnim, setEditSlideAnim] = useState(new RNAnimated.Value(SCREEN_HEIGHT));
     const [editModalMounted, setEditModalMounted] = useState(false);
     const [expandedExpenseIds, setExpandedExpenseIds] = useState([]);
 
@@ -59,15 +69,14 @@ export default function GroupWalletDetailScreen({ route, navigation }) {
     }
 
     const toggleExpense = (id) => {
-        LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
-        setExpandedExpenseIds(prev => 
+        setExpandedExpenseIds(prev =>
             prev.includes(id) ? prev.filter(i => i !== id) : [...prev, id]
         );
     };
 
     useEffect(() => {
         if (menuVisible) {
-            Animated.timing(menuAnim, { toValue: 1, duration: 300, useNativeDriver: true }).start();
+            RNAnimated.timing(menuAnim, { toValue: 1, duration: 300, useNativeDriver: true }).start();
         } else {
             menuAnim.setValue(0);
         }
@@ -76,14 +85,14 @@ export default function GroupWalletDetailScreen({ route, navigation }) {
     useEffect(() => {
         if (editModalVisible) {
             setEditModalMounted(true);
-            Animated.parallel([
-                Animated.timing(editFadeAnim, { toValue: 1, duration: 280, useNativeDriver: true }),
-                Animated.spring(editSlideAnim, { toValue: 0, tension: 65, friction: 11, useNativeDriver: true })
+            RNAnimated.parallel([
+                RNAnimated.timing(editFadeAnim, { toValue: 1, duration: 280, useNativeDriver: true }),
+                RNAnimated.spring(editSlideAnim, { toValue: 0, tension: 65, friction: 11, useNativeDriver: true })
             ]).start();
         } else {
-            Animated.parallel([
-                Animated.timing(editFadeAnim, { toValue: 0, duration: 220, useNativeDriver: true }),
-                Animated.timing(editSlideAnim, { toValue: SCREEN_HEIGHT, duration: 260, useNativeDriver: true })
+            RNAnimated.parallel([
+                RNAnimated.timing(editFadeAnim, { toValue: 0, duration: 220, useNativeDriver: true }),
+                RNAnimated.timing(editSlideAnim, { toValue: SCREEN_HEIGHT, duration: 260, useNativeDriver: true })
             ]).start(() => {
                 setEditModalMounted(false);
             });
@@ -113,6 +122,43 @@ export default function GroupWalletDetailScreen({ route, navigation }) {
 
     const handleSettle = async () => {
         setMenuVisible(false);
+        const myBal = settlement?.balances[userInfo?._id] || 0;
+        
+        // If I owe money, I must choose a payment method
+        if (myBal < -0.01) {
+            setLoading(true);
+            try {
+                const [wData, sData, rData, profileData] = await Promise.all([
+                    getWallets(),
+                    getSavingsGoals(),
+                    getExchangeRates(userInfo?.currency || 'PHP'),
+                    getProfile()  // ← Always fetch fresh profile for live balances
+                ]);
+                // Unbox wallets correctly
+                setWallets(wData?.wallets || wData || []);
+                // Unbox savings goals correctly (API returns { goals: [...] })
+                const goalsArray = sData?.goals || sData || [];
+                setSavingsGoals(Array.isArray(goalsArray) ? goalsArray : []);
+                setRates(rData?.rates || { [userInfo?.currency || 'PHP']: 1 });
+                // Update local userInfo with fresh data from server
+                if (profileData) {
+                    setFreshUserInfo(profileData);
+                    updateLocalUser(profileData);
+                }
+                setSettleModalVisible(true);
+            } catch (err) {
+                console.error('[TripSettle] Load wallets error:', err);
+                // Fallback to simple settle if wallet load fails
+                confirmSimpleSettle();
+            } finally {
+                setLoading(false);
+            }
+        } else {
+            confirmSimpleSettle();
+        }
+    };
+
+    const confirmSimpleSettle = () => {
         setAlert({
             visible: true,
             title: 'Finalize & Settle?',
@@ -130,6 +176,76 @@ export default function GroupWalletDetailScreen({ route, navigation }) {
                 }
             }
         });
+    };
+
+    const processSettlement = async (walletId, sourceType, walletDeductAmount) => {
+        const amountToPay = Math.abs(settlement?.balances[userInfo?._id] || 0);
+
+        // ── Balance Validation ──
+        if (sourceType === 'hand') {
+            if ((userInfo?.handBalance || 0) < amountToPay) {
+                setAlert({
+                    visible: true,
+                    title: 'Insufficient HAND Balance',
+                    message: `You need ${formatCurrency(amountToPay, userInfo?.currency)} but only have ${formatCurrency(userInfo?.handBalance || 0, userInfo?.currency)} in your HAND wallet.`,
+                    type: 'error'
+                });
+                return;
+            }
+        } else if (sourceType === 'savings_balance') {
+            const masterPot = savingsGoals?.find?.(g => g.name === 'Savings Balance');
+            const available = masterPot?.currentAmount || 0;
+            if (available < amountToPay) {
+                setAlert({
+                    visible: true,
+                    title: 'Insufficient Savings',
+                    message: `You need ${formatCurrency(amountToPay, userInfo?.currency)} but only have ${formatCurrency(available, userInfo?.currency)} in your Savings Stash.`,
+                    type: 'error'
+                });
+                return;
+            }
+        } else if (walletId) {
+            const wallet = wallets?.find?.(w => w._id === walletId);
+            const symbol = (wallet?.coinSymbol || wallet?.currency || '').toUpperCase();
+            const rate = rates[symbol] || 1;
+            
+            // If rate is e.g. 0.0000002 (BTC per 1 PHP)
+            // then nativeNeeded = 2000 PHP * 0.0000002 = 0.0004 BTC
+            const nativeNeeded = walletDeductAmount || (amountToPay * rate);
+            
+            if (wallet && wallet.type !== 'Credit' && wallet.balance < nativeNeeded) {
+                const marketPrice = 1 / (rate || 1);
+                setAlert({
+                    visible: true,
+                    title: 'Insufficient Wallet Balance',
+                    message: `You need ${nativeNeeded.toFixed(wallet.type === 'Crypto' ? 8 : 2)} ${wallet.coinSymbol || wallet.currency} but only have ${wallet.balance.toFixed(wallet.type === 'Crypto' ? 8 : 2)}.\n\nMarket Rate: 1 ${wallet.coinSymbol || wallet.currency} ≈ ₱${marketPrice.toLocaleString()}`,
+                    type: 'error'
+                });
+                return;
+            }
+        }
+
+        setSettleModalVisible(false);
+        setLoading(true);
+        try {
+            await settleTrip(id, {
+                walletId,
+                sourceType,
+                walletDeductAmount,
+                note: `Settled share for ${group.name}`
+            });
+            setAlert({
+                visible: true,
+                title: 'Trip Settled! ✈️',
+                message: 'Your share has been paid and the trip is archived.',
+                type: 'success',
+                onConfirm: () => navigation.goBack()
+            });
+        } catch (err) {
+            setAlert({ visible: true, title: 'Settlement Failed', message: err?.response?.data?.error || 'Failed to process payment.', type: 'error' });
+        } finally {
+            setLoading(false);
+        }
     };
 
     const handleArchiveOnly = async () => {
@@ -214,7 +330,7 @@ export default function GroupWalletDetailScreen({ route, navigation }) {
                             <Feather name="arrow-left" size={20} color="#fff" />
                         </TouchableOpacity>
                         <Text style={styles.coverTitle} numberOfLines={1}>{group.name}</Text>
-                        <TouchableOpacity 
+                        <TouchableOpacity
                             onPress={() => setMenuVisible(true)}
                             style={styles.circleBtn}
                         >
@@ -244,7 +360,7 @@ export default function GroupWalletDetailScreen({ route, navigation }) {
                 <TabItem label="Settle Up" active={activeTab === 'Settle'} onPress={() => setActiveTab('Settle')} COLORS={COLORS} />
             </View>
 
-            <ScrollView 
+            <ScrollView
                 style={{ flex: 1 }}
                 refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); load(); }} tintColor={COLORS.primary} />}
             >
@@ -256,11 +372,12 @@ export default function GroupWalletDetailScreen({ route, navigation }) {
                                 <Text style={[styles.emptyText, { color: COLORS.textMuted }]}>No expenses yet. Add one to start tracking!</Text>
                             </View>
                         ) : (
-                            group.expenses.sort((a,b) => new Date(b.date) - new Date(a.date)).map((exp, idx) => (
-                                <TouchableOpacity 
-                                    key={idx} 
+                            group.expenses.sort((a, b) => new Date(b.date) - new Date(a.date)).map((exp, idx) => (
+                                <AnimatedTouchableOpacity
+                                    key={idx}
                                     activeOpacity={0.7}
                                     onPress={() => toggleExpense(exp._id)}
+                                    layout={LinearTransition.duration(200).easing(Easing.bezier(0.4, 0, 0.2, 1))}
                                     style={[styles.expenseItem, { backgroundColor: COLORS.surface, borderColor: COLORS.border }]}
                                 >
                                     <View style={styles.expenseMainRow}>
@@ -269,6 +386,7 @@ export default function GroupWalletDetailScreen({ route, navigation }) {
                                         </View>
                                         <View style={{ flex: 1, marginLeft: 12 }}>
                                             <Text style={[styles.expDesc, { color: COLORS.text }]}>{exp.description}</Text>
+
                                             <Text style={[styles.expMeta, { color: COLORS.textMuted }]}>
                                                 Paid by {exp.paidBy.name === userInfo.name ? 'You' : exp.paidBy.name} • {formatDateRelative(exp.date)}
                                             </Text>
@@ -279,11 +397,11 @@ export default function GroupWalletDetailScreen({ route, navigation }) {
                                                 <Text style={[styles.expSplit, { color: COLORS.textMuted }]}>
                                                     {exp.splitAmong.length > 0 ? `${exp.splitAmong.length} people` : 'Everyone'}
                                                 </Text>
-                                                <Feather 
-                                                    name={expandedExpenseIds.includes(exp._id) ? "chevron-up" : "chevron-down"} 
-                                                    size={12} 
-                                                    color={COLORS.textMuted} 
-                                                    style={{ marginLeft: 4, marginTop: 2 }} 
+                                                <Feather
+                                                    name={expandedExpenseIds.includes(exp._id) ? "chevron-up" : "chevron-down"}
+                                                    size={12}
+                                                    color={COLORS.textMuted}
+                                                    style={{ marginLeft: 4, marginTop: 2 }}
                                                 />
                                             </View>
                                         </View>
@@ -291,7 +409,7 @@ export default function GroupWalletDetailScreen({ route, navigation }) {
 
                                     {/* List Split Breakdown */}
                                     {expandedExpenseIds.includes(exp._id) && (
-                                        <View style={styles.listBreakdown}>
+                                        <Animated.View entering={FadeIn.duration(200)} exiting={FadeOut.duration(200)} style={styles.listBreakdown}>
                                             {(exp.splitAmong.length > 0 ? exp.splitAmong : [group.owner, ...group.participants.filter(p => p.status === 'accepted')].map(p => p.user || p)).map((member, midx) => {
                                                 const mName = member.name || 'User';
                                                 const mAvatar = member.avatarUrl || member.avatar;
@@ -303,12 +421,12 @@ export default function GroupWalletDetailScreen({ route, navigation }) {
                                                         <View style={styles.listBreakdownLeft}>
                                                             <View style={styles.listBreakdownAvatar}>
                                                                 {mAvatar ? (
-                                                                    <Image 
-                                                                        source={{ 
-                                                                            uri: mAvatar.startsWith('http') 
-                                                                                ? mAvatar 
+                                                                    <Image
+                                                                        source={{
+                                                                            uri: mAvatar.startsWith('http')
+                                                                                ? mAvatar
                                                                                 : `${API_BASE.replace('/api', '')}/${mAvatar}`
-                                                                        }} 
+                                                                        }}
                                                                         style={styles.avatarImg}
                                                                     />
                                                                 ) : (
@@ -323,9 +441,9 @@ export default function GroupWalletDetailScreen({ route, navigation }) {
                                                     </View>
                                                 );
                                             })}
-                                        </View>
+                                        </Animated.View>
                                     )}
-                                </TouchableOpacity>
+                                </AnimatedTouchableOpacity>
                             ))
                         )}
                     </View>
@@ -340,13 +458,13 @@ export default function GroupWalletDetailScreen({ route, navigation }) {
                                 <View key={idx} style={[styles.memberItem, { backgroundColor: COLORS.surface, borderColor: COLORS.border }]}>
                                     <View style={styles.memberAvatar}>
                                         {(user.avatarUrl || user.avatar) ? (
-                                            <Image 
-                                                source={{ 
+                                            <Image
+                                                source={{
                                                     uri: (user.avatarUrl || user.avatar).startsWith('http')
                                                         ? (user.avatarUrl || user.avatar)
                                                         : `${API_BASE.replace('/api', '')}/${user.avatarUrl || user.avatar}`
-                                                }} 
-                                                style={styles.avatarImg} 
+                                                }}
+                                                style={styles.avatarImg}
                                                 resizeMode="cover"
                                             />
                                         ) : (
@@ -388,7 +506,7 @@ export default function GroupWalletDetailScreen({ route, navigation }) {
                             settlement?.suggestedTransfers.map((t, idx) => {
                                 const fromUser = [group.owner, ...group.participants].find(p => (p.user?._id || p._id) === t.from);
                                 const toUser = [group.owner, ...group.participants].find(p => (p.user?._id || p._id) === t.to);
-                                
+
                                 const fromName = (fromUser?.user?.name || fromUser?.name);
                                 const toName = (toUser?.user?.name || toUser?.name);
 
@@ -414,7 +532,7 @@ export default function GroupWalletDetailScreen({ route, navigation }) {
                         )}
 
                         {group.owner._id === userInfo._id && !group.isArchived && (
-                            <TouchableOpacity 
+                            <TouchableOpacity
                                 onPress={handleSettle}
                                 style={[styles.settleBtn, { backgroundColor: COLORS.primary }]}
                             >
@@ -431,7 +549,7 @@ export default function GroupWalletDetailScreen({ route, navigation }) {
             </ScrollView>
 
             {!group.isArchived && (
-                <TouchableOpacity 
+                <TouchableOpacity
                     onPress={() => setExpenseModalVisible(true)}
                     style={[styles.fab, { backgroundColor: COLORS.primary }]}
                 >
@@ -467,12 +585,12 @@ export default function GroupWalletDetailScreen({ route, navigation }) {
                 statusBarTranslucent
             >
                 <TouchableWithoutFeedback onPress={() => setEditModalVisible(false)}>
-                    <Animated.View style={[styles.modalOverlay, { opacity: editFadeAnim }]}>
+                    <RNAnimated.View style={[styles.modalOverlay, { opacity: editFadeAnim }]}>
                         <TouchableWithoutFeedback>
-                            <Animated.View 
+                            <RNAnimated.View
                                 style={[
-                                    styles.modalContent, 
-                                    { 
+                                    styles.modalContent,
+                                    {
                                         backgroundColor: COLORS.surface,
                                         transform: [{ translateY: editSlideAnim }]
                                     }
@@ -506,15 +624,15 @@ export default function GroupWalletDetailScreen({ route, navigation }) {
                                     />
                                 </View>
 
-                                <TouchableOpacity 
+                                <TouchableOpacity
                                     style={[styles.saveBtn, { backgroundColor: COLORS.primary }]}
                                     onPress={handleUpdate}
                                 >
                                     <Text style={styles.saveBtnText}>Save Changes</Text>
                                 </TouchableOpacity>
-                            </Animated.View>
+                            </RNAnimated.View>
                         </TouchableWithoutFeedback>
-                    </Animated.View>
+                    </RNAnimated.View>
                 </TouchableWithoutFeedback>
             </Modal>
 
@@ -526,13 +644,13 @@ export default function GroupWalletDetailScreen({ route, navigation }) {
                 onRequestClose={() => setMenuVisible(false)}
             >
                 <TouchableWithoutFeedback onPress={() => setMenuVisible(false)}>
-                    <Animated.View style={[styles.menuOverlay, { opacity: menuAnim }]}>
+                    <RNAnimated.View style={[styles.menuOverlay, { opacity: menuAnim }]}>
                         <View style={[styles.menuContent, { backgroundColor: COLORS.surface }]}>
                             <Text style={[styles.menuTitle, { color: COLORS.textMuted }]}>TRIP OPTIONS</Text>
-                            
+
                             {isOwner && (
-                                <TouchableOpacity 
-                                    style={styles.menuItem} 
+                                <TouchableOpacity
+                                    style={styles.menuItem}
                                     onPress={() => {
                                         setMenuVisible(false);
                                         setEditModalVisible(true);
@@ -560,8 +678,8 @@ export default function GroupWalletDetailScreen({ route, navigation }) {
                             {isOwner && <View style={[styles.menuDivider, { backgroundColor: COLORS.border }]} />}
 
                             {!isOwner && (
-                                <TouchableOpacity 
-                                    style={styles.menuItem} 
+                                <TouchableOpacity
+                                    style={styles.menuItem}
                                     onPress={handleLeave}
                                 >
                                     <Feather name="log-out" size={18} color="#ef4444" />
@@ -577,8 +695,127 @@ export default function GroupWalletDetailScreen({ route, navigation }) {
                                 </View>
                             )}
                         </View>
-                    </Animated.View>
+                    </RNAnimated.View>
                 </TouchableWithoutFeedback>
+            </Modal>
+            {/* Settlement Payment Modal */}
+            <Modal
+                visible={settleModalVisible}
+                transparent
+                animationType="slide"
+                onRequestClose={() => setSettleModalVisible(false)}
+            >
+                <View style={styles.settleModalOverlay}>
+                    <View style={[styles.settleModalContent, { backgroundColor: COLORS.surface }]}>
+                        <View style={styles.settleModalHeader}>
+                            <View>
+                                <Text style={[styles.settleModalTitle, { color: COLORS.text }]}>Fund Settlement</Text>
+                                <Text style={[styles.settleModalSub, { color: COLORS.textMuted }]}>
+                                    Where is the {formatCurrency(Math.abs(myBalance), userInfo?.currency)} coming from?
+                                </Text>
+                            </View>
+                            <TouchableOpacity onPress={() => setSettleModalVisible(false)}>
+                                <Feather name="x" size={24} color={COLORS.textMuted} />
+                            </TouchableOpacity>
+                        </View>
+
+                        <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 30 }}>
+                            {/* Savings Stash */}
+                            <TouchableOpacity
+                                style={[styles.sourceItem, { borderColor: COLORS.border }]}
+                                onPress={() => processSettlement(null, 'savings_balance')}
+                            >
+                                <View style={[styles.sourceIcon, { backgroundColor: COLORS.primary + '20' }]}>
+                                    <MaterialCommunityIcons name="piggy-bank" size={24} color={COLORS.primary} />
+                                </View>
+                                <View style={{ flex: 1, marginLeft: 12 }}>
+                                    <Text style={[styles.sourceName, { color: COLORS.text }]}>Savings Stash</Text>
+                                    <Text style={[styles.sourceBalance, { color: COLORS.textMuted }]}>
+                                        Available: {formatCurrency(savingsGoals?.find?.(g => g.name === 'Savings' || g.name === 'Savings Balance')?.currentAmount || 0, userInfo?.currency)}
+                                    </Text>
+                                </View>
+                                <Feather name="chevron-right" size={18} color={COLORS.textMuted} />
+                            </TouchableOpacity>
+
+                            {/* Cash (HAND) */}
+                            <TouchableOpacity
+                                style={[styles.sourceItem, { borderColor: COLORS.border }]}
+                                onPress={() => processSettlement(null, 'hand')}
+                            >
+                                <View style={[styles.sourceIcon, { backgroundColor: '#e91e6320' }]}>
+                                    <MaterialCommunityIcons name="hand-coin" size={24} color="#e91e63" />
+                                </View>
+                                <View style={{ flex: 1, marginLeft: 12 }}>
+                                    <Text style={[styles.sourceName, { color: COLORS.text }]}>Cash (HAND)</Text>
+                                    <Text style={[styles.sourceBalance, { color: COLORS.textMuted }]}>
+                                        Available: {formatCurrency(userInfo?.HandBalance || userInfo?.handBalance || 0, userInfo?.currency)}
+                                    </Text>
+                                </View>
+                                <Feather name="chevron-right" size={18} color={COLORS.textMuted} />
+                            </TouchableOpacity>
+
+                            <View style={[styles.menuDivider, { backgroundColor: COLORS.border, marginVertical: 15 }]} />
+
+                            {/* Wallets */}
+                            {wallets?.map?.((wallet, widx) => {
+                                const isCrypto = wallet.type === 'Crypto';
+                                const isForeign = wallet.currency && wallet.currency !== 'PHP';
+                                const symbol = (wallet.coinSymbol || wallet.currency || '').toUpperCase();
+                                const rate = rates[symbol] || 1;
+                                
+                                // Calculate how much of the native asset is needed
+                                // If base is PHP/USD and rate is e.g. 0.0000003 BTC/PHP
+                                const amountInBase = Math.abs(myBalance);
+                                const nativeNeeded = amountInBase * (rate || 0);
+
+                                return (
+                                    <TouchableOpacity
+                                        key={widx}
+                                        style={[styles.sourceItem, { borderColor: COLORS.border }]}
+                                        onPress={() => processSettlement(wallet._id, null, nativeNeeded)}
+                                    >
+                                        <View style={[styles.sourceIcon, { backgroundColor: wallet.color + '20' }]}>
+                                            <MaterialCommunityIcons 
+                                                name={isCrypto ? 'bitcoin' : (wallet.type === 'Credit' ? 'credit-card' : 'wallet')} 
+                                                size={24} 
+                                                color={wallet.color} 
+                                            />
+                                        </View>
+                                        <View style={{ flex: 1, marginLeft: 12 }}>
+                                            <Text style={[styles.sourceName, { color: COLORS.text }]}>{wallet.name}</Text>
+                                            <Text style={[styles.sourceBalance, { color: COLORS.textMuted }]}>
+                                                {isCrypto || isForeign 
+                                                    ? `${wallet.balance.toFixed(wallet.type === 'Crypto' ? 8 : 2)} ${wallet.coinSymbol || wallet.currency}`
+                                                    : formatCurrency(wallet.balance, userInfo?.currency)
+                                                }
+                                            </Text>
+                                            {(isCrypto || isForeign) && (
+                                                <Text style={{ fontSize: 10, color: COLORS.primary, fontWeight: '700', marginTop: 2 }}>
+                                                    Est. {nativeNeeded.toFixed(wallet.type === 'Crypto' ? 8 : 2)} {wallet.coinSymbol || wallet.currency} needed
+                                                </Text>
+                                            )}
+                                        </View>
+                                        <Feather name="chevron-right" size={18} color={COLORS.textMuted} />
+                                    </TouchableOpacity>
+                                );
+                            })}
+                        </ScrollView>
+
+                        <View style={[styles.warningBox, { backgroundColor: '#ef444410' }]}>
+                            <Feather name="alert-triangle" size={16} color="#ef4444" />
+                            <Text style={[styles.warningText, { color: '#ef4444' }]}>
+                                Settle Trip transactions are non-reversible. Please verify the amount.
+                            </Text>
+                        </View>
+
+                        <TouchableOpacity 
+                            style={[styles.cancelBtn, { backgroundColor: COLORS.border }]}
+                            onPress={() => setSettleModalVisible(false)}
+                        >
+                            <Text style={[styles.cancelBtnText, { color: COLORS.text }]}>Cancel</Text>
+                        </TouchableOpacity>
+                    </View>
+                </View>
             </Modal>
         </View>
     );
@@ -669,7 +906,7 @@ const styles = StyleSheet.create({
     archivedBadge: { height: 50, borderRadius: 16, justifyContent: 'center', alignItems: 'center', marginTop: 20 },
     archivedText: { fontSize: 12, fontWeight: '800', letterSpacing: 1 },
     fab: { position: 'absolute', bottom: 30, right: 20, width: 60, height: 60, borderRadius: 30, justifyContent: 'center', alignItems: 'center', elevation: 6, shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.2, shadowRadius: 8 },
-    
+
     // Menu Styles
     menuOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.3)', justifyContent: 'flex-start', alignItems: 'flex-end', paddingHorizontal: 20, paddingTop: 60 },
     menuContent: { width: 220, borderRadius: 20, paddingVertical: 12, elevation: 10, shadowColor: '#000', shadowOffset: { width: 0, height: 10 }, shadowOpacity: 0.3, shadowRadius: 15 },
@@ -687,5 +924,27 @@ const styles = StyleSheet.create({
     inputLabel: { fontSize: 10, fontWeight: '800', letterSpacing: 1, marginBottom: 8 },
     modalInput: { height: 56, borderWidth: 1, borderRadius: 16, paddingHorizontal: 16, fontSize: 16, fontWeight: '600' },
     saveBtn: { height: 56, borderRadius: 16, justifyContent: 'center', alignItems: 'center', marginTop: 10 },
-    saveBtnText: { color: '#fff', fontSize: 16, fontWeight: '800' }
+    saveBtnText: { color: '#fff', fontSize: 16, fontWeight: '800' },
+
+    // Settlement Modal Styles
+    settleModalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
+    settleModalContent: { borderTopLeftRadius: 32, borderTopRightRadius: 32, padding: 24, maxHeight: '85%' },
+    settleModalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 24 },
+    settleModalTitle: { fontSize: 22, fontWeight: '900', letterSpacing: -0.5 },
+    settleModalSub: { fontSize: 14, fontWeight: '600', marginTop: 4 },
+    sourceItem: { 
+        flexDirection: 'row', 
+        alignItems: 'center', 
+        padding: 16, 
+        borderRadius: 20, 
+        borderWidth: 1.5, 
+        marginBottom: 12 
+    },
+    sourceIcon: { width: 48, height: 48, borderRadius: 16, justifyContent: 'center', alignItems: 'center' },
+    sourceName: { fontSize: 16, fontWeight: '800' },
+    sourceBalance: { fontSize: 13, fontWeight: '600', marginTop: 2 },
+    warningBox: { flexDirection: 'row', alignItems: 'center', padding: 14, borderRadius: 16, gap: 10, marginBottom: 20 },
+    warningText: { fontSize: 12, fontWeight: '700', flex: 1 },
+    cancelBtn: { height: 56, borderRadius: 18, justifyContent: 'center', alignItems: 'center' },
+    cancelBtnText: { fontSize: 16, fontWeight: '800' }
 });

@@ -10,7 +10,7 @@ import { Feather, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useTheme } from '../../context/ThemeContext';
 import { useAuth, API_BASE } from '../../context/AuthContext';
 import { getNotifications, markNotificationRead, markAllNotificationsRead, deleteNotification, deleteAllNotifications, respondFriendRequest, respondDebtRequest, respondToGoalInvite, respondToBudgetInvite, respondToChallengeInvite, respondToTripInvite } from '../../api/api';
-import { connectSocket, disconnectSocket, getSocket } from '../../utils/socket';
+import { getSocket } from '../../utils/socket';
 import { spacing, radius, typography, shadow } from '../../theme/colors';
 import CustomAlertModal from '../../components/CustomAlertModal';
 
@@ -57,10 +57,6 @@ export default function NotificationsScreen({ navigation }) {
 
     useEffect(() => {
         loadData();
-
-        if (userInfo?._id) {
-            connectSocket(userInfo._id);
-        }
 
         const socket = getSocket();
         if (socket) {

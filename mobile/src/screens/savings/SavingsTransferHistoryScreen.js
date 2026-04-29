@@ -7,7 +7,7 @@ import {
 import Animated, { ZoomIn, ZoomOut, LinearTransition } from 'react-native-reanimated';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Feather, MaterialCommunityIcons } from '@expo/vector-icons';
-import { Swipeable } from 'react-native-gesture-handler';
+import SwipeableRow from '../../components/SwipeableRow';
 import { useTheme } from '../../context/ThemeContext';
 import { useAuth } from '../../context/AuthContext';
 import { getSavingsTransfers, deleteTransaction, archiveSavingsTransfer, emptySavingsArchives, deleteSavingsTransfer } from '../../api/api';
@@ -203,56 +203,43 @@ export default function SavingsTransferHistoryScreen({ navigation }) {
             });
         };
 
-        const renderRightActions = () => (
-            <TouchableOpacity
-                style={styles.archiveAction}
-                onPress={() => handleArchiveToggle(t._id)}
-                activeOpacity={0.8}
-            >
-                <MaterialCommunityIcons
-                    name={isArchiveView ? "archive-arrow-up-outline" : "archive-arrow-down-outline"}
-                    size={28}
-                    color="#fff"
-                />
-                <Text style={styles.archiveActionText}>{isArchiveView ? 'Restore' : 'Archive'}</Text>
-            </TouchableOpacity>
-        );
+        let rightAction = null;
+        let leftAction = null;
 
-        const renderLeftActions = () => {
-            if (!isArchiveView) return null;
-            return (
-                <TouchableOpacity
-                    style={styles.deleteAction}
-                    onPress={() => handleDeleteTransfer(t._id)}
-                    activeOpacity={0.8}
-                >
-                    <MaterialCommunityIcons name="trash-can-outline" size={28} color="#fff" />
-                    <Text style={styles.archiveActionText}>Delete</Text>
-                </TouchableOpacity>
-            );
-        };
-
+        if (isArchiveView) {
+            rightAction = {
+                color: COLORS.primary,
+                icon: 'archive-arrow-up-outline',
+                iconFamily: 'MaterialCommunityIcons',
+                label: 'Restore',
+                onPress: () => handleArchiveToggle(t._id)
+            };
+            leftAction = {
+                color: '#ef4444',
+                icon: 'trash-can-outline',
+                iconFamily: 'MaterialCommunityIcons',
+                label: 'Delete',
+                onPress: () => handleDeleteTransfer(t._id)
+            };
+        } else {
+            rightAction = {
+                color: '#ef4444',
+                icon: 'archive-arrow-down-outline',
+                iconFamily: 'MaterialCommunityIcons',
+                label: 'Archive',
+                onPress: () => handleArchiveToggle(t._id)
+            };
+        }
 
         return (
             <Animated.View key={t._id} layout={LinearTransition.springify()} entering={ZoomIn.springify().damping(50).mass(0.9)} exiting={ZoomOut.duration(100)}>
-                <Swipeable 
-                    renderRightActions={renderRightActions}
-                    renderLeftActions={renderLeftActions} 
-                    onSwipeableOpen={(direction) => {
-                        if (direction === 'right' && !isArchiveView) {
-                            handleArchiveToggle(t._id);
-                        } else if (direction === 'left' && isArchiveView) {
-                            handleDeleteTransfer(t._id);
-                        } else if (direction === 'right' && isArchiveView) {
-                            handleArchiveToggle(t._id); // Restore
-                        }
-                    }}
-                    friction={2}
-                    overshootRight={false}
-                    overshootLeft={false}
+                <SwipeableRow
+                    rightAction={rightAction}
+                    leftAction={leftAction}
+                    containerStyle={{ marginBottom: spacing.xs }}
                 >
                     <TouchableOpacity
-                        style={[styles.row, { backgroundColor: COLORS.surface }]}
+                        style={[styles.row, { backgroundColor: COLORS.surface, marginBottom: 0 }]}
                         activeOpacity={0.7}
                         onPress={() => {
                             setSelectedTransfer(t);
@@ -284,7 +271,7 @@ export default function SavingsTransferHistoryScreen({ navigation }) {
                             )}
                         </View>
                     </TouchableOpacity>
-                </Swipeable>
+                </SwipeableRow>
             </Animated.View>
         );
     };

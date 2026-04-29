@@ -15,7 +15,7 @@ import {
 import { spacing, radius } from '../../theme/colors';
 import CustomAlertModal from '../../components/CustomAlertModal';
 import ProductResultModal from '../../components/ProductResultModal';
-import { getSocket, connectSocket } from '../../utils/socket';
+import { getSocket } from '../../utils/socket';
 import { getCachedBarcode, saveBarcodePriceCache } from '../../utils/barcodePriceCache';
 import { formatCurrency } from '../../utils/formatters';
 
@@ -58,7 +58,7 @@ export default function ShoppingSessionScreen({ route, navigation }) {
     const [productModal, setProductModal] = useState({ visible: false, product: null, cached: null });
 
     // ── Alert ────────────────────────────────────────────────────
-    const [alertConfig, setAlertConfig] = useState({ visible: false, title: '', message: '', type: 'confirm', onConfirm: () => {} });
+    const [alertConfig, setAlertConfig] = useState({ visible: false, title: '', message: '', type: 'confirm', onConfirm: () => { } });
     const [saveTemplateModal, setSaveTemplateModal] = useState(false);
     const [newTemplateName, setNewTemplateName] = useState('');
     const hasBudgetAlertedNear = useRef(false);
@@ -128,7 +128,7 @@ export default function ShoppingSessionScreen({ route, navigation }) {
         }
         if (route.params?.templateLabel) setLabel(route.params.templateLabel);
         if (route.params?.templateBudget) setBudget(String(route.params.templateBudget));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [route.params?.resumeSession, route.params?.templateItems, route.params?.templateLabel, route.params?.templateBudget]);
 
     // ── Camera Permission ────────────────────────────────────────
@@ -198,7 +198,7 @@ export default function ShoppingSessionScreen({ route, navigation }) {
                 if (res.found && res.item) {
                     shoppingCached = { price: res.item.price, name: res.item.name };
                 }
-            } catch (e) {}
+            } catch (e) { }
 
             // Try Open Food Facts (same as main scanner)
             let product = null;
@@ -323,12 +323,12 @@ export default function ShoppingSessionScreen({ route, navigation }) {
     // ── Confirm manual entry / edit ───────────────────────────────
     const confirmAddItem = () => {
         if (!editingName.trim() || !editingPrice) return;
-        
+
         if (editingIndex !== null) {
             setItems(prev => {
-                const updated = prev.map((item, i) => 
-                    i === editingIndex 
-                        ? { ...item, name: editingName.trim(), price: parseFloat(editingPrice) || 0 } 
+                const updated = prev.map((item, i) =>
+                    i === editingIndex
+                        ? { ...item, name: editingName.trim(), price: parseFloat(editingPrice) || 0 }
                         : item
                 );
                 syncCart(updated, session?._id);
@@ -342,7 +342,7 @@ export default function ShoppingSessionScreen({ route, navigation }) {
                 quantity: 1,
             });
         }
-        
+
         setAddItemModal(false);
         setEditingBarcode('');
         setEditingName('');
@@ -405,7 +405,7 @@ export default function ShoppingSessionScreen({ route, navigation }) {
             setSession(s);
             // If there were pre-loaded template items, sync them to the new session immediately
             if (items.length > 0) {
-                await updateShoppingCart(s._id, items).catch(() => {});
+                await updateShoppingCart(s._id, items).catch(() => { });
             }
             setSetupDone(true);
         } catch (e) {
@@ -476,7 +476,7 @@ export default function ShoppingSessionScreen({ route, navigation }) {
             type: 'confirm',
             onConfirm: async () => {
                 setAlertConfig(p => ({ ...p, visible: false }));
-                if (session) await cancelShopping(session._id).catch(() => {});
+                if (session) await cancelShopping(session._id).catch(() => { });
                 if (navigation.canGoBack()) {
                     navigation.goBack();
                 } else {
@@ -493,8 +493,8 @@ export default function ShoppingSessionScreen({ route, navigation }) {
         return (
             <SafeAreaView style={[styles.safe, { backgroundColor: COLORS.background }]}>
                 <View style={styles.setupContainer}>
-                    <TouchableOpacity 
-                        onPress={() => navigation.canGoBack() ? navigation.goBack() : navigation.navigate('ShoppingHome')} 
+                    <TouchableOpacity
+                        onPress={() => navigation.canGoBack() ? navigation.goBack() : navigation.navigate('ShoppingHome')}
                         style={[styles.backBtn, { backgroundColor: COLORS.surface }]}
                     >
                         <Feather name="arrow-left" size={20} color={COLORS.text} />

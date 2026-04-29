@@ -27,6 +27,7 @@ export default function ShoppingCheckoutScreen({ route, navigation }) {
     const COLORS = useTheme(state => state.COLORS);
     const { userInfo } = useAuth();
     const wallets = useFinanceStore(state => state.wallets);
+    const savingsMasterPot = useFinanceStore(state => state.savingsMasterPot);
     const cryptoPrices = useFinanceStore(state => state.cryptoPrices);
     const styles = getStyles(COLORS);
 
@@ -206,7 +207,9 @@ export default function ShoppingCheckoutScreen({ route, navigation }) {
                             </View>
                             <View style={{ flex: 1 }}>
                                 <Text style={[styles.sourceLabel, { color: COLORS.text }]}>HAND</Text>
-                                <Text style={[styles.sourceSub, { color: COLORS.textMuted }]}>Main Balance</Text>
+                                <Text style={[styles.sourceSub, { color: COLORS.textMuted }]}>
+                                    Available: {formatCurrency(userInfo?.handBalance || 0, userInfo?.currency)}
+                                </Text>
                             </View>
                             {selectedWallet === null && (
                                 <View style={[styles.checkDot, { backgroundColor: '#E91E8C' }]}>
@@ -230,7 +233,9 @@ export default function ShoppingCheckoutScreen({ route, navigation }) {
                             </View>
                             <View style={{ flex: 1 }}>
                                 <Text style={[styles.sourceLabel, { color: COLORS.text }]}>Savings Balance</Text>
-                                <Text style={[styles.sourceSub, { color: COLORS.textMuted }]}>Master savings pot</Text>
+                                <Text style={[styles.sourceSub, { color: COLORS.textMuted }]}>
+                                    Available: {formatCurrency(savingsMasterPot?.currentAmount || 0, userInfo?.currency)}
+                                </Text>
                             </View>
                             {selectedWallet === 'savings_balance' && (
                                 <View style={[styles.checkDot, { backgroundColor: '#8b5cf6' }]}>

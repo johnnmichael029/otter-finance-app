@@ -385,16 +385,8 @@ const transfer = async (req, res) => {
                 // Prepare native info for transaction
                 req.body.nativeAmount = nativeAmount;
                 req.body.nativeCurrency = isCrypto ? targetWallet.coinSymbol : (isStocks ? (targetWallet.stockSymbol || targetWallet.stockTicker) : null);
-            } else {
-                // Deduct from Hand Money
-                const balanceAgg = await Transaction.aggregate([
-                    { $match: { user: new mongoose.Types.ObjectId(req.userId), wallet: null } },
-                    { $group: { _id: '$type', total: { $sum: '$amount' } } },
-                ]);
-                balanceAgg.forEach(r => {
-                    if (r._id === 'income') currentHandBalance += r.total;
-                    if (r._id === 'expense') currentHandBalance -= r.total;
-                });
+                const user = await User.findById(req.userId);
+                currentHandBalance = user?.handBalance || 0;
                 if (amt > currentHandBalance) return res.status(400).json({ error: `Insufficient balance (₱${currentHandBalance.toFixed(2)})` });
             }
 
@@ -428,7 +420,12 @@ const transfer = async (req, res) => {
             if (io) {
                 io.to(`user:${req.userId}`).emit('new_transaction', ledgerTx);
                 if (!walletId) {
-                    io.to(`user:${req.userId}`).emit('wallet_updated', { _id: 'main', balance: currentHandBalance - amt });
+                    const user = await User.findById(req.userId);
+                    if (user) {
+                        user.handBalance -= amt;
+                        await user.save();
+                        io.to(`user:${req.userId}`).emit('wallet_updated', { _id: 'main', balance: user.handBalance });
+                    }
                 }
                 io.to(`user:${req.userId}`).emit('update_savings_goal', goal);
                 io.to(`user:${req.userId}`).emit('new_savings_transfer', { goalId: goal._id });
@@ -466,15 +463,8 @@ const transfer = async (req, res) => {
                 req.body.nativeAmount = nativeAmount;
                 req.body.nativeCurrency = isCrypto ? targetWallet.coinSymbol : (isStocks ? (targetWallet.stockSymbol || targetWallet.stockTicker) : null);
             } else {
-                // Calculate current total balance for running balance snapshot
-                const balanceAgg = await Transaction.aggregate([
-                    { $match: { user: new mongoose.Types.ObjectId(req.userId), wallet: null } },
-                    { $group: { _id: '$type', total: { $sum: '$amount' } } },
-                ]);
-                balanceAgg.forEach(r => {
-                    if (r._id === 'income') currentHandBalance += r.total;
-                    if (r._id === 'expense') currentHandBalance -= r.total;
-                });
+                const user = await User.findById(req.userId);
+                currentHandBalance = user?.handBalance || 0;
             }
 
             let destName = 'HAND';
@@ -497,7 +487,12 @@ const transfer = async (req, res) => {
             if (io) {
                 io.to(`user:${req.userId}`).emit('new_transaction', ledgerTx);
                 if (!walletId) {
-                    io.to(`user:${req.userId}`).emit('wallet_updated', { _id: 'main', balance: currentHandBalance + amt });
+                    const user = await User.findById(req.userId);
+                    if (user) {
+                        user.handBalance += amt;
+                        await user.save();
+                        io.to(`user:${req.userId}`).emit('wallet_updated', { _id: 'main', balance: user.handBalance });
+                    }
                 }
                 io.to(`user:${req.userId}`).emit('update_savings_goal', goal);
                 io.to(`user:${req.userId}`).emit('new_savings_transfer', { goalId: goal._id });
@@ -582,6 +577,52 @@ const transfer = async (req, res) => {
 
         } else {
             return res.status(400).json({ error: 'Invalid direction.' });
+        }
+
+        // --- FEE HANDLING ---
+        const feeAmt = req.body.fee ? parseFloat(req.body.fee) : 0;
+        const feeSourceWalletId = req.body.feeSourceWalletId || null;
+        if (feeAmt > 0) {
+            const feeDescription = `Transfer Fee (${direction.replace(/_/g, ' ')}: ${goal.name})`;
+            if (feeSourceWalletId) {
+                // Deduct fee from source wallet
+                const feeWallet = await Wallet.findOne({ _id: feeSourceWalletId, userId: req.userId });
+                if (feeWallet) {
+                    feeWallet.balance = Math.max(0, feeWallet.balance - feeAmt);
+                    await feeWallet.save();
+                    const feeTx = await Transaction.create({
+                        user: req.userId, type: 'expense', amount: feeAmt,
+                        category: 'Bank Fee', categoryIcon: 'percent', categoryColor: '#ef4444',
+                        description: feeDescription, 
+                        note: req.body.feeNote ? encrypt(req.body.feeNote) : undefined,
+                        date: new Date(),
+                        runningBalance: feeWallet.balance, wallet: feeWallet._id
+                    });
+                    if (io) {
+                        io.to(`user:${req.userId}`).emit('new_transaction', feeTx);
+                        io.to(`user:${req.userId}`).emit('wallet_updated', feeWallet.toObject());
+                    }
+                }
+            } else {
+                // Deduct fee from HAND
+                const feeUser = await User.findById(req.userId);
+                if (feeUser) {
+                    feeUser.handBalance = Math.max(0, (feeUser.handBalance || 0) - feeAmt);
+                    await feeUser.save();
+                    const feeTx = await Transaction.create({
+                        user: req.userId, type: 'expense', amount: feeAmt,
+                        category: 'Bank Fee', categoryIcon: 'percent', categoryColor: '#ef4444',
+                        description: feeDescription,
+                        note: req.body.feeNote ? encrypt(req.body.feeNote) : undefined,
+                        date: new Date(),
+                        runningBalance: feeUser.handBalance
+                    });
+                    if (io) {
+                        io.to(`user:${req.userId}`).emit('new_transaction', feeTx);
+                        io.to(`user:${req.userId}`).emit('wallet_updated', { _id: 'main', balance: feeUser.handBalance });
+                    }
+                }
+            }
         }
 
         await goal.save();

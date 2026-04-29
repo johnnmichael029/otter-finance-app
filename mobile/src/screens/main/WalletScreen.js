@@ -10,7 +10,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { useTheme } from '../../context/ThemeContext';
 import { useFinanceStore } from '../../store/financeStore';
 import { useAuthStore } from '../../store/authStore';
-import { getSocket, connectSocket } from '../../utils/socket';
+import { getSocket } from '../../utils/socket';
 import * as api from '../../api/api';
 import AddWalletModal from './AddWalletModal';
 import EditWalletModal from './EditWalletModal';
@@ -118,14 +118,15 @@ const getConvertedBalance = (wallet, prices) => {
 
 // ─── Net Worth Header ─────────────────────────────────────────────────────────
 const NetWorthHeader = ({ wallets, prices, hideVal, onToggleHide, COLORS, navigation }) => {
-    const assets = wallets.filter(w => w.type !== 'Credit').reduce((s, w) => s + getConvertedBalance(w, prices), 0);
+    const { userInfo } = useAuthStore();
+    const assets = (userInfo?.handBalance || 0) + wallets.filter(w => w.type !== 'Credit').reduce((s, w) => s + getConvertedBalance(w, prices), 0);
     const liabilities = wallets.filter(w => w.type === 'Credit').reduce((s, w) => s + Math.abs(getConvertedBalance(w, prices)), 0);
     const netWorth = assets - liabilities;
 
     return (
         <LinearGradient colors={['#E91E8C', '#9C27B0']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.netWorthCard}>
-            <TouchableOpacity 
-                activeOpacity={0.9} 
+            <TouchableOpacity
+                activeOpacity={0.9}
                 onPress={() => navigation.navigate('NetWorth')}
             >
                 <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
@@ -251,7 +252,6 @@ export default function WalletScreen({ navigation }) {
     useEffect(() => {
         fetchWallets();
         if (!userInfo?._id) return;
-        connectSocket(userInfo._id);
         const socket = getSocket();
         const onCreated = (w) => useFinanceStore.setState(s => ({ wallets: [...s.wallets, w] }));
         const onUpdated = (w) => useFinanceStore.setState(s => ({ wallets: s.wallets.map(x => x._id === w._id ? w : x) }));
@@ -285,8 +285,8 @@ export default function WalletScreen({ navigation }) {
             extraActions: [
                 {
                     label: 'Add Balance', icon: 'plus-circle',
-                    onPress: () => { 
-                        setAlert(a => ({ ...a, visible: false })); 
+                    onPress: () => {
+                        setAlert(a => ({ ...a, visible: false }));
                         navigation.navigate('AddTransaction', {
                             type: 'income',
                             preselectedWallet: wallet

@@ -19,6 +19,7 @@ const getProfile = async (req, res) => {
             isOnboarded: req.user.isOnboarded,
             occupation: req.user.occupation,
             pushToken: req.user.pushToken,
+            handBalance: req.user.handBalance || 0,
             createdAt: req.user.createdAt,
         });
     } catch (err) {

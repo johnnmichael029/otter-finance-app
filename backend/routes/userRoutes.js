@@ -21,8 +21,16 @@ router.use(requireAuth);
 // GET  /api/users/me           — get own profile
 router.get('/me', getProfile);
 
+/**
+ * Middleware to set the upload type for multer
+ */
+const setUploadType = (type) => (req, res, next) => {
+    req.uploadType = type;
+    next();
+};
+
 // POST /api/users/avatar        — upload profile picture
-router.post('/avatar', upload.single('avatar'), uploadAvatar);
+router.post('/avatar', setUploadType('avatars'), upload.single('avatar'), uploadAvatar);
 
 // PATCH /api/users/me          — update name, currency, avatar
 router.patch('/me', validate.updateProfile, updateProfile);

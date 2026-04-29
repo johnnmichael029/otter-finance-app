@@ -2,22 +2,20 @@ import React, { useState, useCallback, useEffect, useRef } from 'react';
 import {
     View, Text, StyleSheet, TouchableOpacity, ScrollView,
     TextInput, ActivityIndicator, RefreshControl, Modal, TouchableWithoutFeedback, Image,
-    FlatList
 } from 'react-native';
-import Animated, { ZoomIn, ZoomOut, LinearTransition } from 'react-native-reanimated';
 import { FlashList } from '@shopify/flash-list';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Feather, MaterialCommunityIcons, Ionicons } from '@expo/vector-icons';
-import { Swipeable } from 'react-native-gesture-handler';
 import { useNavigation } from '@react-navigation/native';
 import { useTheme } from '../../context/ThemeContext';
 import { useAuth, API_BASE } from '../../context/AuthContext';
-import { getTransactions, archiveTransaction as archiveTxApi, deleteTransaction, emptyArchives } from '../../api/api';
+import { getTransactions, archiveTransaction as archiveTxApi, deleteTransaction, updateTransaction, emptyArchives, getCategories } from '../../api/api';
 import { spacing, radius } from '../../theme/colors';
 import Skeleton from '../../components/Skeleton';
 import CustomAlertModal from '../../components/CustomAlertModal';
 import SubscriptionSuggestionCard from '../../components/SubscriptionSuggestionCard';
-import { getSocket, connectSocket } from '../../utils/socket';
+import SwipeableRow from '../../components/SwipeableRow';
+import { getSocket } from '../../utils/socket';
 import { useDebounce } from '../../utils/debounce';
 import { useFinanceStore } from '../../store/financeStore';
 import { formatCurrency, formatDate, formatDateTime, getIconName, getIconColor, IconRenderer } from '../../utils/formatters';
@@ -26,6 +24,23 @@ import { triggerHaptic } from '../../utils/haptics';
 
 
 const TABS = ['All', 'Income', 'Expense', 'Ledger', 'Archive'];
+
+const FALLBACK_CATEGORIES = {
+    income: [
+        { label: 'Salary', icon: 'briefcase', color: '#22c55e' },
+        { label: 'Freelance', icon: 'code', color: '#3b82f6' },
+        { label: 'Investment', icon: 'trending-up', color: '#8b5cf6' },
+        { label: 'Gift', icon: 'gift', color: '#f59e0b' },
+    ],
+    expense: [
+        { label: 'Food', icon: 'coffee', color: '#f59e0b' },
+        { label: 'Transport', icon: 'truck', color: '#3b82f6' },
+        { label: 'Shopping', icon: 'shopping-bag', color: '#ec4899' },
+        { label: 'Bills', icon: 'file-text', color: '#ef4444' },
+        { label: 'Health', icon: 'heart', color: '#22c55e' },
+        { label: 'Entertainment', icon: 'tv', color: '#8b5cf6' },
+    ],
+};
 
 const TransactionsScreen = () => {
     const COLORS = useTheme(state => state.COLORS);
@@ -47,6 +62,8 @@ const TransactionsScreen = () => {
     const [revertingTx, setRevertingTx] = useState(null);
     const [infoAlert, setInfoAlert] = useState({ visible: false, title: '', message: '', type: 'info' });
     const [emptyModalVisible, setEmptyModalVisible] = useState(false);
+    const [editModal, setEditModal] = useState({ visible: false, saving: false, category: '', categoryIcon: '', categoryColor: '', note: '' });
+    const [editCats, setEditCats] = useState([]);
 
     const [suggestedSubscription, setSuggestedSubscription] = useState(null);
     const [dismissedSuggestions, setDismissedSuggestions] = useState([]);
@@ -113,8 +130,17 @@ const TransactionsScreen = () => {
     useEffect(() => { load(transactions.length === 0); }, [load]);
 
     useEffect(() => {
+        getCategories()
+            .then(res => {
+                if (res?.categories?.length > 0) {
+                    setEditCats(res.categories.map(c => ({ label: c.name, icon: c.icon, color: c.color, type: c.type })));
+                }
+            })
+            .catch(() => { });
+    }, []);
+
+    useEffect(() => {
         if (!userInfo?._id) return;
-        connectSocket(userInfo._id);
         const socket = getSocket();
 
         const handleNew = (tx) => {
@@ -190,10 +216,10 @@ const TransactionsScreen = () => {
         } catch (e) {
             console.error('Archive failed:', e);
             const isNetworkError = !e.response && e.request;
-            const msg = isNetworkError 
+            const msg = isNetworkError
                 ? 'Unable to connect to the server. Please check your internet connection.'
                 : (e?.response?.data?.error || 'Could not update transaction status.');
-            
+
             setInfoAlert({
                 visible: true,
                 title: isNetworkError ? 'Network Error' : 'Action Restricted',
@@ -215,7 +241,7 @@ const TransactionsScreen = () => {
         } catch (e) {
             console.error('Revert failed:', e);
             const isNetworkError = !e.response && e.request;
-            const msg = isNetworkError 
+            const msg = isNetworkError
                 ? 'Unable to connect to the server. Please check your internet connection.'
                 : (e?.response?.data?.error || 'Could not revert transaction.');
 
@@ -237,7 +263,7 @@ const TransactionsScreen = () => {
         } catch (e) {
             console.error('Delete failed:', e);
             const isNetworkError = !e.response && e.request;
-            const msg = isNetworkError 
+            const msg = isNetworkError
                 ? 'Unable to connect to the server. Please check your internet connection.'
                 : (e?.response?.data?.error || 'Could not delete transaction.');
 
@@ -248,6 +274,38 @@ const TransactionsScreen = () => {
                 type: 'error'
             });
             load();
+        }
+    };
+
+    const handleEditSave = async () => {
+        if (!selectedTx || editModal.saving) return;
+        setEditModal(m => ({ ...m, saving: true }));
+        try {
+            const patch = {};
+            const newCat = editModal.category.trim();
+            const newNote = editModal.note.trim();
+            if (newCat && newCat !== selectedTx.category) {
+                patch.category = newCat;
+                if (editModal.categoryIcon) patch.categoryIcon = editModal.categoryIcon;
+                if (editModal.categoryColor) patch.categoryColor = editModal.categoryColor;
+            }
+            if (newNote !== (selectedTx.description || selectedTx.note || '')) {
+                patch.note = newNote;
+                patch.description = newNote;
+            }
+            if (Object.keys(patch).length > 0) {
+                await updateTransaction(selectedTx._id, patch);
+            }
+            setEditModal({ visible: false, saving: false, category: '', categoryIcon: '', categoryColor: '', note: '' });
+            setSelectedTx(null);
+        } catch (e) {
+            setEditModal(m => ({ ...m, saving: false }));
+            setInfoAlert({
+                visible: true,
+                title: 'Edit Failed',
+                message: e?.response?.data?.error || 'Could not update transaction.',
+                type: 'error'
+            });
         }
     };
 
@@ -291,36 +349,7 @@ const TransactionsScreen = () => {
         day.entries.forEach(tx => flatData.push({ type: 'item', transaction: tx, _id: tx._id }));
     });
 
-    const renderRightActions = (id, isArchived) => {
-        return (
-            <TouchableOpacity
-                style={styles.archiveAction}
-                onPress={() => handleArchiveToggle(id)}
-                activeOpacity={0.8}
-            >
-                <MaterialCommunityIcons
-                    name={isArchived ? "archive-arrow-up-outline" : "archive-arrow-down-outline"}
-                    size={28}
-                    color="#fff"
-                />
-                <Text style={styles.archiveActionText}>{isArchived ? 'Restore' : 'Archive'}</Text>
-            </TouchableOpacity>
-        );
-    };
 
-    const renderLeftActions = (id) => {
-        if (!isArchiveView) return null;
-        return (
-            <TouchableOpacity
-                style={styles.deleteAction}
-                onPress={() => handleDeleteTransaction(id)}
-                activeOpacity={0.8}
-            >
-                <MaterialCommunityIcons name="trash-can-outline" size={28} color="#fff" />
-                <Text style={styles.archiveActionText}>Delete</Text>
-            </TouchableOpacity>
-        );
-    };
 
 
     return (
@@ -419,13 +448,13 @@ const TransactionsScreen = () => {
                     ))}
                 </View>
             ) : (
-                <FlatList
+                <FlashList
                     contentContainerStyle={styles.listContent}
                     data={flatData}
                     keyExtractor={item => item._id}
+                    estimatedItemSize={65}
+                    getItemType={item => item.type}
                     showsVerticalScrollIndicator={false}
-                    // estimatedItemSize={60}
-                    // getItemType={item => item.type}
                     refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); load(); }} tintColor={COLORS.primary} />}
                     onEndReached={() => fetchMore()}
                     onEndReachedThreshold={0.5}
@@ -453,76 +482,81 @@ const TransactionsScreen = () => {
                         } else {
                             const tx = item.transaction;
                             return (
-                                <Animated.View key={tx._id} layout={LinearTransition.springify()} entering={ZoomIn.springify().damping(50).mass(0.9)} exiting={ZoomOut.duration(100)}>
-                                    <Swipeable
-                                        renderRightActions={() => renderRightActions(tx._id, tx.isArchived)}
-                                        renderLeftActions={() => renderLeftActions(tx._id)}
-                                        onSwipeableOpen={(direction) => {
-                                            if (direction === 'right') {
-                                                handleArchiveToggle(tx._id);
-                                            } else if (direction === 'left' && isArchiveView) {
-                                                handleDeleteTransaction(tx._id);
+                                <SwipeableRow
+                                    rightAction={tx.isArchived ? {
+                                        color: COLORS.primary,
+                                        icon: 'archive-arrow-up-outline',
+                                        iconFamily: 'MaterialCommunityIcons',
+                                        label: 'Restore',
+                                        onPress: () => handleArchiveToggle(tx._id),
+                                    } : {
+                                        color: COLORS.primary,
+                                        icon: 'archive-arrow-down-outline',
+                                        iconFamily: 'MaterialCommunityIcons',
+                                        label: 'Archive',
+                                        onPress: () => handleArchiveToggle(tx._id),
+                                    }}
+                                    leftAction={isArchiveView ? {
+                                        color: '#ef4444',
+                                        icon: 'trash-2',
+                                        label: 'Delete',
+                                        onPress: () => handleDeleteTransaction(tx._id),
+                                    } : undefined}
+                                    containerStyle={{ marginBottom: spacing.xs }}
+                                >
+                                    <TouchableOpacity
+                                        style={[styles.txRow, { backgroundColor: COLORS.surface, marginBottom: 0 }]}
+                                        onPress={() => setSelectedTx(tx)}
+                                        activeOpacity={0.7}
+                                        onLongPress={() => {
+                                            triggerHaptic(hapticsEnabled, 'impactMedium');
+                                            if (tx.relatedType === 'Debt') {
+                                                setInfoAlert({
+                                                    visible: true,
+                                                    title: 'Cannot Revert Debt',
+                                                    message: 'Debt transactions cannot be reverted from here. To undo a payment, please manage it within the Debt Tracker screen.',
+                                                    type: 'info'
+                                                });
+                                                return;
                                             }
+                                            setRevertingTx(tx);
+                                            setRevertModalVisible(true);
                                         }}
-                                        friction={2}
-                                        overshootRight={false}
-                                        overshootLeft={false}
-                                        containerStyle={{ borderRadius: radius.md, marginBottom: spacing.xs }}
                                     >
-                                        <TouchableOpacity
-                                            style={[styles.txRow, { backgroundColor: COLORS.surface, marginBottom: 0 }]}
-                                            onPress={() => setSelectedTx(tx)}
-                                            activeOpacity={0.7}
-                                            onLongPress={() => {
-                                                triggerHaptic(hapticsEnabled, 'impactMedium');
-                                                if (tx.relatedType === 'Debt') {
-                                                    setInfoAlert({
-                                                        visible: true,
-                                                        title: 'Cannot Revert Debt',
-                                                        message: 'Debt transactions cannot be reverted from here. To undo a payment, please manage it within the Debt Tracker screen.',
-                                                        type: 'info'
-                                                    });
-                                                    return;
-                                                }
-                                                setRevertingTx(tx);
-                                                setRevertModalVisible(true);
-                                            }}
-                                        >
-                                            <View style={[styles.txIcon, { backgroundColor: getIconColor(tx, COLORS) + '20' }]}>
-                                                <IconRenderer name={getIconName(tx)} size={16} color={getIconColor(tx, COLORS)} />
+                                        <View style={[styles.txIcon, { backgroundColor: getIconColor(tx, COLORS) + '20' }]}>
+                                            <IconRenderer name={getIconName(tx)} size={16} color={getIconColor(tx, COLORS)} />
+                                        </View>
+                                        <View style={{ flex: 1 }}>
+                                            <Text style={[styles.txCat, { color: COLORS.text }]}>{tx.category}</Text>
+                                            <Text style={[styles.txNote, { color: COLORS.textMuted }]} numberOfLines={1}>
+                                                {(tx.description || tx.note) ? `" ${tx.description || tx.note} "` : '—'}
+                                            </Text>
+                                        </View>
+                                        <View style={styles.txRight}>
+                                            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4, justifyContent: 'flex-end' }}>
+                                                {tx.isPending && (
+                                                    <View style={{ flexDirection: 'row', alignItems: 'center', marginRight: 4 }}>
+                                                        <Feather name="clock" size={10} color={COLORS.primary} style={{ marginRight: 2 }} />
+                                                        <Text style={{ fontSize: 9, color: COLORS.primary, fontWeight: 'bold' }}>OFFLINE</Text>
+                                                    </View>
+                                                )}
+                                                {tx.attachment && <Feather name="camera" size={12} color={COLORS.primary} />}
+                                                {activeTab === 'Ledger' ? (
+                                                    <Text style={[styles.txType, { color: tx.type === 'income' ? '#22c55e' : (tx.type === 'transfer' ? '#3b82f6' : '#ef4444'), fontSize: 9 }]}>
+                                                        {tx.type === 'income' ? '↑ CREDIT' : (tx.type === 'transfer' ? '⇅ MOVE' : '↓ DEBIT')}
+                                                    </Text>
+                                                ) : (
+                                                    <Text style={[styles.txDateSimple, { color: COLORS.textMuted }]}>
+                                                        {new Intl.DateTimeFormat('en-US', { hour: 'numeric', minute: '2-digit' }).format(new Date(tx.date || tx.createdAt))}
+                                                    </Text>
+                                                )}
                                             </View>
-                                            <View style={{ flex: 1 }}>
-                                                <Text style={[styles.txCat, { color: COLORS.text }]}>{tx.category}</Text>
-                                                <Text style={[styles.txNote, { color: COLORS.textMuted }]} numberOfLines={1}>
-                                                    {(tx.description || tx.note) ? `" ${tx.description || tx.note} "` : '—'}
-                                                </Text>
-                                            </View>
-                                            <View style={styles.txRight}>
-                                                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4, justifyContent: 'flex-end' }}>
-                                                    {tx.isPending && (
-                                                        <View style={{ flexDirection: 'row', alignItems: 'center', marginRight: 4 }}>
-                                                            <Feather name="clock" size={10} color={COLORS.primary} style={{ marginRight: 2 }} />
-                                                            <Text style={{ fontSize: 9, color: COLORS.primary, fontWeight: 'bold' }}>OFFLINE</Text>
-                                                        </View>
-                                                    )}
-                                                    {tx.attachment && <Feather name="camera" size={12} color={COLORS.primary} />}
-                                                    {activeTab === 'Ledger' ? (
-                                                        <Text style={[styles.txType, { color: tx.type === 'income' ? '#22c55e' : (tx.type === 'transfer' ? '#3b82f6' : '#ef4444'), fontSize: 9 }]}>
-                                                            {tx.type === 'income' ? '↑ CREDIT' : (tx.type === 'transfer' ? '⇅ MOVE' : '↓ DEBIT')}
-                                                        </Text>
-                                                    ) : (
-                                                        <Text style={[styles.txDateSimple, { color: COLORS.textMuted }]}>
-                                                            {new Intl.DateTimeFormat('en-US', { hour: 'numeric', minute: '2-digit' }).format(new Date(tx.date || tx.createdAt))}
-                                                        </Text>
-                                                    )}
-                                                </View>
-                                                <Text style={[styles.txAmt, { color: tx.type === 'income' ? COLORS.income : (tx.type === 'transfer' ? '#3b82f6' : COLORS.expense) }]}>
-                                                    {tx.type === 'income' ? '+' : (tx.type === 'transfer' ? '' : '-')}{formatCurrency(tx.amount, userInfo?.currency)}
-                                                </Text>
-                                            </View>
-                                        </TouchableOpacity>
-                                    </Swipeable>
-                                </Animated.View>
+                                            <Text style={[styles.txAmt, { color: tx.type === 'income' ? COLORS.income : (tx.type === 'transfer' ? '#3b82f6' : COLORS.expense) }]}>
+                                                {tx.type === 'income' ? '+' : (tx.type === 'transfer' ? '' : '-')}{formatCurrency(tx.amount, userInfo?.currency)}
+                                            </Text>
+                                        </View>
+                                    </TouchableOpacity>
+                                </SwipeableRow>
                             );
                         }
                     }}
@@ -567,9 +601,27 @@ const TransactionsScreen = () => {
                                     <>
                                         <View style={styles.modalHeader}>
                                             <Text style={[styles.modalTitle, { color: COLORS.text }]}>Transaction Details</Text>
-                                            <TouchableOpacity onPress={() => setSelectedTx(null)}>
-                                                <Feather name="x" size={24} color={COLORS.textMuted} />
-                                            </TouchableOpacity>
+                                            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+                                                {/* Only show edit for regular transactions, not debt/savings-linked */}
+                                                {!selectedTx?.relatedType && (
+                                                    <TouchableOpacity
+                                                        onPress={() => setEditModal({
+                                                            visible: true,
+                                                            saving: false,
+                                                            category: selectedTx.category || '',
+                                                            categoryIcon: selectedTx.categoryIcon || '',
+                                                            categoryColor: selectedTx.categoryColor || '',
+                                                            note: selectedTx.description || selectedTx.note || '',
+                                                        })}
+                                                        style={[styles.editBtn, { backgroundColor: COLORS.primary + '20' }]}
+                                                    >
+                                                        <Feather name="edit-2" size={15} color={COLORS.primary} />
+                                                    </TouchableOpacity>
+                                                )}
+                                                <TouchableOpacity onPress={() => setSelectedTx(null)}>
+                                                    <Feather name="x" size={24} color={COLORS.textMuted} />
+                                                </TouchableOpacity>
+                                            </View>
                                         </View>
                                         <ScrollView contentContainerStyle={styles.modalBody} showsVerticalScrollIndicator={false}>
                                             <View style={[styles.modalIconHero, { backgroundColor: getIconColor(selectedTx, COLORS) + '20' }]}>
@@ -654,6 +706,91 @@ const TransactionsScreen = () => {
                     </View>
                 </TouchableWithoutFeedback>
             </Modal>
+
+            {/* ── Edit Transaction Modal (Option A: safe fields only) ── */}
+            <Modal visible={editModal.visible} transparent animationType="slide" onRequestClose={() => setEditModal(m => ({ ...m, visible: false }))}>
+                <TouchableWithoutFeedback onPress={() => setEditModal(m => ({ ...m, visible: false }))}>
+                    <View style={styles.modalOverlay}>
+                        <TouchableWithoutFeedback>
+                            <View style={[styles.modalSheet, { backgroundColor: COLORS.surface }]}>
+                                <View style={styles.modalHeader}>
+                                    <Text style={[styles.modalTitle, { color: COLORS.text }]}>Edit Transaction</Text>
+                                    <TouchableOpacity onPress={() => setEditModal(m => ({ ...m, visible: false }))}>
+                                        <Feather name="x" size={24} color={COLORS.textMuted} />
+                                    </TouchableOpacity>
+                                </View>
+
+                                {/* Safe-fields notice */}
+                                <View style={[styles.editNotice, { backgroundColor: COLORS.primary + '12', borderColor: COLORS.primary + '30' }]}>
+                                    <Feather name="info" size={13} color={COLORS.primary} style={{ marginRight: 6 }} />
+                                    <Text style={{ fontSize: 12, color: COLORS.primary, flex: 1 }}>
+                                        Only category and note can be edited. Amount and payment source are locked.
+                                    </Text>
+                                </View>
+
+                                <Text style={[styles.editLabel, { color: COLORS.textMuted }]}>Category</Text>
+                                <ScrollView
+                                    horizontal={false}
+                                    showsVerticalScrollIndicator={false}
+                                    style={{ maxHeight: 170 }}
+                                    nestedScrollEnabled
+                                >
+                                    <View style={styles.editCatGrid}>
+                                        {(() => {
+                                            const txType = selectedTx?.type || 'expense';
+                                            const remote = editCats.filter(c => c.type === txType);
+                                            const cats = remote.length > 0 ? remote : (FALLBACK_CATEGORIES[txType] || []);
+                                            return cats.map(cat => {
+                                                const isSelected = editModal.category === cat.label;
+                                                return (
+                                                    <TouchableOpacity
+                                                        key={cat.label}
+                                                        onPress={() => setEditModal(m => ({ ...m, category: cat.label, categoryIcon: cat.icon, categoryColor: cat.color }))}
+                                                        style={[styles.editCatBtn, {
+                                                            backgroundColor: isSelected ? cat.color : COLORS.background,
+                                                            borderColor: isSelected ? cat.color : COLORS.border,
+                                                        }]}
+                                                        activeOpacity={0.75}
+                                                    >
+                                                        <IconRenderer name={cat.icon} size={18} color={isSelected ? '#fff' : cat.color} />
+                                                        <Text style={{ fontSize: 11, fontWeight: '700', color: isSelected ? '#fff' : COLORS.text, marginTop: 4, textAlign: 'center' }}>
+                                                            {cat.label}
+                                                        </Text>
+                                                    </TouchableOpacity>
+                                                );
+                                            });
+                                        })()}
+                                    </View>
+                                </ScrollView>
+
+                                <Text style={[styles.editLabel, { color: COLORS.textMuted }]}>Note</Text>
+                                <TextInput
+                                    value={editModal.note}
+                                    onChangeText={t => setEditModal(m => ({ ...m, note: t }))}
+                                    style={[styles.editInput, styles.editInputMulti, { backgroundColor: COLORS.background, color: COLORS.text, borderColor: COLORS.border }]}
+                                    placeholder="Add a note..."
+                                    placeholderTextColor={COLORS.textMuted}
+                                    multiline
+                                    numberOfLines={3}
+                                    textAlignVertical="top"
+                                />
+
+                                <TouchableOpacity
+                                    onPress={handleEditSave}
+                                    disabled={editModal.saving}
+                                    style={[styles.saveEditBtn, { backgroundColor: COLORS.primary, opacity: editModal.saving ? 0.6 : 1 }]}
+                                >
+                                    {editModal.saving
+                                        ? <ActivityIndicator color="#fff" size="small" />
+                                        : <Text style={{ color: '#fff', fontWeight: '800', fontSize: 15 }}>Save Changes</Text>
+                                    }
+                                </TouchableOpacity>
+                            </View>
+                        </TouchableWithoutFeedback>
+                    </View>
+                </TouchableWithoutFeedback>
+            </Modal>
+
         </SafeAreaView>
     );
 };
@@ -688,28 +825,7 @@ const getStyles = (COLORS) => StyleSheet.create({
     ledgerDaySummary: { flexDirection: 'row', gap: 8 },
     ledgerCredit: { fontSize: 12, fontWeight: '700' },
     ledgerDebit: { fontSize: 12, fontWeight: '700' },
-    archiveAction: {
-        backgroundColor: '#ef4444',
-        justifyContent: 'center',
-        alignItems: 'center',
-        width: 80,
-        height: '100%',
-        borderRadius: radius.md,
-    },
-    archiveActionText: {
-        color: '#fff',
-        fontSize: 10,
-        fontWeight: '700',
-        marginTop: 4
-    },
-    deleteAction: {
-        backgroundColor: COLORS.error || '#ef4444',
-        justifyContent: 'center',
-        alignItems: 'center',
-        width: 80,
-        height: '100%',
-        borderRadius: radius.md,
-    },
+
 
     modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
     modalSheet: { borderTopLeftRadius: radius.xl, borderTopRightRadius: radius.xl, padding: spacing.lg, paddingBottom: 40, maxHeight: '80%' },
@@ -725,8 +841,18 @@ const getStyles = (COLORS) => StyleSheet.create({
     detailVal: { fontSize: 13, fontWeight: '700', maxWidth: '60%', textAlign: 'right' },
     attachmentSection: { width: '100%', marginTop: spacing.md },
     modalReceipt: { width: '100%', height: 300, borderRadius: radius.lg, resizeMode: 'contain', backgroundColor: '#000' },
+    receiptSection: { width: '100%', marginTop: spacing.md },
     walletBadge: { paddingHorizontal: 8, paddingVertical: 4, borderRadius: 8 },
     walletBadgeText: { fontSize: 11, fontWeight: '800' },
+    // Edit modal
+    editBtn: { width: 32, height: 32, borderRadius: 16, justifyContent: 'center', alignItems: 'center' },
+    editNotice: { flexDirection: 'row', alignItems: 'center', borderWidth: 1, borderRadius: radius.md, padding: spacing.sm, marginBottom: spacing.md },
+    editLabel: { fontSize: 12, fontWeight: '700', marginBottom: 6, marginTop: spacing.sm },
+    editInput: { borderWidth: 1, borderRadius: radius.md, paddingHorizontal: spacing.md, paddingVertical: 10, fontSize: 14 },
+    editInputMulti: { height: 80 },
+    saveEditBtn: { marginTop: spacing.lg, padding: spacing.md, borderRadius: radius.lg, alignItems: 'center' },
+    editCatGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, paddingBottom: 4 },
+    editCatBtn: { width: 74, paddingVertical: 10, paddingHorizontal: 4, borderRadius: radius.md, borderWidth: 1.5, alignItems: 'center', justifyContent: 'center' },
 });
 
 export default TransactionsScreen;

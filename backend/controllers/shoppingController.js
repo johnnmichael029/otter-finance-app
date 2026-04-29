@@ -39,9 +39,14 @@ const createSession = async (req, res) => {
 // Get all sessions for the user (paginated, newest first)
 const getSessions = async (req, res) => {
     try {
-        const { status, page = 1, limit = 20 } = req.query;
+        const { status, page = 1, limit = 20, isArchived } = req.query;
         const filter = { user: req.userId };
         if (status) filter.status = status;
+        if (isArchived === 'true') {
+            filter.isArchived = true;
+        } else {
+            filter.isArchived = { $ne: true };
+        }
 
         const skip = (parseInt(page) - 1) * parseInt(limit);
         const [sessions, total] = await Promise.all([
@@ -171,7 +176,7 @@ const checkoutSession = async (req, res) => {
 
                     if (isFiat || isCrypto || isStocks) {
                         const isCredit = wallet.type === 'Credit';
-                        
+
                         if (isCredit) {
                             // FOR CREDIT WALLETS: Shopping (expense) increases the owed balance
                             wallet.balance += nativeAmount;
@@ -182,9 +187,9 @@ const checkoutSession = async (req, res) => {
 
                         // Guard against negative balance for non-credit wallets
                         if (!isCredit && wallet.balance < 0) wallet.balance = 0;
-                        
+
                         await wallet.save();
-                        
+
                         // Attach native info to the transaction (tx) for history view
                         tx.walletAmount = nativeAmount;
                         tx.walletCurrency = isCrypto ? wallet.coinSymbol : (isStocks ? (wallet.stockSymbol || wallet.stockTicker) : 'PHP');
@@ -196,9 +201,9 @@ const checkoutSession = async (req, res) => {
                 // Update HAND balance
                 const user = await User.findById(req.userId);
                 if (user) {
-                    user.balance -= total;
+                    user.handBalance = (user.handBalance || 0) - total;
                     await user.save();
-                    if (io) io.to(`user:${req.userId}`).emit('wallet_updated', { _id: 'main', balance: user.balance });
+                    if (io) io.to(`user:${req.userId}`).emit('wallet_updated', { _id: 'main', balance: user.handBalance });
                 }
             }
 
@@ -218,10 +223,10 @@ const checkoutSession = async (req, res) => {
                         $inc: { count: 1 },
                         $push: { priceHistory: { price: item.price, recordedAt: new Date() } }
                     },
-                    { 
-                        upsert: true, 
-                        returnDocument: 'after', 
-                        runValidators: true 
+                    {
+                        upsert: true,
+                        returnDocument: 'after',
+                        runValidators: true
                     }
                 );
             }
@@ -281,8 +286,8 @@ const deleteSession = async (req, res) => {
     try {
         const session = await ShoppingSession.findOne({ _id: req.params.id, user: req.userId });
         if (!session) return res.status(404).json({ error: 'Session not found.' });
-        if (session.status !== 'cancelled') {
-            return res.status(403).json({ error: 'Only cancelled sessions can be deleted.' });
+        if (session.status !== 'cancelled' && !session.isArchived) {
+            return res.status(403).json({ error: 'Only cancelled or archived sessions can be deleted.' });
         }
 
         await ShoppingSession.deleteOne({ _id: session._id });
@@ -296,5 +301,25 @@ const deleteSession = async (req, res) => {
     }
 };
 
-module.exports = { createSession, getSessions, getSession, updateCartItems, checkoutSession, cancelSession, lookupBarcode, deleteSession };
+// ─── PATCH /api/shopping/sessions/:id/archvie ──────────────────────────────
+
+const toggleArchiveSession = async (req, res) => {
+    try {
+        const session = await ShoppingSession.findOne({ _id: req.params.id, user: req.userId });
+        if (!session) return res.status(404).json({ error: 'Session not found.' });
+
+        session.isArchived = !session.isArchived;
+        await session.save();
+
+        const io = req.app.get('io');
+        if (io) io.to(`user:${req.userId}`).emit('update_shopping_session', session);
+
+        res.json({ message: session.isArchived ? 'Session archived.' : 'Session unarchived.' });
+
+    } catch (err) {
+        res.status(500).json({ error: 'Failed to toggle archive status.' });
+    }
+}
+
+module.exports = { createSession, getSessions, getSession, updateCartItems, checkoutSession, cancelSession, lookupBarcode, deleteSession, toggleArchiveSession };
 

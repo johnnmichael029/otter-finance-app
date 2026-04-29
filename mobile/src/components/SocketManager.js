@@ -60,8 +60,27 @@ const SocketManager = () => {
         };
 
         // ── DEBT UPDATES ──
-        const handleDebtUpdate = () => {
-            console.log('[SOCKET] Debt updated, refreshing...');
+        const handleNewDebt = (debt) => {
+            console.log('[SOCKET] New debt:', debt.personName);
+            useFinanceStore.getState().addDebtSync(debt);
+            debouncedRefreshDebts();
+        };
+
+        const handleDebtUpdate = (debt) => {
+            console.log('[SOCKET] Debt updated:', debt._id);
+            useFinanceStore.getState().updateDebtSync(debt);
+            debouncedRefreshDebts();
+        };
+
+        const handleDebtDelete = (data) => {
+            console.log('[SOCKET] Debt deleted:', data._id || data);
+            useFinanceStore.getState().deleteDebtSync(data._id || data);
+            debouncedRefreshDebts();
+        };
+
+        const handleNewDebtRequest = (debt) => {
+            console.log('[SOCKET] New debt request received');
+            updateRequestsCount(1);
             debouncedRefreshDebts();
         };
 
@@ -109,10 +128,10 @@ const SocketManager = () => {
         socket.on('delete_savings_goal', handleSavingsUpdate);
         socket.on('new_savings_transfer', handleSavingsUpdate);
         socket.on('delete_savings_transfer', handleSavingsUpdate);
-        socket.on('new_debt', handleDebtUpdate);
+        socket.on('new_debt', handleNewDebt);
         socket.on('update_debt', handleDebtUpdate);
-        socket.on('delete_debt', handleDebtUpdate);
-        socket.on('new_debt_request', handleDebtUpdate);
+        socket.on('delete_debt', handleDebtDelete);
+        socket.on('new_debt_request', handleNewDebtRequest);
         socket.on('new_challenge', handleChallengeUpdate);
         socket.on('update_challenge', handleChallengeUpdate);
         socket.on('delete_challenge', handleChallengeUpdate);
@@ -128,10 +147,10 @@ const SocketManager = () => {
             socket.off('update_savings_goal', handleSavingsUpdate);
             socket.off('delete_savings_goal', handleSavingsUpdate);
             socket.off('new_savings_transfer', handleSavingsUpdate);
-            socket.off('new_debt', handleDebtUpdate);
+            socket.off('new_debt', handleNewDebt);
             socket.off('update_debt', handleDebtUpdate);
-            socket.off('delete_debt', handleDebtUpdate);
-            socket.off('new_debt_request', handleDebtUpdate);
+            socket.off('delete_debt', handleDebtDelete);
+            socket.off('new_debt_request', handleNewDebtRequest);
             socket.off('new_challenge', handleChallengeUpdate);
             socket.off('update_challenge', handleChallengeUpdate);
             socket.off('delete_challenge', handleChallengeUpdate);
