@@ -177,6 +177,8 @@ export default function DebtScreen({ navigation }) {
     const { userToken, userInfo } = useAuth();
     const debts = useFinanceStore(state => state.debts);
     const transactionSummary = useFinanceStore(state => state.transactionSummary);
+    const savingsMasterPot = useFinanceStore(state => state.savingsMasterPot);
+    const netBalance = useFinanceStore(state => state.netBalance);
     const fetchDebts = useFinanceStore(state => state.fetchDebts);
     const loadingDebts = useFinanceStore(state => state.isLoadingDebts);
     const [loading, setLoading] = useState(true);
@@ -206,6 +208,7 @@ export default function DebtScreen({ navigation }) {
     const [payAmount, setPayAmount] = useState('');
     const [payNote, setPayNote] = useState('');
     const [selectedWallet, setSelectedWallet] = useState(null); // full wallet object
+    const [paySourceType, setPaySourceType] = useState(null); // 'hand' | 'savings' | null (wallet selected)
     const [saving, setSaving] = useState(false);
 
     const cryptoPrices = useFinanceStore(state => state.cryptoPrices);
@@ -367,18 +370,25 @@ export default function DebtScreen({ navigation }) {
             return showAlert('warning', 'Overpayment', `You are trying to pay ₱${amount.toLocaleString()}, but the remaining debt is only ₱${remaining.toLocaleString()}.`);
         }
 
-        // Balance pre-check
-        if (selectedWallet) {
-            if (!hasEnoughBalance(selectedWallet, amount, cryptoPrices)) {
-                return showAlert('warning', 'Insufficient Balance',
-                    `Your ${selectedWallet.name} wallet doesn't have enough balance to cover this payment.`);
-            }
-        } else {
-            // Check HAND balance (transactionSummary.balance or netBalance)
-            const handBalance = transactionSummary.netBalance ?? transactionSummary.balance ?? 0;
-            if (handBalance < amount) {
-                return showAlert('warning', 'Insufficient Balance',
-                    `You don't have enough money on HAND to cover this payment. (Available: ${formatCurrency(handBalance)})`);
+        // Require a destination/source selection
+        if (!selectedWallet && !paySourceType) {
+            return showAlert('warning', 'Select Wallet', 'Please select where this payment goes (HAND, Savings, or a wallet).');
+        }
+
+        // Balance check only for owed_by_me (you are spending from your own funds)
+        const isReceivingPayment = payModal.debt?.direction === 'owed_to_me';
+        if (!isReceivingPayment) {
+            if (selectedWallet) {
+                if (!hasEnoughBalance(selectedWallet, amount, cryptoPrices)) {
+                    return showAlert('warning', 'Insufficient Balance',
+                        `Your ${selectedWallet.name} wallet doesn't have enough balance to cover this payment.`);
+                }
+            } else if (paySourceType === 'hand') {
+                const handBal = netBalance || 0;
+                if (handBal < amount) {
+                    return showAlert('warning', 'Insufficient Balance',
+                        `You don't have enough money on HAND. (Available: ${formatCurrency(handBal)})`);
+                }
             }
         }
 
@@ -396,11 +406,13 @@ export default function DebtScreen({ navigation }) {
                 note: payNote,
                 walletId: selectedWallet?._id || null,
                 walletDeductAmount,
+                sourceType: selectedWallet ? 'wallet' : paySourceType, // 'hand' | 'savings' | 'wallet'
             });
             setPayModal({ visible: false, debt: null });
             setPayAmount('');
             setPayNote('');
             setSelectedWallet(null);
+            setPaySourceType(null);
             load();
             showAlert('success', 'Payment Logged!', `${formatCurrency(amount)} recorded as paid.`);
         } catch (e) {
@@ -687,6 +699,7 @@ export default function DebtScreen({ navigation }) {
                                 setPayAmount('');
                                 setPayNote('');
                                 setSelectedWallet(null);
+                                setPaySourceType(null);
                             },
                             onView: handleViewDetail,
                             onAccept: (d) => handleRespondRequest(d._id, 'linked'),
@@ -1013,21 +1026,72 @@ export default function DebtScreen({ navigation }) {
                                 />
                             </View>
 
-                            {/* Wallet Selector */}
-                            {/* Wallet Selector */}
+                            {/* Wallet / Source Selector */}
                             <Text style={[styles.formLabel, { color: COLORS.textMuted, marginTop: spacing.md }]}>
                                 {payModal.debt?.direction === 'owed_to_me' ? 'ADD TO WALLET' : 'DEDUCT FROM WALLET'}
                             </Text>
+
+                            {/* HAND + Savings virtual chips */}
+                            <View style={{ flexDirection: 'row', gap: 10, marginBottom: 10 }}>
+                                {/* HAND chip */}
+                                <TouchableOpacity
+                                    style={[styles.sourceChip, {
+                                        borderColor: paySourceType === 'hand' && !selectedWallet ? '#E91E8C' : COLORS.border,
+                                        borderWidth: paySourceType === 'hand' && !selectedWallet ? 2 : 1,
+                                        backgroundColor: COLORS.background,
+                                        flex: 1,
+                                    }]}
+                                    onPress={() => { setPaySourceType(paySourceType === 'hand' ? null : 'hand'); setSelectedWallet(null); }}
+                                    activeOpacity={0.8}
+                                >
+                                    <MaterialCommunityIcons name="hand-coin-outline" size={18} color="#E91E8C" />
+                                    <View style={{ flex: 1 }}>
+                                        <Text style={[styles.sourceChipLabel, { color: COLORS.text }]}>HAND</Text>
+                                        <Text style={[styles.sourceChipSub, { color: COLORS.textMuted }]}>
+                                            ₱{(netBalance || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                        </Text>
+                                    </View>
+                                    {paySourceType === 'hand' && !selectedWallet && (
+                                        <View style={[styles.sourceCheckDot, { backgroundColor: '#E91E8C' }]}>
+                                            <Feather name="check" size={9} color="#fff" />
+                                        </View>
+                                    )}
+                                </TouchableOpacity>
+
+                                {/* Savings chip */}
+                                <TouchableOpacity
+                                    style={[styles.sourceChip, {
+                                        borderColor: paySourceType === 'savings' && !selectedWallet ? '#8b5cf6' : COLORS.border,
+                                        borderWidth: paySourceType === 'savings' && !selectedWallet ? 2 : 1,
+                                        backgroundColor: COLORS.background,
+                                        flex: 1,
+                                    }]}
+                                    onPress={() => { setPaySourceType(paySourceType === 'savings' ? null : 'savings'); setSelectedWallet(null); }}
+                                    activeOpacity={0.8}
+                                >
+                                    <MaterialCommunityIcons name="piggy-bank-outline" size={18} color="#8b5cf6" />
+                                    <View style={{ flex: 1 }}>
+                                        <Text style={[styles.sourceChipLabel, { color: COLORS.text }]}>Savings</Text>
+                                        <Text style={[styles.sourceChipSub, { color: COLORS.textMuted }]}>
+                                            ₱{(savingsMasterPot?.currentAmount || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                        </Text>
+                                    </View>
+                                    {paySourceType === 'savings' && !selectedWallet && (
+                                        <View style={[styles.sourceCheckDot, { backgroundColor: '#8b5cf6' }]}>
+                                            <Feather name="check" size={9} color="#fff" />
+                                        </View>
+                                    )}
+                                </TouchableOpacity>
+                            </View>
+
+                            {/* Wallet list */}
                             <WalletSelector
                                 selectedWalletId={selectedWallet?._id}
-                                onSelect={(w) => setSelectedWallet(w)}
+                                onSelect={(w) => { setSelectedWallet(w); setPaySourceType(null); }}
                                 COLORS={COLORS}
                                 amountPHP={parseFloat(payAmount) || 0}
                                 isExpense={payModal.debt?.direction !== 'owed_to_me'}
                             />
-                            <Text style={{ fontSize: 10, color: COLORS.textMuted, marginTop: 6, fontStyle: 'italic', paddingHorizontal: 4 }}>
-                                * If no wallet is selected, it will automatically {payModal.debt?.direction === 'owed_to_me' ? 'add to' : 'deduct from'} HAND.
-                            </Text>
 
                             <Text style={[styles.formLabel, { color: COLORS.textMuted, marginTop: spacing.md }]}>NOTE (OPTIONAL)</Text>
                             <View style={[styles.inputWrap, { backgroundColor: COLORS.background, borderColor: COLORS.border }]}>
@@ -1311,5 +1375,21 @@ const styles = StyleSheet.create({
     swipeActions: { flexDirection: 'row', height: '100%' },
     deleteAction: { width: 80, height: '100%', justifyContent: 'center', alignItems: 'center', borderRadius: 20, marginLeft: 0 },
     archiveAction: { width: 80, height: '100%', justifyContent: 'center', alignItems: 'center', borderRadius: 20, marginRight: 0 },
-    swipeActionText: { color: '#fff', fontSize: 10, fontWeight: '800', marginTop: 4 }
+    swipeActionText: { color: '#fff', fontSize: 10, fontWeight: '800', marginTop: 4 },
+
+    // Source chips (HAND / Savings) in payment modal
+    sourceChip: {
+        flexDirection: 'row', alignItems: 'center', gap: 8,
+        padding: 10, paddingRight: 14,
+        borderRadius: 16, borderWidth: 1.5,
+    },
+    sourceChipLabel: { fontSize: 13, fontWeight: '800' },
+    sourceChipSub: { fontSize: 11, fontWeight: '600', marginTop: 1 },
+    sourceCheckDot: {
+        position: 'absolute', top: -6, right: -6,
+        width: 18, height: 18, borderRadius: 9,
+        backgroundColor: '#fff',
+        justifyContent: 'center', alignItems: 'center',
+        elevation: 3, shadowOpacity: 0.15, shadowRadius: 4,
+    },
 });

@@ -706,7 +706,9 @@ export default function AddTransactionScreen({ navigation, route }) {
                                         <MaterialCommunityIcons name="hand-coin-outline" size={18} color="#E91E8C" />
                                         <View style={{ flex: 1 }}>
                                             <Text style={[styles.sourceChipLabel, { color: COLORS.text }]}>HAND</Text>
-                                            <Text style={[styles.sourceChipSub, { color: COLORS.textMuted }]}>Main Balance</Text>
+                                            <Text style={[styles.sourceChipSub, { color: COLORS.textMuted }]}>
+                                                ₱{(netBalance || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                            </Text>
                                         </View>
                                         {sourceType === 'hand' && !sourceWallet && (
                                             <View style={[styles.sourceCheckDot, { backgroundColor: '#E91E8C' }]}>

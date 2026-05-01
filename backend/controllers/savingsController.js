@@ -7,6 +7,7 @@ const User = require('../models/userModel');
 const { invalidatePrefixes } = require('../utils/cache');
 const mongoose = require('mongoose');
 const { sendPushNotification } = require('../utils/pushNotification');
+const { encrypt } = require('../utils/encryption');
 
 // GET /api/savings/goals
 const getGoals = async (req, res) => {
@@ -593,7 +594,7 @@ const transfer = async (req, res) => {
                     const feeTx = await Transaction.create({
                         user: req.userId, type: 'expense', amount: feeAmt,
                         category: 'Bank Fee', categoryIcon: 'percent', categoryColor: '#ef4444',
-                        description: feeDescription, 
+                        description: feeDescription,
                         note: req.body.feeNote ? encrypt(req.body.feeNote) : undefined,
                         date: new Date(),
                         runningBalance: feeWallet.balance, wallet: feeWallet._id

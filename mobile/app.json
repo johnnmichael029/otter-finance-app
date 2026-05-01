@@ -24,15 +24,6 @@
       },
       "edgeToEdgeEnabled": true,
       "package": "com.otter.finance",
-      "primaryColor": "#E91E8C",
-      "statusBar": {
-        "backgroundColor": "#0d0d1a",
-        "barStyle": "light-content"
-      },
-      "navigationBar": {
-        "backgroundColor": "#0d0d1a",
-        "barStyle": "light-content"
-      },
       "softwareKeyboardLayoutMode": "resize",
       "googleServicesFile": "./google-services.json",
       "permissions": [
@@ -43,6 +34,15 @@
         "android.permission.CAMERA",
         "android.permission.RECORD_AUDIO"
       ]
+    },
+    "androidStatusBar": {
+      "backgroundColor": "#0d0d1a",
+      "barStyle": "light-content",
+      "translucent": false
+    },
+    "androidNavigationBar": {
+      "backgroundColor": "#0d0d1a",
+      "barStyle": "light-content"
     },
     "web": {
       "favicon": "./assets/favicon.png"

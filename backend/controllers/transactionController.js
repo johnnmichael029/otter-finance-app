@@ -318,10 +318,12 @@ const createTransaction = async (req, res) => {
         }
 
         // ── Feature: HAND as Source — validate sufficient balance ─────────────
-        // ONLY deduct if it's an expense or transfer. Income FROM hand doesn't make sense unless it's a top-up, 
-        // but we handle the destination side below.
+        // Deduct from HAND when:
+        //   - expense/transfer (always deduct from HAND if sourceType is hand)
+        //   - income to a wallet (depositing cash from hand into a wallet account)
         if (sourceType === 'hand') {
-            if (type === 'expense' || type === 'transfer') {
+            const shouldDeduct = type === 'expense' || type === 'transfer' || (type === 'income' && walletId);
+            if (shouldDeduct) {
                 if (currentBalance < safeAmount) {
                     return res.status(400).json({
                         error: `Insufficient HAND balance. You have ₱${currentBalance.toFixed(2)} but tried to use ₱${safeAmount.toFixed(2)}.`
