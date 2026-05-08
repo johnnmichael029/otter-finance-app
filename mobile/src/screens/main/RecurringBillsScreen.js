@@ -5,7 +5,7 @@ import {
 } from 'react-native';
 import { FlashList } from '@shopify/flash-list';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { Feather } from '@expo/vector-icons';
+import { Feather, MaterialCommunityIcons } from '@expo/vector-icons';
 import Constants from 'expo-constants';
 import * as Notifications from 'expo-notifications';
 import BottomSheetModal from '../../components/BottomSheetModal';
@@ -16,6 +16,7 @@ import { spacing, radius } from '../../theme/colors';
 import Skeleton from '../../components/Skeleton';
 import CustomAlertModal from '../../components/CustomAlertModal';
 import SwipeableRow from '../../components/SwipeableRow';
+import WalletSelector, { calcNativeDeduct, hasEnoughBalance } from '../../components/WalletSelector';
 import { useAuth } from '../../context/AuthContext';
 import { getSocket } from '../../utils/socket';
 import { formatCurrency } from '../../utils/formatters';
@@ -128,20 +129,23 @@ export default function RecurringBillsScreen({ navigation, route }) {
     const bills = useFinanceStore(state => state.recurringBills);
     const fetchRecurringBills = useFinanceStore(state => state.fetchRecurringBills);
     const loadingBills = useFinanceStore(state => state.isLoadingBills);
+    const cryptoPrices = useFinanceStore(state => state.cryptoPrices);
+    const netBalance = useFinanceStore(state => state.netBalance);
+    const savingsMasterPot = useFinanceStore(state => state.savingsMasterPot);
 
     const prefill = route?.params?.prefill || null;
 
     const [loading, setLoading] = useState(true);
     const [refreshing, setRefreshing] = useState(false);
     const [modalVisible, setModalVisible] = useState(!!prefill);
-    const [form, setForm] = useState({ 
-        name: prefill?.name || '', 
-        amount: prefill?.amount || '', 
-        category: prefill?.category || 'Bills', 
-        categoryIcon: 'file-text', 
-        categoryColor: '#6b7280', 
-        frequency: 'monthly', 
-        startDate: '' 
+    const [form, setForm] = useState({
+        name: prefill?.name || '',
+        amount: prefill?.amount || '',
+        category: prefill?.category || 'Bills',
+        categoryIcon: 'file-text',
+        categoryColor: '#6b7280',
+        frequency: 'monthly',
+        startDate: ''
     });
     const [saving, setSaving] = useState(false);
     const [alertConfig, setAlertConfig] = useState({ visible: false, title: '', message: '', type: 'info', onConfirm: null });
@@ -149,6 +153,13 @@ export default function RecurringBillsScreen({ navigation, route }) {
     const [editingBill, setEditingBill] = useState(null);
     const [editForm, setEditForm] = useState({ name: '', amount: '', category: 'Bills', categoryIcon: 'file-text', categoryColor: '#6b7280', frequency: 'monthly' });
     const [editSaving, setEditSaving] = useState(false);
+
+    // Pay Modal State
+    const [payModalVisible, setPayModalVisible] = useState(false);
+    const [payingBill, setPayingBill] = useState(null);
+    const [selectedWallet, setSelectedWallet] = useState(null);
+    const [paySourceType, setPaySourceType] = useState(null); // 'hand' | 'savings' | null
+    const [paySaving, setPaySaving] = useState(false);
 
     const load = useCallback(async (force = false) => {
         try {
@@ -242,24 +253,54 @@ export default function RecurringBillsScreen({ navigation, route }) {
         });
     };
 
-    const handleMarkPaid = async (id) => {
+    const openPayModal = (bill) => {
+        setPayingBill(bill);
+        setSelectedWallet(null);
+        setPaySourceType(null);
+        setPayModalVisible(true);
+    };
+
+    const handleConfirmPay = async () => {
+        if (!selectedWallet && !paySourceType) {
+            return setAlertConfig({ visible: true, title: 'Select Wallet', message: 'Please select where this payment goes (HAND, Savings, or a wallet).', type: 'info' });
+        }
+
+        const amount = payingBill.amount;
+
+        if (selectedWallet) {
+            if (!hasEnoughBalance(selectedWallet, amount, cryptoPrices)) {
+                return setAlertConfig({ visible: true, title: 'Insufficient Balance', message: `Your ${selectedWallet.name} wallet doesn't have enough balance to cover this payment.`, type: 'warning' });
+            }
+        } else if (paySourceType === 'hand') {
+            const handBal = netBalance || 0;
+            if (handBal < amount) {
+                return setAlertConfig({ visible: true, title: 'Insufficient Balance', message: `You don't have enough money on HAND. (Available: ${formatCurrency(handBal)})`, type: 'warning' });
+            }
+        }
+
+        setPaySaving(true);
         try {
-            const updated = await markBillPaid(id);
+            let walletDeductAmount = null;
+            if (selectedWallet) {
+                const deduct = calcNativeDeduct(selectedWallet, amount, cryptoPrices);
+                walletDeductAmount = deduct?.nativeAmount ?? null;
+            }
+
+            const updated = await markBillPaid(payingBill._id, {
+                walletId: selectedWallet?._id || null,
+                walletDeductAmount,
+                sourceType: selectedWallet ? 'wallet' : paySourceType,
+            });
+
             await scheduleNotification(updated);
+            setPayModalVisible(false);
+            setPayingBill(null);
             load(true);
-            setAlertConfig({
-                visible: true,
-                title: '✅ Bill Marked Paid',
-                message: 'Next due date has been advanced.',
-                type: 'success'
-            });
+            setAlertConfig({ visible: true, title: 'Bill Marked Paid', message: 'Next due date has been advanced.', type: 'success' });
         } catch (e) {
-            setAlertConfig({
-                visible: true,
-                title: 'Error',
-                message: 'Could not update bill.',
-                type: 'error'
-            });
+            setAlertConfig({ visible: true, title: 'Error', message: 'Could not update bill.', type: 'error' });
+        } finally {
+            setPaySaving(false);
         }
     };
 
@@ -355,7 +396,7 @@ export default function RecurringBillsScreen({ navigation, route }) {
                         <TouchableOpacity onPress={() => openEdit(bill)} style={[styles.actionBtn, { backgroundColor: COLORS.primary + '20' }]}>
                             <Feather name="edit-2" size={15} color={COLORS.primary} />
                         </TouchableOpacity>
-                        <TouchableOpacity onPress={() => handleMarkPaid(bill._id)} style={[styles.actionBtn, { backgroundColor: COLORS.income + '20' }]}>
+                        <TouchableOpacity onPress={() => openPayModal(bill)} style={[styles.actionBtn, { backgroundColor: COLORS.income + '20' }]}>
                             <Feather name="check" size={16} color={COLORS.income} />
                         </TouchableOpacity>
                     </View>
@@ -519,6 +560,83 @@ export default function RecurringBillsScreen({ navigation, route }) {
                 </TouchableOpacity>
             </BottomSheetModal>
 
+            {/* Pay Bill Modal */}
+            <BottomSheetModal visible={payModalVisible} onClose={() => setPayModalVisible(false)}>
+                <Text style={[styles.sheetTitle, { color: COLORS.text }]}>Pay Bill</Text>
+                {payingBill && (
+                    <Text style={[styles.sheetSub, { color: COLORS.textMuted, marginBottom: spacing.md }]}>
+                        {payingBill.name} · {formatCurrency(payingBill.amount)}
+                    </Text>
+                )}
+
+                <Text style={[styles.label, { color: COLORS.textMuted }]}>DEDUCT FROM</Text>
+
+                {/* HAND + Savings virtual chips */}
+                <View style={{ flexDirection: 'row', gap: 10, marginBottom: 10 }}>
+                    <TouchableOpacity
+                        style={[styles.sourceChip, {
+                            borderColor: paySourceType === 'hand' && !selectedWallet ? '#E91E8C' : COLORS.border,
+                            borderWidth: paySourceType === 'hand' && !selectedWallet ? 2 : 1,
+                            backgroundColor: COLORS.background,
+                            flex: 1,
+                        }]}
+                        onPress={() => { setPaySourceType(paySourceType === 'hand' ? null : 'hand'); setSelectedWallet(null); }}
+                        activeOpacity={0.8}
+                    >
+                        <MaterialCommunityIcons name="hand-coin-outline" size={18} color="#E91E8C" />
+                        <View style={{ flex: 1 }}>
+                            <Text style={[styles.sourceChipLabel, { color: COLORS.text }]}>HAND</Text>
+                            <Text style={[styles.sourceChipSub, { color: COLORS.textMuted }]}>
+                                ₱{(netBalance || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                            </Text>
+                        </View>
+                        {paySourceType === 'hand' && !selectedWallet && (
+                            <View style={[styles.sourceCheckDot, { backgroundColor: '#E91E8C' }]}>
+                                <Feather name="check" size={9} color="#fff" />
+                            </View>
+                        )}
+                    </TouchableOpacity>
+
+                    <TouchableOpacity
+                        style={[styles.sourceChip, {
+                            borderColor: paySourceType === 'savings' && !selectedWallet ? '#8b5cf6' : COLORS.border,
+                            borderWidth: paySourceType === 'savings' && !selectedWallet ? 2 : 1,
+                            backgroundColor: COLORS.background,
+                            flex: 1,
+                        }]}
+                        onPress={() => { setPaySourceType(paySourceType === 'savings' ? null : 'savings'); setSelectedWallet(null); }}
+                        activeOpacity={0.8}
+                    >
+                        <MaterialCommunityIcons name="piggy-bank-outline" size={18} color="#8b5cf6" />
+                        <View style={{ flex: 1 }}>
+                            <Text style={[styles.sourceChipLabel, { color: COLORS.text }]}>Savings</Text>
+                            <Text style={[styles.sourceChipSub, { color: COLORS.textMuted }]}>
+                                ₱{(savingsMasterPot?.currentAmount || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                            </Text>
+                        </View>
+                        {paySourceType === 'savings' && !selectedWallet && (
+                            <View style={[styles.sourceCheckDot, { backgroundColor: '#8b5cf6' }]}>
+                                <Feather name="check" size={9} color="#fff" />
+                            </View>
+                        )}
+                    </TouchableOpacity>
+                </View>
+
+                {/* Wallet list */}
+                <WalletSelector
+                    selectedWalletId={selectedWallet?._id}
+                    onSelect={(w) => { setSelectedWallet(w); setPaySourceType(null); }}
+                    COLORS={COLORS}
+                    amountPHP={parseFloat(payingBill?.amount) || 0}
+                    isExpense={true}
+                />
+
+                <TouchableOpacity onPress={handleConfirmPay} disabled={paySaving}
+                    style={[styles.saveBtn, { backgroundColor: '#22c55e', marginTop: spacing.lg }]}>
+                    {paySaving ? <ActivityIndicator color="#fff" /> : <Text style={styles.saveBtnText}>Confirm Payment</Text>}
+                </TouchableOpacity>
+            </BottomSheetModal>
+
             <CustomAlertModal
                 visible={alertConfig.visible}
                 title={alertConfig.title}
@@ -565,4 +683,20 @@ const getStyles = (COLORS) => StyleSheet.create({
     catChip: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 12, paddingVertical: 8, borderRadius: 20, borderWidth: 1.5 },
     saveBtn: { paddingVertical: 16, borderRadius: radius.xl, alignItems: 'center', marginTop: spacing.md },
     saveBtnText: { color: '#fff', fontSize: 16, fontWeight: '800' },
+
+    // Source chips
+    sourceChip: {
+        flexDirection: 'row', alignItems: 'center', gap: 8,
+        padding: 10, paddingRight: 14,
+        borderRadius: 16, borderWidth: 1.5,
+    },
+    sourceChipLabel: { fontSize: 13, fontWeight: '800' },
+    sourceChipSub: { fontSize: 11, fontWeight: '600', marginTop: 1 },
+    sourceCheckDot: {
+        position: 'absolute', top: -6, right: -6,
+        width: 18, height: 18, borderRadius: 9,
+        backgroundColor: '#fff',
+        justifyContent: 'center', alignItems: 'center',
+        elevation: 3, shadowOpacity: 0.15, shadowRadius: 4,
+    },
 });

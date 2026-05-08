@@ -155,8 +155,8 @@ export const updateRecurringBill = (id, data) =>
 export const deleteRecurringBill = (id) =>
     axios.delete(`${API_BASE}/recurring-bills/${id}`).then(r => r.data);
 
-export const markBillPaid = (id) =>
-    axios.post(`${API_BASE}/recurring-bills/${id}/paid`).then(r => r.data);
+export const markBillPaid = (id, data = {}) =>
+    axios.post(`${API_BASE}/recurring-bills/${id}/paid`, data).then(r => r.data);
 
 // ─── Budgets ──────────────────────────────────────────────────────────────────
 
